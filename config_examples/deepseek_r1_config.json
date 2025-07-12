@@ -1,0 +1,21 @@
+{
+  "backend_type": "deepseek-r1",
+  "deepseek-r1": {
+    "model_path": "/path/to/deepseek-r1-0528.gguf",
+    "n_ctx": 32768,
+    "n_gpu_layers": -1,
+    "verbose": false
+  },
+  "openai": {
+    "model_name": "o3-2025-04-16",
+    "api_key": "your-openai-api-key-here",
+    "high_reasoning_effort": true
+  },
+  "llama-cpp": {
+    "model_name": "custom-llama-model",
+    "model_path": "/path/to/your/model.gguf",
+    "n_ctx": 32768,
+    "n_gpu_layers": -1,
+    "verbose": false
+  }
+}
