@@ -7,10 +7,8 @@ Interactive web interface for generating and testing Triton kernels
 import argparse
 import os
 import sys
-import tempfile
 import time
 import traceback
-from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 import gradio as gr
@@ -444,13 +442,8 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Triton Kernel Agent UI")
-    parser.add_argument(
-        "--port", type=int, default="8085", help="Port to run the UI on"
-    )
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
-    parser.add_argument(
-        "--share", action="store_true", help="Create a public shareable link"
-    )
+    parser.add_argument("--port", type=int, default=8085, help="Port to run the UI on")
+    parser.add_argument("--host", type=str, default="localhost", help="Host to bind to")
     args = parser.parse_args()
 
     app = main()
@@ -482,11 +475,12 @@ if __name__ == "__main__":
     else:
         # Local development configuration
         print(f"🌐 Opening locally: http://{args.host}:{args.port}/")
-        if args.share:
-            print("🔗 Creating public shareable link...")
+        print(
+            f"🚨 IMPORTANT: If Chrome shows blank page, try Safari: open -a Safari http://{args.host}:{args.port}/ 🚨"
+        )
 
         app.launch(
-            share=args.share,
+            share=False,
             show_error=True,
             server_name=args.host,
             server_port=args.port,
