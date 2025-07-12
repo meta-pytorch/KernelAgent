@@ -22,7 +22,7 @@ Natural Language → Test Generation → Seed Generation → Parallel Workers �
 ```
 
 1. **Generate Test**: LLM creates test code from problem description
-2. **Create Seeds**: Generate multiple initial kernel implementations  
+2. **Create Seeds**: Generate multiple initial kernel implementations
 3. **Parallel Refinement**: Workers independently test and improve kernels
 4. **Early Success**: First passing kernel stops all workers
 
@@ -46,7 +46,22 @@ cd KernelAgent
 ```
 
 2. **Install dependencies**:
+
+If you are using MacBook, please build and install Triton from source since triton cpu package is not available for macos.
+
 ```bash
+# Install Triton from source
+git clone https://github.com/triton-lang/triton.git
+cd triton
+pip install -r python/requirements.txt
+pip install -e .
+```
+
+After Triton is installed, please go back to the KernelAgent directory and continue to install other dependencies.
+| Note: for Devserver, `triton-nightly` will be installed automatically when you run the following command.
+
+```bash
+cd KernelAgent
 # Install other dependencies
 pip install -r requirements.txt
 ```
@@ -99,7 +114,7 @@ class Model(nn.Module):
     \"\"\"
     def __init__(self):
         super(Model, self).__init__()
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         \"\"\"
         Applies ReLU activation to the input tensor.
@@ -137,7 +152,7 @@ Configure via environment variables in `.env`:
 OPENAI_API_KEY=your-api-key-here
 OPENAI_MODEL=o3-2025-04-16
 
-# Worker Configuration  
+# Worker Configuration
 NUM_KERNEL_SEEDS=4              # Number of parallel workers
 MAX_REFINEMENT_ROUNDS=10        # Max iterations per worker
 
@@ -203,7 +218,7 @@ This will generate a cumsum kernel and verify it works correctly.
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`  
+2. Create a feature branch: `git checkout -b feature-name`
 3. Make your changes and add tests
 4. Create a Pull Request
 
@@ -211,7 +226,7 @@ This will generate a cumsum kernel and verify it works correctly.
 
 Customize Jinja2 templates in `templates/`:
 - `kernel_generation.j2` - Initial kernel generation
-- `kernel_refinement.j2` - Error-based improvements  
+- `kernel_refinement.j2` - Error-based improvements
 - `test_generation.j2` - Test code creation
 - `triton_guidelines.j2` - Triton best practices
 
@@ -219,7 +234,7 @@ Customize Jinja2 templates in `templates/`:
 
 **Common Issues:**
 - **OpenAI API Errors**: Check your API key and model access
-- **CUDA Not Available**: Ensure CUDA-enabled GPU is accessible  
+- **CUDA Not Available**: Ensure CUDA-enabled GPU is accessible
 - **Worker Timeouts**: Increase `MAX_REFINEMENT_ROUNDS`
 - **Memory Issues**: Reduce `NUM_KERNEL_SEEDS`
 
