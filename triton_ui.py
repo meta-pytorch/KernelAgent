@@ -444,7 +444,7 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Triton Kernel Agent UI")
-    parser.add_argument("--port", type=int, default=8085``, help="Port to run the UI on")
+    parser.add_argument("--port", type=int, default=8085", help="Port to run the UI on")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
     parser.add_argument(
         "--share", action="store_true", help="Create a public shareable link"
