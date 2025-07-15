@@ -16,6 +16,7 @@ from collections import deque
 
 try:
     from openai import OpenAI
+
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -27,48 +28,52 @@ from .prompt_manager import PromptManager
 def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
     """
     Get Meta's proxy configuration if available.
-    
+
     Returns:
         Dictionary with proxy settings or None if not available
     """
     try:
         # Check if with-proxy command exists (Meta environment)
-        result = subprocess.run(['which', 'with-proxy'], 
-                              capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["which", "with-proxy"], capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
             return None
-            
+
         # Get proxy environment variables from with-proxy
-        result = subprocess.run(['with-proxy', 'env'], 
-                              capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["with-proxy", "env"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             return None
-            
+
         # Parse proxy settings
         proxy_config = {}
-        for line in result.stdout.split('\n'):
-            if '=' in line:
-                key, value = line.split('=', 1)
-                if key.lower() in ['http_proxy', 'https_proxy']:
+        for line in result.stdout.split("\n"):
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key.lower() in ["http_proxy", "https_proxy"]:
                     proxy_config[key.lower()] = value
-                    
+
         return proxy_config if proxy_config else None
-        
+
     except Exception:
         return None
 
 
 class VerificationWorker:
     """Worker that verifies and refines a single kernel implementation."""
-    
-    def __init__(self, worker_id: int, workdir: Path, log_dir: Path, 
-                 max_rounds: int = 10, history_size: int = 8,
-                 openai_api_key: Optional[str] = None,
-                 openai_model: str = "o3-2025-04-16",
-                 high_reasoning_effort: bool = True):
+
+    def __init__(
+        self,
+        worker_id: int,
+        workdir: Path,
+        log_dir: Path,
+        max_rounds: int = 10,
+        history_size: int = 8,
+        openai_api_key: Optional[str] = None,
+        openai_model: str = "o3-2025-04-16",
+        high_reasoning_effort: bool = True,
+    ):
         """
         Initialize a verification worker.
-        
+
         Args:
             worker_id: Unique identifier for this worker
             workdir: Working directory for this worker
@@ -86,202 +91,211 @@ class VerificationWorker:
         self.history_size = history_size
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
-        
+
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
         self.test_file = self.workdir / "test_kernel.py"
-        
+
         # History for LLM context
         self.history = deque(maxlen=history_size)
-        
+
         # Initialize OpenAI client if available
         self.openai_client = None
-        if OPENAI_AVAILABLE and openai_api_key and openai_api_key != 'your-api-key-here':
+        if OPENAI_AVAILABLE and openai_api_key and openai_api_key != "your-api-key-here":
             # Check for Meta proxy configuration
             proxy_config = _get_meta_proxy_config()
-            
+
             if proxy_config:
                 # Configure OpenAI client with proxy via environment variables
-                logging.getLogger().info(f"Worker {worker_id} using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}")
-                
+                logging.getLogger().info(
+                    f"Worker {worker_id} using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}"
+                )
+
                 # Store original proxy settings for this worker
                 self._original_proxy_env = {}
-                for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
                     self._original_proxy_env[key] = os.environ.get(key)
-                
+
                 # Set proxy environment variables
-                for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                    proxy_url = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
+                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+                    proxy_url = proxy_config.get("https_proxy") or proxy_config.get("http_proxy")
                     if proxy_url:
                         os.environ[key] = proxy_url
-                
+
                 self.openai_client = OpenAI(api_key=openai_api_key)
             else:
                 # Standard OpenAI client (no proxy)
                 self.openai_client = OpenAI(api_key=openai_api_key)
-        
+
         # Initialize prompt manager
         self.prompt_manager = PromptManager()
-        
+
         # Setup logging
         self._setup_logging()
-        
+
     def _setup_logging(self):
         """Setup worker-specific logging."""
         log_file = self.log_dir / f"worker_{self.worker_id}.log"
         self.logger = logging.getLogger(f"worker_{self.worker_id}")
         self.logger.setLevel(logging.INFO)
-        
+
         handler = logging.FileHandler(log_file)
         handler.setFormatter(
-            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         )
         self.logger.addHandler(handler)
-        
-    def _extract_code_from_response(self, response_text: str, language: str = "python") -> Optional[str]:
+
+    def _extract_code_from_response(
+        self, response_text: str, language: str = "python"
+    ) -> Optional[str]:
         """
         Extract code from LLM response text.
-        
+
         Args:
             response_text: The full LLM response text
             language: The expected language (default: python)
-            
+
         Returns:
             Extracted code or None if no valid code block found
         """
         if not response_text:
             return None
-            
+
         # First, try to find code blocks with language markers
         # Pattern matches ```python or ```language_name
-        pattern = rf'```{language}\s*\n(.*?)```'
+        pattern = rf"```{language}\s*\n(.*?)```"
         matches = re.findall(pattern, response_text, re.DOTALL)
-        
+
         if matches:
             # Return the first match (largest code block)
             return matches[0].strip()
-            
+
         # Try generic code blocks without language marker
-        pattern = r'```\s*\n(.*?)```'
+        pattern = r"```\s*\n(.*?)```"
         matches = re.findall(pattern, response_text, re.DOTALL)
-        
+
         if matches:
             # Return the first match
             return matches[0].strip()
-            
+
         # If no code blocks found, check if the entire response looks like code
         # This is a fallback for cases where LLM doesn't use code blocks
-        lines = response_text.strip().split('\n')
-        
+        lines = response_text.strip().split("\n")
+
         # Simple heuristic: if response contains import statements or function definitions
-        code_indicators = ['import ', 'from ', 'def ', 'class ', '@', '"""', "'''"]
-        if any(line.strip().startswith(indicator) for line in lines for indicator in code_indicators):
+        code_indicators = ["import ", "from ", "def ", "class ", "@", '"""', "'''"]
+        if any(
+            line.strip().startswith(indicator) for line in lines for indicator in code_indicators
+        ):
             # Likely the entire response is code
             return response_text.strip()
-            
+
         # No code found
         self.logger.warning("No code block found in LLM response")
         return None
-        
+
     def _write_kernel(self, kernel_code: str):
         """Write only the kernel code to file."""
         self.kernel_file.write_text(kernel_code)
         self.logger.info("Updated kernel file")
-        
+
     def _write_files(self, kernel_code: str, test_code: str):
         """Write kernel and test code to files.
-        
+
         Note: The test code should import the kernel function from the kernel file:
             from kernel import kernel_function
-        
+
         Both files are written to the same directory (workdir).
         """
         self.kernel_file.write_text(kernel_code)
         self.test_file.write_text(test_code)
         self.logger.info("Wrote kernel and test files")
-        
+
     def _run_test(self) -> Tuple[bool, str, str]:
         """
         Run the test script and capture results.
-        
+
         Returns:
             Tuple of (success, stdout, stderr)
         """
         cmd = [sys.executable, str(self.test_file)]
-        
+
         try:
             result = subprocess.run(
                 cmd,
                 cwd=str(self.workdir),
                 capture_output=True,
                 text=True,
-                timeout=30  # 30 second timeout
+                timeout=30,  # 30 second timeout
             )
-            
+
             success = result.returncode == 0
-            self.logger.info(f"Test {'passed' if success else 'failed'} with code {result.returncode}")
-            
+            self.logger.info(
+                f"Test {'passed' if success else 'failed'} with code {result.returncode}"
+            )
+
             return success, result.stdout, result.stderr
-            
+
         except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
             return False, "", "Test execution timed out after 30 seconds"
         except Exception as e:
             self.logger.error(f"Test execution error: {e}")
             return False, "", str(e)
-            
-    def _refine_kernel(self, kernel_code: str, error_info: Dict[str, str],
-                      problem_description: str, test_code: str) -> str:
+
+    def _refine_kernel(
+        self, kernel_code: str, error_info: Dict[str, str], problem_description: str, test_code: str
+    ) -> str:
         """
         Refine kernel based on error information using OpenAI API.
-        
+
         Uses multi-turn dialogue by incorporating history of previous attempts.
         """
         if self.openai_client:
             try:
                 self.logger.info("Refining kernel using OpenAI API")
-                
+
                 # Build context from history
                 history_context = ""
                 if self.history:
                     history_context = "\n\nPREVIOUS ATTEMPTS:\n"
                     for i, round_data in enumerate(self.history):
                         history_context += f"\nAttempt {i + 1}:\n"
-                        history_context += f"Kernel code:\n```python\n{round_data['kernel_code'][:500]}...\n```\n"
-                        if round_data.get('stderr'):
+                        history_context += (
+                            f"Kernel code:\n```python\n{round_data['kernel_code'][:500]}...\n```\n"
+                        )
+                        if round_data.get("stderr"):
                             history_context += f"Error: {round_data['stderr'][:200]}\n"
-                        if round_data.get('stdout'):
+                        if round_data.get("stdout"):
                             history_context += f"Output: {round_data['stdout'][:200]}\n"
-                
+
                 # Create refinement prompt using template
                 prompt = self.prompt_manager.render_kernel_refinement_prompt(
                     problem_description=problem_description,
                     test_code=test_code,
                     kernel_code=kernel_code,
                     error_info=error_info,
-                    history_context=history_context
+                    history_context=history_context,
                 )
-                
+
                 # Call OpenAI API with n=1 for refinement
                 api_params = {
                     "model": self.openai_model,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
+                    "messages": [{"role": "user", "content": prompt}],
                     "n": 1,  # Single completion for refinement
-                    "max_completion_tokens": 32000
+                    "max_completion_tokens": 32000,
                 }
-                
+
                 # Add reasoning effort for supported models
                 if self.high_reasoning_effort:
                     api_params["reasoning_effort"] = "high"
-                    
+
                 response = self.openai_client.chat.completions.create(**api_params)
-                
+
                 # Extract refined kernel from response
                 response_text = response.choices[0].message.content
                 refined_kernel = self._extract_code_from_response(response_text)
-                
+
                 if refined_kernel:
                     self.logger.info("Successfully refined kernel using OpenAI")
                     return refined_kernel
@@ -289,23 +303,22 @@ class VerificationWorker:
                     self.logger.error("Failed to extract valid code from OpenAI response")
                     # Return original kernel if extraction fails
                     return kernel_code
-                
+
             except Exception as e:
                 self.logger.error(f"Error refining kernel with OpenAI API: {e}")
                 # Fall back to mock refinement
-        
-        # Mock refinement (fallback) 
+
+        # Mock refinement (fallback)
         self.logger.info("Refining kernel (mock implementation)")
-        
+
         # For testing, make a simple modification
         if "error" in error_info.get("stderr", "").lower():
             # Add a comment to show refinement happened
             return f"# Refinement attempt {len(self.history) + 1}\n{kernel_code}"
-        
+
         return kernel_code
-        
-    def _log_round(self, round_num: int, success: bool, kernel_code: str,
-                   stdout: str, stderr: str):
+
+    def _log_round(self, round_num: int, success: bool, kernel_code: str, stdout: str, stderr: str):
         """Log the results of a verification round."""
         round_data = {
             "round": round_num,
@@ -313,35 +326,36 @@ class VerificationWorker:
             "success": success,
             "kernel_code": kernel_code,
             "stdout": stdout,
-            "stderr": stderr
+            "stderr": stderr,
         }
-        
+
         # Save to log file
         round_log_file = self.log_dir / f"round_{round_num}.json"
-        with open(round_log_file, 'w') as f:
+        with open(round_log_file, "w") as f:
             json.dump(round_data, f, indent=2)
-            
+
         # Add to history
         self.history.append(round_data)
-        
-    def run(self, kernel_code: str, test_code: str, problem_description: str,
-            success_event: mp.Event) -> Dict[str, Any]:
+
+    def run(
+        self, kernel_code: str, test_code: str, problem_description: str, success_event: mp.Event
+    ) -> Dict[str, Any]:
         """
         Run verification and refinement loop.
-        
+
         Args:
             kernel_code: Initial kernel implementation
             test_code: Test code to verify kernel
             problem_description: Problem description for context
             success_event: Shared event to check if another worker succeeded
-            
+
         Returns:
             Dictionary with results
         """
         self.logger.info(f"Starting verification for worker {self.worker_id}")
-        
+
         current_kernel = kernel_code
-        
+
         for round_num in range(self.max_rounds):
             # Check if another worker has succeeded
             if success_event.is_set():
@@ -350,11 +364,11 @@ class VerificationWorker:
                     "worker_id": self.worker_id,
                     "success": False,
                     "stopped_early": True,
-                    "rounds": round_num
+                    "rounds": round_num,
                 }
-                
+
             self.logger.info(f"Round {round_num + 1}/{self.max_rounds}")
-            
+
             # Write files - test only on first round, kernel every round
             if round_num == 0:
                 # First round: write both kernel and test
@@ -362,13 +376,13 @@ class VerificationWorker:
             else:
                 # Subsequent rounds: only update kernel, test remains unchanged
                 self._write_kernel(current_kernel)
-            
+
             # Run test
             success, stdout, stderr = self._run_test()
-            
+
             # Log round
             self._log_round(round_num + 1, success, current_kernel, stdout, stderr)
-            
+
             if success:
                 self.logger.info(f"Success! Kernel passed test in round {round_num + 1}")
                 return {
@@ -376,20 +390,16 @@ class VerificationWorker:
                     "success": True,
                     "kernel_code": current_kernel,
                     "rounds": round_num + 1,
-                    "history": list(self.history)
+                    "history": list(self.history),
                 }
-                
+
             # Refine kernel for next round
-            error_info = {
-                "stdout": stdout,
-                "stderr": stderr,
-                "history": list(self.history)
-            }
-            
+            error_info = {"stdout": stdout, "stderr": stderr, "history": list(self.history)}
+
             current_kernel = self._refine_kernel(
                 current_kernel, error_info, problem_description, test_code
             )
-            
+
         # Max rounds reached without success
         self.logger.warning(f"Max rounds ({self.max_rounds}) reached without success")
         return {
@@ -397,5 +407,5 @@ class VerificationWorker:
             "success": False,
             "max_rounds_reached": True,
             "rounds": self.max_rounds,
-            "history": list(self.history)
-        } 
+            "history": list(self.history),
+        }

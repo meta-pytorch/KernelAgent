@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 try:
     from openai import OpenAI
+
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -26,46 +27,49 @@ from .prompt_manager import PromptManager
 def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
     """
     Get Meta's proxy configuration if available.
-    
+
     Returns:
         Dictionary with proxy settings or None if not available
     """
     try:
         # Check if with-proxy command exists (Meta environment)
-        result = subprocess.run(['which', 'with-proxy'], 
-                              capture_output=True, text=True, timeout=5)
+        result = subprocess.run(["which", "with-proxy"], capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
             return None
-            
+
         # Get proxy environment variables from with-proxy
-        result = subprocess.run(['with-proxy', 'env'], 
-                              capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["with-proxy", "env"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             return None
-            
+
         # Parse proxy settings
         proxy_config = {}
-        for line in result.stdout.split('\n'):
-            if '=' in line:
-                key, value = line.split('=', 1)
-                if key.lower() in ['http_proxy', 'https_proxy']:
+        for line in result.stdout.split("\n"):
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key.lower() in ["http_proxy", "https_proxy"]:
                     proxy_config[key.lower()] = value
-                    
+
         return proxy_config if proxy_config else None
-        
+
     except Exception:
         return None
 
 
 class TritonKernelAgent:
     """Main agent for generating and optimizing Triton kernels."""
-    
-    def __init__(self, num_workers: Optional[int] = None, max_rounds: Optional[int] = None,
-                 log_dir: Optional[str] = None, model_name: Optional[str] = None,
-                 high_reasoning_effort: bool = True):
+
+    def __init__(
+        self,
+        num_workers: Optional[int] = None,
+        max_rounds: Optional[int] = None,
+        log_dir: Optional[str] = None,
+        model_name: Optional[str] = None,
+        high_reasoning_effort: bool = True,
+    ):
         """
         Initialize the Triton Kernel Agent.
-        
+
         Args:
             num_workers: Number of parallel workers for verification (loaded from .env if None)
             max_rounds: Maximum refinement rounds per worker (loaded from .env if None)
@@ -75,134 +79,141 @@ class TritonKernelAgent:
         """
         # Load environment variables
         load_dotenv()
-        
+
         # Load configuration from environment
-        self.num_workers = num_workers or int(os.getenv('NUM_KERNEL_SEEDS', '4'))
-        self.max_rounds = max_rounds or int(os.getenv('MAX_REFINEMENT_ROUNDS', '10'))
-        self.model_name = model_name or os.getenv('OPENAI_MODEL', 'o3-2025-04-16')
+        self.num_workers = num_workers or int(os.getenv("NUM_KERNEL_SEEDS", "4"))
+        self.max_rounds = max_rounds or int(os.getenv("MAX_REFINEMENT_ROUNDS", "10"))
+        self.model_name = model_name or os.getenv("OPENAI_MODEL", "o3-2025-04-16")
         self.high_reasoning_effort = high_reasoning_effort
-        
+
         # Initialize OpenAI client if available
         self.openai_client = None
         if OPENAI_AVAILABLE:
-            api_key = os.getenv('OPENAI_API_KEY')
-            if api_key and api_key != 'your-api-key-here':
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key and api_key != "your-api-key-here":
                 # Check for Meta proxy configuration
                 proxy_config = _get_meta_proxy_config()
-                
+
                 if proxy_config:
                     # Configure OpenAI client with proxy via environment variables
-                    logging.getLogger().info(f"Using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}")
-                    
+                    logging.getLogger().info(
+                        f"Using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}"
+                    )
+
                     # Store original proxy settings
                     self._original_proxy_env = {}
-                    for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                    for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
                         self._original_proxy_env[key] = os.environ.get(key)
-                    
+
                     # Set proxy environment variables
-                    for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                        proxy_url = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
+                    for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+                        proxy_url = proxy_config.get("https_proxy") or proxy_config.get(
+                            "http_proxy"
+                        )
                         if proxy_url:
                             os.environ[key] = proxy_url
-                    
+
                     self.openai_client = OpenAI(api_key=api_key)
                 else:
                     # Standard OpenAI client (no proxy)
                     self.openai_client = OpenAI(api_key=api_key)
-        
+
         # Setup logging
         if log_dir:
             self.log_dir = Path(log_dir)
         else:
             self.log_dir = Path.cwd() / "triton_kernel_logs"
         self.log_dir.mkdir(exist_ok=True, parents=True)
-        
+
         # Setup main logger
         self._setup_logging()
-        
+
         # Initialize prompt manager
         self.prompt_manager = PromptManager()
-        
+
         # Initialize worker manager
         self.manager = WorkerManager(
             num_workers=self.num_workers,
             max_rounds=self.max_rounds,
             log_dir=self.log_dir,
-            openai_api_key=os.getenv('OPENAI_API_KEY'),
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_model=self.model_name,
-            high_reasoning_effort=self.high_reasoning_effort
+            high_reasoning_effort=self.high_reasoning_effort,
         )
-        
+
     def _setup_logging(self):
         """Setup agent logging."""
         log_file = self.log_dir / f"agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        log_level = os.getenv('LOG_LEVEL', 'INFO')
+        log_level = os.getenv("LOG_LEVEL", "INFO")
         logging.basicConfig(
             level=getattr(logging, log_level),
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
         )
         self.logger = logging.getLogger("TritonKernelAgent")
-        
-    def _extract_code_from_response(self, response_text: str, language: str = "python") -> Optional[str]:
+
+    def _extract_code_from_response(
+        self, response_text: str, language: str = "python"
+    ) -> Optional[str]:
         """
         Extract code from LLM response text.
-        
+
         Args:
             response_text: The full LLM response text
             language: The expected language (default: python)
-            
+
         Returns:
             Extracted code or None if no valid code block found
         """
         if not response_text:
             return None
-            
+
         # First, try to find code blocks with language markers
         # Pattern matches ```python or ```language_name
-        pattern = rf'```{language}\s*\n(.*?)```'
+        pattern = rf"```{language}\s*\n(.*?)```"
         matches = re.findall(pattern, response_text, re.DOTALL)
-        
+
         if matches:
             # Return the first match (largest code block)
             return matches[0].strip()
-            
+
         # Try generic code blocks without language marker
-        pattern = r'```\s*\n(.*?)```'
+        pattern = r"```\s*\n(.*?)```"
         matches = re.findall(pattern, response_text, re.DOTALL)
-        
+
         if matches:
             # Return the first match
             return matches[0].strip()
-            
+
         # If no code blocks found, check if the entire response looks like code
         # This is a fallback for cases where LLM doesn't use code blocks
-        lines = response_text.strip().split('\n')
-        
+        lines = response_text.strip().split("\n")
+
         # Simple heuristic: if response contains import statements or function definitions
-        code_indicators = ['import ', 'from ', 'def ', 'class ', '@', '"""', "'''"]
-        if any(line.strip().startswith(indicator) for line in lines for indicator in code_indicators):
+        code_indicators = ["import ", "from ", "def ", "class ", "@", '"""', "'''"]
+        if any(
+            line.strip().startswith(indicator) for line in lines for indicator in code_indicators
+        ):
             # Likely the entire response is code
             return response_text.strip()
-            
+
         # No code found
         self.logger.warning("No code block found in LLM response")
         return None
-        
-    def _generate_test(self, problem_description: str, provided_test_code: Optional[str] = None) -> str:
+
+    def _generate_test(
+        self, problem_description: str, provided_test_code: Optional[str] = None
+    ) -> str:
         """
         Generate test code for the problem using OpenAI API.
-        
+
         The test must import from 'kernel' module since each worker writes
         the kernel to 'kernel.py' in their working directory.
-        
+
         Args:
             problem_description: Description of the problem
             provided_test_code: Optional reference test code provided by user
-            
+
         Returns:
             Generated test code in standardized format
         """
@@ -210,47 +221,44 @@ class TritonKernelAgent:
         if self.openai_client:
             try:
                 self.logger.info(f"Generating test code using {self.model_name}")
-                
+
                 # Create prompt for test generation using template
                 prompt = self.prompt_manager.render_test_generation_prompt(
-                    problem_description=problem_description,
-                    provided_test_code=provided_test_code
+                    problem_description=problem_description, provided_test_code=provided_test_code
                 )
-                
+
                 # Call OpenAI API with n=1 for test generation
                 api_params = {
                     "model": self.model_name,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
+                    "messages": [{"role": "user", "content": prompt}],
                     "n": 1,  # Single test
-                    "max_completion_tokens": 32000  # 32k tokens as requested
+                    "max_completion_tokens": 32000,  # 32k tokens as requested
                 }
-                
+
                 # Add reasoning effort for supported models
                 if self.high_reasoning_effort:
                     api_params["reasoning_effort"] = "high"
-                    
+
                 response = self.openai_client.chat.completions.create(**api_params)
-                
+
                 # Extract test code from response
                 response_text = response.choices[0].message.content
                 test_code = self._extract_code_from_response(response_text)
-                
+
                 if test_code:
                     self.logger.info("Successfully generated test code using OpenAI")
                     return test_code
                 else:
                     self.logger.error("Failed to extract valid code from OpenAI response")
                     raise ValueError("No valid code found in OpenAI response")
-                
+
             except Exception as e:
                 self.logger.error(f"Error generating test with OpenAI API: {e}")
                 # Fall back to mock implementation
-        
+
         # Mock test generation (fallback)
         self.logger.info("Generating test code (mock implementation)")
-        
+
         # If provided test code exists, create a basic wrapper
         if provided_test_code:
             test_code = '''"""
@@ -317,76 +325,73 @@ if __name__ == "__main__":
     sys.exit(0 if success else 1)
 '''
         return test_code
-        
-    def _generate_kernel_seeds(self, problem_description: str, 
-                              test_code: str,
-                              num_seeds: Optional[int] = None) -> List[str]:
+
+    def _generate_kernel_seeds(
+        self, problem_description: str, test_code: str, num_seeds: Optional[int] = None
+    ) -> List[str]:
         """
         Generate initial kernel implementations using OpenAI API.
-        
+
         Args:
             problem_description: Description of the kernel to generate
             test_code: Test code that the kernel must pass
             num_seeds: Number of kernel variations to generate
-            
+
         Returns:
             List of kernel implementation strings
         """
         if num_seeds is None:
             num_seeds = self.num_workers
-            
+
         # Use OpenAI API if available
         if self.openai_client:
             try:
                 self.logger.info(f"Generating {num_seeds} kernel seeds using {self.model_name}")
-                
+
                 # Create prompt with Triton guidelines using template
                 prompt = self.prompt_manager.render_kernel_generation_prompt(
-                    problem_description=problem_description,
-                    test_code=test_code
+                    problem_description=problem_description, test_code=test_code
                 )
-                
+
                 # Call OpenAI API with n parameter for multiple completions
                 api_params = {
                     "model": self.model_name,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
+                    "messages": [{"role": "user", "content": prompt}],
                     "n": num_seeds,  # Generate multiple completions
-                    "max_completion_tokens": 32000  # 32k tokens as requested
+                    "max_completion_tokens": 32000,  # 32k tokens as requested
                 }
-                
+
                 # Add reasoning effort for supported models
                 if self.high_reasoning_effort:
                     api_params["reasoning_effort"] = "high"
-                    
+
                 response = self.openai_client.chat.completions.create(**api_params)
-                
+
                 # Extract kernel implementations from completions
                 kernels = []
                 for i, choice in enumerate(response.choices):
                     response_text = choice.message.content
                     kernel_code = self._extract_code_from_response(response_text)
-                    
+
                     if kernel_code:
                         kernels.append(kernel_code)
                     else:
                         self.logger.warning(f"Failed to extract code from kernel seed {i}")
-                
+
                 if kernels:
                     self.logger.info(f"Successfully generated {len(kernels)} kernel seeds")
                     return kernels
                 else:
                     self.logger.error("Failed to extract any valid kernels from OpenAI responses")
                     raise ValueError("No valid kernel code found in any OpenAI response")
-                    
+
             except Exception as e:
                 self.logger.error(f"Error generating kernels with OpenAI API: {e}")
                 # Fall back to mock implementation
-        
+
         # Mock kernel generation (fallback)
         self.logger.info(f"Generating {num_seeds} kernel seeds (mock implementation)")
-        
+
         kernels = []
         for i in range(num_seeds):
             # Simpler mock that still demonstrates the wrapper pattern
@@ -412,14 +417,15 @@ def kernel_function(*args, **kwargs):
     raise NotImplementedError('Mock kernel not implemented')
 '''
             kernels.append(kernel)
-            
+
         return kernels
-        
-    def generate_kernel(self, problem_description: str, 
-                       test_code: Optional[str] = None) -> Dict[str, Any]:
+
+    def generate_kernel(
+        self, problem_description: str, test_code: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
-        
+
         Args:
             problem_description: Description of the kernel to generate
             test_code: Optional test code (generated if not provided)
@@ -427,76 +433,79 @@ def kernel_function(*args, **kwargs):
                       1. Import the kernel function: from kernel import kernel_function
                       2. Test the kernel and return True/False
                       3. Exit with code 0 on success, 1 on failure
-            
+
         Returns:
             Dictionary with results including successful kernel
         """
-        self.logger.info("="*60)
+        self.logger.info("=" * 60)
         self.logger.info("Starting kernel generation")
         self.logger.info(f"Problem: {problem_description[:100]}...")
-        
+
         # Always generate test code using LLM (even if test is provided as reference)
         generated_test_code = self._generate_test(problem_description, test_code)
         self.logger.info("Generated test code using LLM" + (" with reference" if test_code else ""))
-        
+
         # Use the generated test code in standardized format
         test_code = generated_test_code
-            
+
         # Log inputs
         import time
+
         # Add microseconds to ensure unique directory names
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S') + f"_{int(time.time() * 1000000) % 1000000}"
+        timestamp = (
+            datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000000) % 1000000}"
+        )
         session_dir = self.log_dir / f"session_{timestamp}"
         session_dir.mkdir(exist_ok=True)
-        
-        with open(session_dir / "problem.txt", 'w') as f:
+
+        with open(session_dir / "problem.txt", "w") as f:
             f.write(problem_description)
-        with open(session_dir / "test.py", 'w') as f:
+        with open(session_dir / "test.py", "w") as f:
             f.write(test_code)
-            
+
         # Generate kernel seeds
         kernel_seeds = self._generate_kernel_seeds(problem_description, test_code)
-        
+
         # Save seeds
         for i, kernel in enumerate(kernel_seeds):
-            with open(session_dir / f"seed_{i}.py", 'w') as f:
+            with open(session_dir / f"seed_{i}.py", "w") as f:
                 f.write(kernel)
-                
+
         # Run parallel verification with session directory for worker logs
         result = self.manager.run_verification(
             kernel_seeds=kernel_seeds,
             test_code=test_code,
             problem_description=problem_description,
-            session_log_dir=session_dir
+            session_log_dir=session_dir,
         )
-        
+
         # Process results
         if result and result["success"]:
             self.logger.info(f"Success! Worker {result['worker_id']} found solution")
-            
+
             # Save successful kernel
-            with open(session_dir / "final_kernel.py", 'w') as f:
+            with open(session_dir / "final_kernel.py", "w") as f:
                 f.write(result["kernel_code"])
-                
+
             # Save full result
-            with open(session_dir / "result.json", 'w') as f:
+            with open(session_dir / "result.json", "w") as f:
                 json.dump(result, f, indent=2)
-                
+
             return {
                 "success": True,
                 "kernel_code": result["kernel_code"],
                 "worker_id": result["worker_id"],
                 "rounds": result["rounds"],
-                "session_dir": str(session_dir)
+                "session_dir": str(session_dir),
             }
         else:
             self.logger.warning("No worker found a successful solution")
             return {
                 "success": False,
                 "message": "Failed to generate working kernel",
-                "session_dir": str(session_dir)
+                "session_dir": str(session_dir),
             }
-            
+
     def cleanup(self):
         """Clean up resources."""
-        self.manager.cleanup() 
+        self.manager.cleanup()

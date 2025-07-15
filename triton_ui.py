@@ -64,7 +64,9 @@ class TritonKernelUI:
         env_api_key = os.getenv("OPENAI_API_KEY")
 
         if not api_key and not env_api_key:
-            status = "❌ Please provide an OpenAI API key or set OPENAI_API_KEY environment variable."
+            status = (
+                "❌ Please provide an OpenAI API key or set OPENAI_API_KEY environment variable."
+            )
             return status, "", "", "", "", ""
 
         try:
@@ -122,18 +124,14 @@ class TritonKernelUI:
                 )
 
             else:
-                status = (
-                    f"❌ **FAILED** after {generation_time:.2f}s: {result['message']}"
-                )
+                status = f"❌ **FAILED** after {generation_time:.2f}s: {result['message']}"
                 logs = self._format_error_logs(result, generation_time)
                 session_info = self._format_session_info(result)
 
                 return status, "", "", logs, session_info, ""
 
         except Exception as e:
-            error_msg = (
-                f"❌ **ERROR**: {str(e)}\n\n**Traceback:**\n{traceback.format_exc()}"
-            )
+            error_msg = f"❌ **ERROR**: {str(e)}\n\n**Traceback:**\n{traceback.format_exc()}"
             return error_msg, "", "", "", "", ""
         finally:
             # Clean up: restore original API key environment variable
@@ -150,16 +148,16 @@ class TritonKernelUI:
         logs = f"""## Generation Summary
 
 **⏱️ Time:** {generation_time:.2f} seconds
-**🏆 Winner:** Worker {result['worker_id']}
-**🔄 Rounds:** {result['rounds']} refinement rounds
-**📁 Session:** `{os.path.basename(result['session_dir'])}`
+**🏆 Winner:** Worker {result["worker_id"]}
+**🔄 Rounds:** {result["rounds"]} refinement rounds
+**📁 Session:** `{os.path.basename(result["session_dir"])}`
 
 ## Performance Metrics
 
-- **Successful Worker:** {result['worker_id']}
-- **Refinement Iterations:** {result['rounds']}
+- **Successful Worker:** {result["worker_id"]}
+- **Refinement Iterations:** {result["rounds"]}
 - **Total Generation Time:** {generation_time:.2f}s
-- **Average Time per Round:** {generation_time / max(result['rounds'], 1):.2f}s
+- **Average Time per Round:** {generation_time / max(result["rounds"], 1):.2f}s
 
 ## Next Steps
 
@@ -175,8 +173,8 @@ class TritonKernelUI:
         logs = f"""## Generation Failed
 
 **⏱️ Time:** {generation_time:.2f} seconds  
-**❌ Error:** {result['message']}
-**📁 Session:** `{os.path.basename(result['session_dir'])}`
+**❌ Error:** {result["message"]}
+**📁 Session:** `{os.path.basename(result["session_dir"])}`
 
 ## Troubleshooting
 
@@ -187,7 +185,7 @@ class TritonKernelUI:
 
 ## Debug Information
 
-- Session Directory: `{result['session_dir']}`
+- Session Directory: `{result["session_dir"]}`
 - Check agent logs in the session directory for detailed error information
 """
         return logs
@@ -200,7 +198,7 @@ class TritonKernelUI:
         info = f"""## Session Information
 
 **📁 Session Directory:** `{session_name}`
-**🕐 Timestamp:** {session_name.split('_')[-1] if '_' in session_name else 'Unknown'}
+**🕐 Timestamp:** {session_name.split("_")[-1] if "_" in session_name else "Unknown"}
 **📂 Full Path:** `{session_path}`
 
 ## Generated Files
@@ -272,7 +270,6 @@ def main():
         .error { color: #ef4444; }
         """,
     ) as app:
-
         gr.Markdown(
             """
         # 🚀 Triton Kernel Agent
@@ -333,17 +330,13 @@ def main():
                 )
 
                 # Generate button
-                generate_btn = gr.Button(
-                    "🚀 Generate Kernel", variant="primary", size="lg"
-                )
+                generate_btn = gr.Button("🚀 Generate Kernel", variant="primary", size="lg")
 
             with gr.Column(scale=3):
                 gr.Markdown("## 📊 Results")
 
                 # Status display
-                status_output = gr.Markdown(
-                    label="Status", value="*Ready to generate kernels...*"
-                )
+                status_output = gr.Markdown(label="Status", value="*Ready to generate kernels...*")
 
                 # Generated kernel code
                 with gr.Tab("🔧 Generated Kernel"):
@@ -365,9 +358,7 @@ def main():
 
                 # Logs and metrics
                 with gr.Tab("📈 Generation Logs"):
-                    logs_output = gr.Markdown(
-                        label="Logs", value="*No generation logs yet...*"
-                    )
+                    logs_output = gr.Markdown(label="Logs", value="*No generation logs yet...*")
 
                 # Session information
                 with gr.Tab("📁 Session Info"):
