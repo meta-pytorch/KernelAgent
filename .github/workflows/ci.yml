@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
+        exclude:
+          # macOS runners are expensive, so only test on latest Python
+          - os: macos-latest
+            python-version: '3.8'
+          - os: macos-latest
+            python-version: '3.9'
+          - os: macos-latest
+            python-version: '3.10'
+          - os: macos-latest
+            python-version: '3.11'
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+        cache-dependency-glob: "pyproject.toml"
+    
+    - name: Set up Python
+      run: uv python install ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install -e ".[dev]"
+        
+    - name: Install CUDA dependencies (Linux only)
+      if: runner.os == 'Linux'
+      run: |
+        uv pip install -e ".[cuda]"
+    
+    - name: Run tests
+      run: |
+        uv run pytest tests/ -v
+        
+    - name: Check imports
+      run: |
+        uv run python -c "import triton_kernel_agent; from triton_kernel_agent import TritonKernelAgent"
