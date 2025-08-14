@@ -14,8 +14,6 @@ from typing import Any, Dict, Optional, Tuple
 import gradio as gr
 from dotenv import load_dotenv
 
-# Add the project root to the Python path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from triton_kernel_agent import TritonKernelAgent
 
