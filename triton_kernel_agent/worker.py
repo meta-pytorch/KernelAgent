@@ -91,6 +91,16 @@ class VerificationWorker:
         self.history_size = history_size
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        
+        # Performance profiling configuration
+        self.enable_profiling = os.environ.get("ENABLE_PERFORMANCE_PROFILING", "false").lower() == "true"
+        self.performance_threshold_sm = float(os.environ.get("PERFORMANCE_THRESHOLD_SM", "80.0"))
+        self.performance_threshold_dram = float(os.environ.get("PERFORMANCE_THRESHOLD_DRAM", "70.0"))
+        self.max_performance_rounds = int(os.environ.get("MAX_PERFORMANCE_ROUNDS", "3"))
+        self.ncu_metrics = os.environ.get(
+            "NCU_METRICS", 
+            "sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__throughput.avg.pct_of_peak_sustained_elapsed"
+        )
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -243,6 +253,184 @@ class VerificationWorker:
             self.logger.error(f"Test execution error: {e}")
             return False, "", str(e)
 
+    def _run_ncu_profiling(self) -> Optional[Dict[str, Any]]:
+        """
+        Run NCU profiling on the current kernel test.
+        
+        Returns:
+            Dictionary with performance metrics or None if profiling fails
+        """
+        if not self.enable_profiling:
+            return None
+            
+        try:
+            # Check if ncu is available
+            result = subprocess.run(["which", "ncu"], capture_output=True, text=True, timeout=5)
+            if result.returncode != 0:
+                self.logger.warning("NCU not available, skipping profiling")
+                return None
+                
+            # Run test with NCU profiling
+            cmd = [
+                "ncu", 
+                "--metrics", self.ncu_metrics,
+                "--target-processes", "all",
+                "--csv",
+                sys.executable, str(self.test_file)
+            ]
+            
+            self.logger.info("Running NCU profiling...")
+            result = subprocess.run(
+                cmd,
+                cwd=str(self.workdir),
+                capture_output=True,
+                text=True,
+                timeout=60,  # Longer timeout for profiling
+            )
+            
+            if result.returncode != 0:
+                self.logger.error(f"NCU profiling failed: {result.stderr}")
+                return None
+                
+            # Parse NCU CSV output
+            profile_data = self._parse_ncu_output(result.stdout)
+            self.logger.info(f"NCU profiling completed: {profile_data}")
+            return profile_data
+            
+        except subprocess.TimeoutExpired:
+            self.logger.error("NCU profiling timed out")
+            return None
+        except Exception as e:
+            self.logger.error(f"NCU profiling error: {e}")
+            return None
+    
+    def _parse_ncu_output(self, ncu_output: str) -> Dict[str, float]:
+        """
+        Parse NCU CSV output to extract performance metrics.
+        
+        Returns:
+            Dictionary with metric names and values
+        """
+        metrics = {}
+        lines = ncu_output.strip().split('\n')
+        
+        # Find header and data lines
+        header_line = None
+        data_lines = []
+        
+        for line in lines:
+            if 'sm__throughput' in line and 'dram__throughput' in line:
+                if header_line is None:
+                    header_line = line
+                else:
+                    data_lines.append(line)
+                    
+        if not header_line or not data_lines:
+            self.logger.warning("Could not parse NCU output")
+            return {}
+            
+        # Parse CSV data
+        headers = [h.strip('"') for h in header_line.split(',')]
+        
+        # Take the last data line (most recent kernel execution)
+        data = [d.strip('"') for d in data_lines[-1].split(',')]
+        
+        for header, value in zip(headers, data):
+            try:
+                if 'throughput' in header.lower():
+                    metrics[header] = float(value)
+            except ValueError:
+                continue
+                
+        return metrics
+    
+    def _should_optimize_performance(self, perf_profile: Optional[Dict[str, float]]) -> bool:
+        """
+        Determine if performance optimization is needed based on NCU metrics.
+        
+        Returns:
+            True if optimization is needed, False otherwise
+        """
+        if not perf_profile:
+            return False
+            
+        # Check SM throughput
+        sm_throughput = None
+        dram_throughput = None
+        
+        for metric_name, value in perf_profile.items():
+            if 'sm__throughput' in metric_name:
+                sm_throughput = value
+            elif 'dram__throughput' in metric_name:
+                dram_throughput = value
+                
+        needs_optimization = False
+        
+        if sm_throughput is not None and sm_throughput < self.performance_threshold_sm:
+            self.logger.info(f"SM throughput {sm_throughput:.1f}% below threshold {self.performance_threshold_sm}%")
+            needs_optimization = True
+            
+        if dram_throughput is not None and dram_throughput < self.performance_threshold_dram:
+            self.logger.info(f"DRAM throughput {dram_throughput:.1f}% below threshold {self.performance_threshold_dram}%")
+            needs_optimization = True
+            
+        return needs_optimization
+    
+    def _refine_for_performance(
+        self, kernel_code: str, perf_profile: Dict[str, float], problem_description: str, test_code: str
+    ) -> str:
+        """
+        Refine kernel for better performance based on NCU profiling data.
+        
+        Uses OpenAI API with performance-specific prompts.
+        """
+        if self.openai_client:
+            try:
+                self.logger.info("Refining kernel for performance using OpenAI API")
+                
+                # Create performance refinement prompt
+                prompt = self.prompt_manager.render_performance_refinement_prompt(
+                    problem_description=problem_description,
+                    test_code=test_code,
+                    kernel_code=kernel_code,
+                    perf_profile=perf_profile,
+                    performance_thresholds={
+                        "sm_threshold": self.performance_threshold_sm,
+                        "dram_threshold": self.performance_threshold_dram
+                    }
+                )
+                
+                # Call OpenAI API
+                api_params = {
+                    "model": self.openai_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "n": 1,
+                    "max_completion_tokens": 32000,
+                }
+                
+                if self.high_reasoning_effort:
+                    api_params["reasoning_effort"] = "high"
+                    
+                response = self.openai_client.chat.completions.create(**api_params)
+                
+                # Extract optimized kernel
+                response_text = response.choices[0].message.content
+                optimized_kernel = self._extract_code_from_response(response_text)
+                
+                if optimized_kernel:
+                    self.logger.info("Successfully optimized kernel for performance")
+                    return optimized_kernel
+                else:
+                    self.logger.error("Failed to extract optimized code from OpenAI response")
+                    return kernel_code
+                    
+            except Exception as e:
+                self.logger.error(f"Error optimizing kernel with OpenAI API: {e}")
+                
+        # Fallback: return original kernel
+        self.logger.info("Performance optimization not available, returning original kernel")
+        return kernel_code
+
     def _refine_kernel(
         self, kernel_code: str, error_info: Dict[str, str], problem_description: str, test_code: str
     ) -> str:
@@ -384,6 +572,26 @@ class VerificationWorker:
             self._log_round(round_num + 1, success, current_kernel, stdout, stderr)
 
             if success:
+                # Run performance profiling if enabled
+                perf_profile = self._run_ncu_profiling()
+                
+                # Check if performance optimization is needed
+                if (perf_profile and 
+                    self._should_optimize_performance(perf_profile) and 
+                    round_num < self.max_rounds - self.max_performance_rounds):
+                    
+                    self.logger.info("Kernel passed tests but performance needs optimization")
+                    
+                    # Try to optimize for performance
+                    optimized_kernel = self._refine_for_performance(
+                        current_kernel, perf_profile, problem_description, test_code
+                    )
+                    
+                    # If we got a different kernel, continue with optimization
+                    if optimized_kernel != current_kernel:
+                        current_kernel = optimized_kernel
+                        continue
+                
                 self.logger.info(f"Success! Kernel passed test in round {round_num + 1}")
                 return {
                     "worker_id": self.worker_id,
@@ -391,6 +599,7 @@ class VerificationWorker:
                     "kernel_code": current_kernel,
                     "rounds": round_num + 1,
                     "history": list(self.history),
+                    "performance_profile": perf_profile,
                 }
 
             # Refine kernel for next round

@@ -171,6 +171,27 @@ agent = TritonKernelAgent(
 )
 ```
 
+### Performance Profiling Configuration
+
+Enable NCU profiler-guided optimization by setting environment variables:
+
+```bash
+# Enable performance profiling with NCU
+ENABLE_PERFORMANCE_PROFILING=true
+
+# Performance thresholds (percentages)
+PERFORMANCE_THRESHOLD_SM=80.0          # SM throughput threshold
+PERFORMANCE_THRESHOLD_DRAM=70.0        # DRAM throughput threshold
+
+# Maximum rounds for performance optimization
+MAX_PERFORMANCE_ROUNDS=3
+
+# NCU metrics to collect
+NCU_METRICS=sm__throughput.avg.pct_of_peak_sustained_elapsed,dram__throughput.avg.pct_of_peak_sustained_elapsed
+```
+
+Copy `performance_config.env` to `.env` or set these variables directly for profiler-guided optimization.
+
 ## 📁 Project Structure
 
 ```
@@ -184,6 +205,7 @@ KernelAgent/
 ├── templates/                     # Jinja2 prompt templates
 │   ├── kernel_generation.j2       # Initial kernel generation
 │   ├── kernel_refinement.j2       # Error-based refinement
+│   ├── kernel_performance_refinement.j2  # NCU-guided optimization
 │   ├── test_generation.j2         # Test code generation
 │   └── triton_guidelines.j2       # Triton best practices
 ├── triton_ui.py                   # Gradio web interface
@@ -227,6 +249,7 @@ This will generate a cumsum kernel and verify it works correctly.
 Customize Jinja2 templates in `templates/`:
 - `kernel_generation.j2` - Initial kernel generation
 - `kernel_refinement.j2` - Error-based improvements
+- `kernel_performance_refinement.j2` - NCU profiler-guided optimization
 - `test_generation.j2` - Test code creation
 - `triton_guidelines.j2` - Triton best practices
 
@@ -247,12 +270,12 @@ python your_script.py
 ## 📈 Roadmap
 
 ### 🔄 **Next Steps**
-- Performance-tuning loop with profiling-guided search
+- ✅ Performance-tuning loop with NCU profiling-guided optimization
 - Advanced operations (attention, jagged tensors, fusion planning)
 - Higher-level kernel challenges
 
 ### 🔮 **Future**
-- [ ] Automated performance optimization
+- ✅ Automated performance optimization with NCU profiler integration
 - [ ] Additional GPU backends (ROCm, MTIA, etc.)
 - [ ] More LLM providers (Anthropic, local models)
 - [ ] ML framework integration

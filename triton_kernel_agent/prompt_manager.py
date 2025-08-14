@@ -64,6 +64,7 @@ class PromptManager:
             "test_generation": "test_generation.j2",
             "kernel_generation": "kernel_generation.j2",
             "kernel_refinement": "kernel_refinement.j2",
+            "kernel_performance_refinement": "kernel_performance_refinement.j2",
             "triton_guidelines": "triton_guidelines.j2",
         }
 
@@ -217,6 +218,36 @@ class PromptManager:
         """
         template = self.env.from_string(template_content)
         self.templates[template_name] = template
+
+    def render_performance_refinement_prompt(
+        self,
+        problem_description: str,
+        test_code: str,
+        kernel_code: str,
+        perf_profile: Dict,
+        performance_thresholds: Dict,
+    ) -> str:
+        """
+        Render the performance refinement prompt.
+
+        Args:
+            problem_description: Description of the problem
+            test_code: Test code that the kernel must pass
+            kernel_code: Current kernel implementation
+            perf_profile: NCU performance metrics
+            performance_thresholds: Performance threshold configuration
+
+        Returns:
+            Rendered prompt string
+        """
+        template = self.templates["kernel_performance_refinement"]
+        return template.render(
+            problem_description=problem_description,
+            test_code=test_code,
+            kernel_code=kernel_code,
+            perf_profile=perf_profile,
+            performance_thresholds=performance_thresholds,
+        )
 
     def reload_templates(self):
         """Reload all templates from disk."""

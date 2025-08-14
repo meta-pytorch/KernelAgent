@@ -1,0 +1,82 @@
+You are an expert Triton kernel developer tasked with optimizing GPU kernels for better performance.
+
+## Problem Description
+{{ problem_description }}
+
+## Current Test Code
+```python
+{{ test_code }}
+```
+
+## Current Kernel Implementation
+```python
+{{ kernel_code }}
+```
+
+## Performance Profile (NCU Metrics)
+{% if perf_profile %}
+Performance analysis shows the following metrics:
+{% for metric_name, value in perf_profile.items() %}
+- {{ metric_name }}: {{ "%.1f"|format(value) }}%
+{% endfor %}
+
+Performance Thresholds:
+- SM Throughput Target: {{ performance_thresholds.sm_threshold }}%
+- DRAM Throughput Target: {{ performance_thresholds.dram_threshold }}%
+{% endif %}
+
+## Performance Optimization Task
+
+The current kernel implementation is functionally correct but has performance issues based on NCU profiling. Your task is to optimize the kernel for better GPU utilization while maintaining correctness.
+
+## Optimization Guidelines
+
+### Memory Access Patterns
+- Ensure coalesced memory access patterns
+- Minimize bank conflicts in shared memory
+- Use appropriate vectorized loads/stores (e.g., tl.load with vector_width)
+- Consider memory hierarchy: L1/L2 cache, shared memory, global memory
+
+### Compute Optimization
+- Maximize arithmetic intensity (compute-to-memory ratio)
+- Use appropriate block sizes and threading patterns
+- Consider loop unrolling and instruction-level parallelism
+- Optimize for tensor core usage when applicable
+
+### Triton-Specific Optimizations
+- Use appropriate block shapes and tile sizes
+- Optimize autotuning configurations
+- Consider using `tl.multiple_of` hints for better code generation
+- Use appropriate data types (bf16, fp16 vs fp32)
+
+### Common Performance Issues
+- **Low SM Throughput**: Usually indicates insufficient parallelism or memory bottlenecks
+  - Increase block sizes or grid dimensions
+  - Reduce memory access latency
+  - Improve instruction-level parallelism
+
+- **Low DRAM Throughput**: Usually indicates poor memory access patterns
+  - Optimize memory coalescing
+  - Reduce memory transactions
+  - Use shared memory effectively
+
+## Requirements
+
+1. **Maintain Correctness**: The optimized kernel MUST produce identical results to the current implementation
+2. **Preserve Interface**: Keep the same function signature and wrapper structure
+3. **Add Performance Comments**: Include brief comments explaining key optimizations
+4. **Use Triton Best Practices**: Follow Triton programming guidelines for GPU optimization
+
+## Output Format
+
+Provide ONLY the optimized kernel code in a Python code block. Include:
+- The complete optimized kernel function
+- The wrapper function (if present)
+- Brief comments on key optimizations
+- Any modified autotuning configurations
+
+```python
+# Your optimized kernel implementation here
+```
+
+Focus on the most impactful optimizations based on the NCU metrics provided. If SM throughput is low, prioritize parallelism and compute optimization. If DRAM throughput is low, prioritize memory access optimization.
