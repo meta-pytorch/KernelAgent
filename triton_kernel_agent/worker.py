@@ -14,13 +14,10 @@ import logging
 import multiprocessing as mp
 from collections import deque
 
-try:
-    from openai import OpenAI
+import importlib
 
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
+openai = importlib.import_module('openai')
+from openai import OpenAI
 
 from .prompt_manager import PromptManager
 
@@ -101,7 +98,7 @@ class VerificationWorker:
 
         # Initialize OpenAI client if available
         self.openai_client = None
-        if OPENAI_AVAILABLE and openai_api_key and openai_api_key != "your-api-key-here":
+        if openai_api_key and openai_api_key != "your-api-key-here":
             # Check for Meta proxy configuration
             proxy_config = _get_meta_proxy_config()
 

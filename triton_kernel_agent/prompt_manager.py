@@ -8,15 +8,10 @@ for all prompts used in the Triton kernel generation system.
 from pathlib import Path
 from typing import Dict, Optional
 
-try:
-    from jinja2 import Environment, FileSystemLoader, Template
+import importlib
 
-    JINJA2_AVAILABLE = True
-except ImportError:
-    JINJA2_AVAILABLE = False
-    Environment = None
-    FileSystemLoader = None
-    Template = None
+jinja2 = importlib.import_module('jinja2')
+from jinja2 import Environment, FileSystemLoader, Template
 
 
 class PromptManager:
@@ -34,8 +29,6 @@ class PromptManager:
         Args:
             templates_dir: Path to the templates directory. If None, uses default.
         """
-        if not JINJA2_AVAILABLE:
-            raise ImportError("Jinja2 is not available. Please install it with: pip install jinja2")
 
         # Set up templates directory
         if templates_dir:

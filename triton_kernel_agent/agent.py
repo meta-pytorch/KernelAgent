@@ -12,13 +12,10 @@ from datetime import datetime
 import logging
 from dotenv import load_dotenv
 
-try:
-    from openai import OpenAI
+import importlib
 
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
+openai = importlib.import_module('openai')
+from openai import OpenAI
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
@@ -88,35 +85,34 @@ class TritonKernelAgent:
 
         # Initialize OpenAI client if available
         self.openai_client = None
-        if OPENAI_AVAILABLE:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if api_key and api_key != "your-api-key-here":
-                # Check for Meta proxy configuration
-                proxy_config = _get_meta_proxy_config()
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key and api_key != "your-api-key-here":
+            # Check for Meta proxy configuration
+            proxy_config = _get_meta_proxy_config()
 
-                if proxy_config:
-                    # Configure OpenAI client with proxy via environment variables
-                    logging.getLogger().info(
-                        f"Using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}"
+            if proxy_config:
+                # Configure OpenAI client with proxy via environment variables
+                logging.getLogger().info(
+                    f"Using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}"
+                )
+
+                # Store original proxy settings
+                self._original_proxy_env = {}
+                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+                    self._original_proxy_env[key] = os.environ.get(key)
+
+                # Set proxy environment variables
+                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+                    proxy_url = proxy_config.get("https_proxy") or proxy_config.get(
+                        "http_proxy"
                     )
+                    if proxy_url:
+                        os.environ[key] = proxy_url
 
-                    # Store original proxy settings
-                    self._original_proxy_env = {}
-                    for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
-                        self._original_proxy_env[key] = os.environ.get(key)
-
-                    # Set proxy environment variables
-                    for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
-                        proxy_url = proxy_config.get("https_proxy") or proxy_config.get(
-                            "http_proxy"
-                        )
-                        if proxy_url:
-                            os.environ[key] = proxy_url
-
-                    self.openai_client = OpenAI(api_key=api_key)
-                else:
-                    # Standard OpenAI client (no proxy)
-                    self.openai_client = OpenAI(api_key=api_key)
+                self.openai_client = OpenAI(api_key=api_key)
+            else:
+                # Standard OpenAI client (no proxy)
+                self.openai_client = OpenAI(api_key=api_key)
 
         # Setup logging
         if log_dir:
