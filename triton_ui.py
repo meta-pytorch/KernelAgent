@@ -6,7 +6,6 @@ Interactive web interface for generating and testing Triton kernels
 
 import argparse
 import os
-import sys
 import time
 import traceback
 from typing import Any, Dict, Optional, Tuple
