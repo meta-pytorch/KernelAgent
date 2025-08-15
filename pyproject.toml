@@ -7,7 +7,7 @@ name = "KernelAgent"
 version = "0.1.0"
 description = "Autonomous Triton Kernel Generation Agent"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.8,<3.13"
 license = {text = "MIT"}
 authors = [
     {name = "PyTorch Labs"},
@@ -36,9 +36,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = [
-    "triton-nightly",
-]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov",
