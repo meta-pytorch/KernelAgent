@@ -5,7 +5,6 @@ Main Triton Kernel Generation Agent.
 import os
 import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -15,42 +14,6 @@ from dotenv import load_dotenv
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
 from .providers import get_model_provider
-
-
-def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
-    """
-    Get Meta's proxy configuration if available.
-
-    Returns:
-        Dictionary with proxy settings or None if not available
-    """
-    try:
-        # Check if with-proxy command exists (Meta environment)
-        result = subprocess.run(
-            ["which", "with-proxy"], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return None
-
-        # Get proxy environment variables from with-proxy
-        result = subprocess.run(
-            ["with-proxy", "env"], capture_output=True, text=True, timeout=10
-        )
-        if result.returncode != 0:
-            return None
-
-        # Parse proxy settings
-        proxy_config = {}
-        for line in result.stdout.split("\n"):
-            if "=" in line:
-                key, value = line.split("=", 1)
-                if key.lower() in ["http_proxy", "https_proxy"]:
-                    proxy_config[key.lower()] = value
-
-        return proxy_config if proxy_config else None
-
-    except Exception:
-        return None
 
 
 class TritonKernelAgent:
