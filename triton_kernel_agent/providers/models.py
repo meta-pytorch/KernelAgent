@@ -7,7 +7,6 @@ from typing import Dict, Type
 from .base import BaseProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
-from .deepseek_provider import DeepSeekProvider
 
 
 @dataclass
