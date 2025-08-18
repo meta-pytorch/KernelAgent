@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-from .providers import get_model_provider, AVAILABLE_MODELS, is_model_available
+from .providers import get_model_provider
 
 
 def _get_meta_proxy_config() -> Optional[Dict[str, str]]:

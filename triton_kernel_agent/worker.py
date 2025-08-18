@@ -2,13 +2,12 @@
 Verification Worker for testing and refining individual kernels.
 """
 
-import os
 import sys
 import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 import logging
 import multiprocessing as mp

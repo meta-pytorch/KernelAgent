@@ -2,7 +2,7 @@
 Anthropic provider implementation.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict
 from .base import BaseProvider, LLMResponse
 
 try:

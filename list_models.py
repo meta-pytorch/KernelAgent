@@ -46,7 +46,7 @@ def main():
     print("\n" + "=" * 80)
     print("Usage:")
     print("Set OPENAI_MODEL in .env file to any available model name.")
-    print("Example: OPENAI_MODEL=claude-sonnet-4-20250514")
+    print("Example: OPENAI_MODEL=gpt-5")
     print("=" * 80)
 
 if __name__ == "__main__":
