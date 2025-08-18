@@ -10,18 +10,10 @@ from .agent import TritonKernelAgent
 from .worker import VerificationWorker
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-from .utils import (
-    get_meta_proxy_config,
-    configure_proxy_environment,
-    restore_proxy_environment,
-)
 
 __all__ = [
     "TritonKernelAgent",
     "VerificationWorker",
     "WorkerManager",
     "PromptManager",
-    "get_meta_proxy_config",
-    "configure_proxy_environment",
-    "restore_proxy_environment",
 ]
