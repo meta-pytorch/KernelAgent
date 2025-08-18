@@ -92,7 +92,7 @@ class OpenAICompatibleProvider(BaseProvider):
         max_tokens_value = min(
             kwargs.get("max_tokens", 8192), self.get_max_tokens_limit(model_name)
         )
-        if model_name in ["gpt-5", "gpt-5-preview", "o3-mini"]:
+        if model_name in ["gpt-5"]:
             params["max_completion_tokens"] = max_tokens_value
         else:
             params["max_tokens"] = max_tokens_value
@@ -101,8 +101,10 @@ class OpenAICompatibleProvider(BaseProvider):
         if "n" in kwargs:
             params["n"] = kwargs["n"]
 
-        # Add reasoning effort for compatible models (OpenAI specific)
-        if kwargs.get("high_reasoning_effort") and model_name.startswith(("o3", "o1")):
+        # Auto-enable high reasoning for GPT-5
+        if model_name.startswith("gpt-5"):
+            params["reasoning_effort"] = "high"
+        elif kwargs.get("high_reasoning_effort") and model_name.startswith(("o3", "o1")):
             params["reasoning_effort"] = "high"
 
         return params
