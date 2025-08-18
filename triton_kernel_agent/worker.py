@@ -224,21 +224,21 @@ class VerificationWorker:
     def _call_llm(self, messages: list, **kwargs) -> str:
         """
         Call the LLM provider for the configured model.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
             **kwargs: Additional parameters for the API call
-            
+
         Returns:
             Generated response text
         """
         if not self.provider:
             raise RuntimeError(f"No provider available for model {self.openai_model}")
-        
+
         # Add high_reasoning_effort to kwargs if set
         if self.high_reasoning_effort:
             kwargs["high_reasoning_effort"] = True
-        
+
         response = self.provider.get_response(self.openai_model, messages, **kwargs)
         return response.content
 
@@ -287,7 +287,9 @@ class VerificationWorker:
                 refined_kernel = self._extract_code_from_response(response_text)
 
                 if refined_kernel:
-                    self.logger.info(f"Successfully refined kernel using {self.openai_model}")
+                    self.logger.info(
+                        f"Successfully refined kernel using {self.openai_model}"
+                    )
                     return refined_kernel
                 else:
                     self.logger.error("Failed to extract valid code from LLM response")

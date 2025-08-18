@@ -80,7 +80,9 @@ class TritonKernelAgent:
         # Load configuration from environment
         self.num_workers = num_workers or int(os.getenv("NUM_KERNEL_SEEDS", "4"))
         self.max_rounds = max_rounds or int(os.getenv("MAX_REFINEMENT_ROUNDS", "10"))
-        self.model_name = model_name or os.getenv("OPENAI_MODEL", "claude-sonnet-4-20250514")
+        self.model_name = model_name or os.getenv(
+            "OPENAI_MODEL", "claude-sonnet-4-20250514"
+        )
         self.high_reasoning_effort = high_reasoning_effort
 
         # Initialize provider
@@ -88,7 +90,9 @@ class TritonKernelAgent:
         try:
             self.provider = get_model_provider(self.model_name)
             self.logger = logging.getLogger(self.__class__.__name__)
-            self.logger.info(f"Initialized provider '{self.provider.name}' for model '{self.model_name}'")
+            self.logger.info(
+                f"Initialized provider '{self.provider.name}' for model '{self.model_name}'"
+            )
         except ValueError as e:
             # Will be handled in setup_logging, just store the error for now
             self._provider_error = str(e)
@@ -183,21 +187,21 @@ class TritonKernelAgent:
     def _call_llm(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """
         Call the LLM provider for the configured model.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'
             **kwargs: Additional parameters for the API call
-            
+
         Returns:
             Generated response text
         """
         if not self.provider:
             raise RuntimeError(f"No provider available for model {self.model_name}")
-        
+
         # Add high_reasoning_effort to kwargs if set
         if self.high_reasoning_effort:
             kwargs["high_reasoning_effort"] = True
-        
+
         response = self.provider.get_response(self.model_name, messages, **kwargs)
         return response.content
 
@@ -236,7 +240,9 @@ class TritonKernelAgent:
                 test_code = self._extract_code_from_response(response_text)
 
                 if test_code:
-                    self.logger.info(f"Successfully generated test code using {self.model_name}")
+                    self.logger.info(
+                        f"Successfully generated test code using {self.model_name}"
+                    )
                     return test_code
                 else:
                     self.logger.error("Failed to extract valid code from LLM response")
@@ -347,32 +353,41 @@ if __name__ == "__main__":
 
                 kernels = []
                 messages = [{"role": "user", "content": prompt}]
-                
+
                 # Use provider's multiple response capability
                 if self.provider.supports_multiple_completions():
                     # Provider supports native multiple completions
                     responses = self.provider.get_multiple_responses(
-                        self.model_name, messages, n=num_seeds, 
-                        temperature=0.8, max_tokens=8192,
-                        high_reasoning_effort=self.high_reasoning_effort
+                        self.model_name,
+                        messages,
+                        n=num_seeds,
+                        temperature=0.8,
+                        max_tokens=8192,
+                        high_reasoning_effort=self.high_reasoning_effort,
                     )
-                    
+
                     for i, response in enumerate(responses):
                         kernel_code = self._extract_code_from_response(response.content)
                         if kernel_code:
                             kernels.append(kernel_code)
                         else:
-                            self.logger.warning(f"Failed to extract code from kernel seed {i}")
+                            self.logger.warning(
+                                f"Failed to extract code from kernel seed {i}"
+                            )
                 else:
                     # Provider doesn't support multiple completions, make individual calls
                     for i in range(num_seeds):
-                        response_text = self._call_llm(messages, max_tokens=8192, temperature=0.8 + (i * 0.1))
+                        response_text = self._call_llm(
+                            messages, max_tokens=8192, temperature=0.8 + (i * 0.1)
+                        )
                         kernel_code = self._extract_code_from_response(response_text)
-                        
+
                         if kernel_code:
                             kernels.append(kernel_code)
                         else:
-                            self.logger.warning(f"Failed to extract code from kernel seed {i}")
+                            self.logger.warning(
+                                f"Failed to extract code from kernel seed {i}"
+                            )
 
                 if kernels:
                     self.logger.info(
@@ -380,7 +395,9 @@ if __name__ == "__main__":
                     )
                     return kernels
                 else:
-                    self.logger.error("Failed to extract any valid kernels from LLM responses")
+                    self.logger.error(
+                        "Failed to extract any valid kernels from LLM responses"
+                    )
                     raise ValueError("No valid kernel code found in any LLM response")
 
             except Exception as e:
