@@ -4,6 +4,7 @@ Base provider for OpenAI-compatible APIs.
 
 from typing import List, Dict, Any, Optional
 from .base import BaseProvider, LLMResponse
+from ..utils import configure_proxy_environment
 
 try:
     from openai import OpenAI
@@ -20,6 +21,7 @@ class OpenAICompatibleProvider(BaseProvider):
     def __init__(self, api_key_env: str, base_url: Optional[str] = None):
         self.api_key_env = api_key_env
         self.base_url = base_url
+        self._original_proxy_env = None
         super().__init__()
 
     def _initialize_client(self) -> None:
@@ -29,6 +31,10 @@ class OpenAICompatibleProvider(BaseProvider):
 
         api_key = self._get_api_key(self.api_key_env)
         if api_key:
+            # Configure proxy using centralized utility function
+            self._original_proxy_env = configure_proxy_environment()
+
+            # Initialize client (proxy configured via environment variables)
             if self.base_url:
                 self.client = OpenAI(api_key=api_key, base_url=self.base_url)
             else:
@@ -104,7 +110,9 @@ class OpenAICompatibleProvider(BaseProvider):
         # Auto-enable high reasoning for GPT-5
         if model_name.startswith("gpt-5"):
             params["reasoning_effort"] = "high"
-        elif kwargs.get("high_reasoning_effort") and model_name.startswith(("o3", "o1")):
+        elif kwargs.get("high_reasoning_effort") and model_name.startswith(
+            ("o3", "o1")
+        ):
             params["reasoning_effort"] = "high"
 
         return params

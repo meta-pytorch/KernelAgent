@@ -4,6 +4,7 @@ Anthropic provider implementation.
 
 from typing import List, Dict
 from .base import BaseProvider, LLMResponse
+from ..utils import configure_proxy_environment
 
 try:
     from anthropic import Anthropic
@@ -17,9 +18,17 @@ except ImportError:
 class AnthropicProvider(BaseProvider):
     """Anthropic API provider."""
 
+    def __init__(self):
+        self._original_proxy_env = None
+        super().__init__()
+
     def _initialize_client(self) -> None:
         api_key = self._get_api_key("ANTHROPIC_API_KEY")
         if ANTHROPIC_AVAILABLE and api_key:
+            # Configure proxy using centralized utility function
+            self._original_proxy_env = configure_proxy_environment()
+
+            # Initialize client (proxy configured via environment variables)
             self.client = Anthropic(api_key=api_key)
 
     def get_response(
