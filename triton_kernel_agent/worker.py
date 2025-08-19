@@ -2,7 +2,6 @@
 Verification Worker for testing and refining individual kernels.
 """
 
-import os
 import sys
 import json
 import re
@@ -14,51 +13,8 @@ import logging
 import multiprocessing as mp
 from collections import deque
 
-try:
-    from openai import OpenAI
-
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
-
 from .prompt_manager import PromptManager
-
-
-def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
-    """
-    Get Meta's proxy configuration if available.
-
-    Returns:
-        Dictionary with proxy settings or None if not available
-    """
-    try:
-        # Check if with-proxy command exists (Meta environment)
-        result = subprocess.run(
-            ["which", "with-proxy"], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return None
-
-        # Get proxy environment variables from with-proxy
-        result = subprocess.run(
-            ["with-proxy", "env"], capture_output=True, text=True, timeout=10
-        )
-        if result.returncode != 0:
-            return None
-
-        # Parse proxy settings
-        proxy_config = {}
-        for line in result.stdout.split("\n"):
-            if "=" in line:
-                key, value = line.split("=", 1)
-                if key.lower() in ["http_proxy", "https_proxy"]:
-                    proxy_config[key.lower()] = value
-
-        return proxy_config if proxy_config else None
-
-    except Exception:
-        return None
+from .providers import get_model_provider
 
 
 class VerificationWorker:
@@ -103,39 +59,13 @@ class VerificationWorker:
         # History for LLM context
         self.history = deque(maxlen=history_size)
 
-        # Initialize OpenAI client if available
-        self.openai_client = None
-        if (
-            OPENAI_AVAILABLE
-            and openai_api_key
-            and openai_api_key != "your-api-key-here"
-        ):
-            # Check for Meta proxy configuration
-            proxy_config = _get_meta_proxy_config()
-
-            if proxy_config:
-                # Configure OpenAI client with proxy via environment variables
-                logging.getLogger().info(
-                    f"Worker {worker_id} using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}"
-                )
-
-                # Store original proxy settings for this worker
-                self._original_proxy_env = {}
-                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
-                    self._original_proxy_env[key] = os.environ.get(key)
-
-                # Set proxy environment variables
-                for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
-                    proxy_url = proxy_config.get("https_proxy") or proxy_config.get(
-                        "http_proxy"
-                    )
-                    if proxy_url:
-                        os.environ[key] = proxy_url
-
-                self.openai_client = OpenAI(api_key=openai_api_key)
-            else:
-                # Standard OpenAI client (no proxy)
-                self.openai_client = OpenAI(api_key=openai_api_key)
+        # Initialize provider
+        self.provider = None
+        try:
+            self.provider = get_model_provider(self.openai_model)
+        except ValueError as e:
+            # Provider not available, will use mock mode
+            self.logger.warning(f"Provider not available: {e}")
 
         # Initialize prompt manager
         self.prompt_manager = PromptManager()
@@ -255,6 +185,27 @@ class VerificationWorker:
             self.logger.error(f"Test execution error: {e}")
             return False, "", str(e)
 
+    def _call_llm(self, messages: list, **kwargs) -> str:
+        """
+        Call the LLM provider for the configured model.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            **kwargs: Additional parameters for the API call
+
+        Returns:
+            Generated response text
+        """
+        if not self.provider:
+            raise RuntimeError(f"No provider available for model {self.openai_model}")
+
+        # Add high_reasoning_effort to kwargs if set
+        if self.high_reasoning_effort:
+            kwargs["high_reasoning_effort"] = True
+
+        response = self.provider.get_response(self.openai_model, messages, **kwargs)
+        return response.content
+
     def _refine_kernel(
         self,
         kernel_code: str,
@@ -267,9 +218,9 @@ class VerificationWorker:
 
         Uses multi-turn dialogue by incorporating history of previous attempts.
         """
-        if self.openai_client:
+        if self.provider:
             try:
-                self.logger.info("Refining kernel using OpenAI API")
+                self.logger.info(f"Refining kernel using {self.openai_model}")
 
                 # Build context from history
                 history_context = ""
@@ -292,36 +243,25 @@ class VerificationWorker:
                     history_context=history_context,
                 )
 
-                # Call OpenAI API with n=1 for refinement
-                api_params = {
-                    "model": self.openai_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "n": 1,  # Single completion for refinement
-                    "max_completion_tokens": 32000,
-                }
-
-                # Add reasoning effort for supported models
-                if self.high_reasoning_effort:
-                    api_params["reasoning_effort"] = "high"
-
-                response = self.openai_client.chat.completions.create(**api_params)
+                # Call LLM API
+                messages = [{"role": "user", "content": prompt}]
+                response_text = self._call_llm(messages, max_tokens=8192)
 
                 # Extract refined kernel from response
-                response_text = response.choices[0].message.content
                 refined_kernel = self._extract_code_from_response(response_text)
 
                 if refined_kernel:
-                    self.logger.info("Successfully refined kernel using OpenAI")
+                    self.logger.info(
+                        f"Successfully refined kernel using {self.openai_model}"
+                    )
                     return refined_kernel
                 else:
-                    self.logger.error(
-                        "Failed to extract valid code from OpenAI response"
-                    )
+                    self.logger.error("Failed to extract valid code from LLM response")
                     # Return original kernel if extraction fails
                     return kernel_code
 
             except Exception as e:
-                self.logger.error(f"Error refining kernel with OpenAI API: {e}")
+                self.logger.error(f"Error refining kernel with LLM API: {e}")
                 # Fall back to mock refinement
 
         # Mock refinement (fallback)

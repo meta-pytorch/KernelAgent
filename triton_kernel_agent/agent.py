@@ -5,59 +5,15 @@ Main Triton Kernel Generation Agent.
 import os
 import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 from dotenv import load_dotenv
 
-try:
-    from openai import OpenAI
-
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
-
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-
-
-def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
-    """
-    Get Meta's proxy configuration if available.
-
-    Returns:
-        Dictionary with proxy settings or None if not available
-    """
-    try:
-        # Check if with-proxy command exists (Meta environment)
-        result = subprocess.run(
-            ["which", "with-proxy"], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            return None
-
-        # Get proxy environment variables from with-proxy
-        result = subprocess.run(
-            ["with-proxy", "env"], capture_output=True, text=True, timeout=10
-        )
-        if result.returncode != 0:
-            return None
-
-        # Parse proxy settings
-        proxy_config = {}
-        for line in result.stdout.split("\n"):
-            if "=" in line:
-                key, value = line.split("=", 1)
-                if key.lower() in ["http_proxy", "https_proxy"]:
-                    proxy_config[key.lower()] = value
-
-        return proxy_config if proxy_config else None
-
-    except Exception:
-        return None
+from .providers import get_model_provider
 
 
 class TritonKernelAgent:
@@ -87,50 +43,22 @@ class TritonKernelAgent:
         # Load configuration from environment
         self.num_workers = num_workers or int(os.getenv("NUM_KERNEL_SEEDS", "4"))
         self.max_rounds = max_rounds or int(os.getenv("MAX_REFINEMENT_ROUNDS", "10"))
-        self.model_name = model_name or os.getenv("OPENAI_MODEL", "o3-2025-04-16")
+        self.model_name = model_name or os.getenv(
+            "OPENAI_MODEL", "claude-sonnet-4-20250514"
+        )
         self.high_reasoning_effort = high_reasoning_effort
 
-        # Initialize OpenAI client if available
-        self.openai_client = None
-        if OPENAI_AVAILABLE:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if api_key and api_key != "your-api-key-here":
-                # Check for Meta proxy configuration
-                proxy_config = _get_meta_proxy_config()
-
-                if proxy_config:
-                    # Configure OpenAI client with proxy via environment variables
-                    logging.getLogger().info(
-                        f"Using Meta proxy: {proxy_config.get('https_proxy', proxy_config.get('http_proxy'))}"
-                    )
-
-                    # Store original proxy settings
-                    self._original_proxy_env = {}
-                    for key in [
-                        "HTTP_PROXY",
-                        "HTTPS_PROXY",
-                        "http_proxy",
-                        "https_proxy",
-                    ]:
-                        self._original_proxy_env[key] = os.environ.get(key)
-
-                    # Set proxy environment variables
-                    for key in [
-                        "HTTP_PROXY",
-                        "HTTPS_PROXY",
-                        "http_proxy",
-                        "https_proxy",
-                    ]:
-                        proxy_url = proxy_config.get("https_proxy") or proxy_config.get(
-                            "http_proxy"
-                        )
-                        if proxy_url:
-                            os.environ[key] = proxy_url
-
-                    self.openai_client = OpenAI(api_key=api_key)
-                else:
-                    # Standard OpenAI client (no proxy)
-                    self.openai_client = OpenAI(api_key=api_key)
+        # Initialize provider
+        self.provider = None
+        try:
+            self.provider = get_model_provider(self.model_name)
+            self.logger = logging.getLogger(self.__class__.__name__)
+            self.logger.info(
+                f"Initialized provider '{self.provider.name}' for model '{self.model_name}'"
+            )
+        except ValueError as e:
+            # Will be handled in setup_logging, just store the error for now
+            self._provider_error = str(e)
 
         # Setup logging
         if log_dir:
@@ -219,6 +147,27 @@ class TritonKernelAgent:
         self.logger.warning("No code block found in LLM response")
         return None
 
+    def _call_llm(self, messages: List[Dict[str, str]], **kwargs) -> str:
+        """
+        Call the LLM provider for the configured model.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            **kwargs: Additional parameters for the API call
+
+        Returns:
+            Generated response text
+        """
+        if not self.provider:
+            raise RuntimeError(f"No provider available for model {self.model_name}")
+
+        # Add high_reasoning_effort to kwargs if set
+        if self.high_reasoning_effort:
+            kwargs["high_reasoning_effort"] = True
+
+        response = self.provider.get_response(self.model_name, messages, **kwargs)
+        return response.content
+
     def _generate_test(
         self, problem_description: str, provided_test_code: Optional[str] = None
     ) -> str:
@@ -235,8 +184,8 @@ class TritonKernelAgent:
         Returns:
             Generated test code in standardized format
         """
-        # Use OpenAI API if available
-        if self.openai_client:
+        # Use LLM provider if available
+        if self.provider:
             try:
                 self.logger.info(f"Generating test code using {self.model_name}")
 
@@ -246,35 +195,24 @@ class TritonKernelAgent:
                     provided_test_code=provided_test_code,
                 )
 
-                # Call OpenAI API with n=1 for test generation
-                api_params = {
-                    "model": self.model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "n": 1,  # Single test
-                    "max_completion_tokens": 32000,  # 32k tokens as requested
-                }
-
-                # Add reasoning effort for supported models
-                if self.high_reasoning_effort:
-                    api_params["reasoning_effort"] = "high"
-
-                response = self.openai_client.chat.completions.create(**api_params)
+                # Call LLM API
+                messages = [{"role": "user", "content": prompt}]
+                response_text = self._call_llm(messages, max_tokens=8192)
 
                 # Extract test code from response
-                response_text = response.choices[0].message.content
                 test_code = self._extract_code_from_response(response_text)
 
                 if test_code:
-                    self.logger.info("Successfully generated test code using OpenAI")
+                    self.logger.info(
+                        f"Successfully generated test code using {self.model_name}"
+                    )
                     return test_code
                 else:
-                    self.logger.error(
-                        "Failed to extract valid code from OpenAI response"
-                    )
-                    raise ValueError("No valid code found in OpenAI response")
+                    self.logger.error("Failed to extract valid code from LLM response")
+                    raise ValueError("No valid code found in LLM response")
 
             except Exception as e:
-                self.logger.error(f"Error generating test with OpenAI API: {e}")
+                self.logger.error(f"Error generating test with LLM API: {e}")
                 # Fall back to mock implementation
 
         # Mock test generation (fallback)
@@ -364,8 +302,8 @@ if __name__ == "__main__":
         if num_seeds is None:
             num_seeds = self.num_workers
 
-        # Use OpenAI API if available
-        if self.openai_client:
+        # Use LLM provider if available
+        if self.provider:
             try:
                 self.logger.info(
                     f"Generating {num_seeds} kernel seeds using {self.model_name}"
@@ -376,32 +314,43 @@ if __name__ == "__main__":
                     problem_description=problem_description, test_code=test_code
                 )
 
-                # Call OpenAI API with n parameter for multiple completions
-                api_params = {
-                    "model": self.model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "n": num_seeds,  # Generate multiple completions
-                    "max_completion_tokens": 32000,  # 32k tokens as requested
-                }
-
-                # Add reasoning effort for supported models
-                if self.high_reasoning_effort:
-                    api_params["reasoning_effort"] = "high"
-
-                response = self.openai_client.chat.completions.create(**api_params)
-
-                # Extract kernel implementations from completions
                 kernels = []
-                for i, choice in enumerate(response.choices):
-                    response_text = choice.message.content
-                    kernel_code = self._extract_code_from_response(response_text)
+                messages = [{"role": "user", "content": prompt}]
 
-                    if kernel_code:
-                        kernels.append(kernel_code)
-                    else:
-                        self.logger.warning(
-                            f"Failed to extract code from kernel seed {i}"
+                # Use provider's multiple response capability
+                if self.provider.supports_multiple_completions():
+                    # Provider supports native multiple completions
+                    responses = self.provider.get_multiple_responses(
+                        self.model_name,
+                        messages,
+                        n=num_seeds,
+                        temperature=0.8,
+                        max_tokens=8192,
+                        high_reasoning_effort=self.high_reasoning_effort,
+                    )
+
+                    for i, response in enumerate(responses):
+                        kernel_code = self._extract_code_from_response(response.content)
+                        if kernel_code:
+                            kernels.append(kernel_code)
+                        else:
+                            self.logger.warning(
+                                f"Failed to extract code from kernel seed {i}"
+                            )
+                else:
+                    # Provider doesn't support multiple completions, make individual calls
+                    for i in range(num_seeds):
+                        response_text = self._call_llm(
+                            messages, max_tokens=8192, temperature=0.8 + (i * 0.1)
                         )
+                        kernel_code = self._extract_code_from_response(response_text)
+
+                        if kernel_code:
+                            kernels.append(kernel_code)
+                        else:
+                            self.logger.warning(
+                                f"Failed to extract code from kernel seed {i}"
+                            )
 
                 if kernels:
                     self.logger.info(
@@ -410,14 +359,12 @@ if __name__ == "__main__":
                     return kernels
                 else:
                     self.logger.error(
-                        "Failed to extract any valid kernels from OpenAI responses"
+                        "Failed to extract any valid kernels from LLM responses"
                     )
-                    raise ValueError(
-                        "No valid kernel code found in any OpenAI response"
-                    )
+                    raise ValueError("No valid kernel code found in any LLM response")
 
             except Exception as e:
-                self.logger.error(f"Error generating kernels with OpenAI API: {e}")
+                self.logger.error(f"Error generating kernels with LLM API: {e}")
                 # Fall back to mock implementation
 
         # Mock kernel generation (fallback)
