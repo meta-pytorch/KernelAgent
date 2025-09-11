@@ -96,6 +96,36 @@ else:
 python triton_ui.py
 ```
 
+### Meta Dev GPU (VPN + Proxy)
+
+If you are running on a Meta dev GPU host (detected by the presence of `/var/facebook/x509_identities/server.pem`), the UI launches with SSL bound to the devserver hostname. To ensure outbound access (e.g., OpenAI and Gradio internals) works behind the forward proxy, set proxy variables and bypass local/devserver hosts via NO_PROXY.
+
+```bash
+# In the 'kernelagent' conda environment (or prefix with `conda run -n kernelagent env ...`)
+
+# 1) Forward proxy (lowercase + uppercase for compatibility)
+export http_proxy=http://fwdproxy:8080
+export https_proxy=http://fwdproxy:8080
+export HTTP_PROXY=$http_proxy
+export HTTPS_PROXY=$https_proxy
+
+# 2) Do not proxy local/devserver hostnames
+export NO_PROXY="127.0.0.1,localhost,::1,$(hostname -f)"
+export no_proxy="$NO_PROXY"
+
+# 3) Start the UI (Meta devserver mode enables SSL automatically)
+GRADIO_LAUNCH_BROWSER=false \
+python triton_ui.py --port 8085
+
+# Access from your laptop (VPN required):
+#   https://$(hostname -f):8085/
+```
+
+Notes:
+- The HTTPS endpoint requires Meta VPN and the devserver’s internal certificate; most corp browsers trust it.
+- If your browser can’t reach the port, it’s likely a network policy rule; try a commonly open port (e.g., 8080/8000) or use SSH port forwarding.
+- Avoid tunneling local checks (httpx/gradio) through the proxy by including the devserver hostname in NO_PROXY; otherwise you may see `ProxyError: 502 Failed to resolve host`.
+
 ### Example: KernelBench Level 1 Problem
 
 ```python
