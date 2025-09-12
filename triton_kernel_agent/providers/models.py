@@ -10,6 +10,7 @@ from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
 from .relay_provider import RelayProvider
 
+
 @dataclass
 class ModelConfig:
     """Configuration for a specific model."""
