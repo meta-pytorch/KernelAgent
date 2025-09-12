@@ -1,0 +1,88 @@
+from typing import Dict, List
+
+import requests
+import logging
+
+from .base import BaseProvider, LLMResponse
+
+
+class RelayProvider(BaseProvider):
+    """
+    Plugboard server provider.
+
+    This backend requires the plugboard server to be running:
+      buck run @//mode/inplace run_plugboard_server -- --model gcp-claude-4-sonnet --pipeline usecase-dev-ai-user
+
+    The RelayProvider class communicates with a local plugboard server (default: http://127.0.0.1:11434)
+    to relay LLM requests and responses.
+    """
+
+    def __init__(self):
+        self.server_url = "http://127.0.0.1:11434"
+        self.is_available_flag = False
+        super().__init__()
+
+    def _initialize_client(self) -> None:
+        # Test connection to the server
+        try:
+            requests.get(f"{self.server_url}/", timeout=5)
+            self.is_available_flag = True
+        except Exception:
+            self.is_available_flag = False
+
+    def get_response(
+        self, model_name: str, messages: List[Dict[str, str]], **kwargs
+    ) -> LLMResponse:
+        max_tokens = kwargs.get("max_tokens", 8192)
+
+        # Prepare request data for the plugboard server
+        request_data = {
+            "messages": messages,
+            "model": model_name,
+            "temperature": 0.2,
+            "max_tokens": max_tokens,
+            "top_p": 0.95,
+        }
+
+        logging.debug("\n=== DEBUG: PROMPT SENT TO LLM RELAY ===")
+        logging.debug(request_data)
+        logging.debug("=== END PROMPT ===\n")
+
+        response = requests.post(
+            self.server_url,
+            json=request_data,
+            headers={"Content-Type": "application/json"},
+            timeout=120.0,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Server returned status {response.status_code}: {response.text}"
+            )
+
+        response_data = response.json()
+        logging.debug("\n=== DEBUG: RAW LLM RELAY RESPONSE ===")
+        logging.debug(response_data)
+        logging.debug("=== END RESPONSE ===\n")
+
+        content = response_data.get("output", "")
+        return LLMResponse(content=content, model=model_name, provider=self.name)
+
+    def get_multiple_responses(
+        self, model_name: str, messages: List[Dict[str, str]], n: int = 1, **kwargs
+    ) -> List[LLMResponse]:
+        return [
+            self.get_response(
+                model_name,
+                messages,
+                temperature=kwargs.get("temperature", 0.7) + i * 0.1,
+            )
+            for i in range(n)
+        ]
+
+    def is_available(self) -> bool:
+        return self.is_available_flag
+
+    @property
+    def name(self) -> str:
+        return "relay"

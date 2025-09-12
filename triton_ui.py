@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 
 from triton_kernel_agent import TritonKernelAgent
+from triton_kernel_agent.providers.models import AVAILABLE_MODELS
 
 
 class TritonKernelUI:
@@ -292,11 +293,14 @@ def main():
                     info="⚠️ Not saved - only used for this session",
                 )
 
+                choices = [
+                    (config.description, config.name) for config in AVAILABLE_MODELS
+                ]
                 # Model selection
                 model_dropdown = gr.Dropdown(
-                    choices=["o3-2025-04-16", "o4-mini-2025-04-16"],
+                    choices=choices,
                     label="🤖 Model Selection",
-                    value="o3-2025-04-16",
+                    value=choices[0][1],
                     interactive=True,
                 )
 

@@ -4,9 +4,11 @@ Model registry and configuration for KernelAgent.
 
 from dataclasses import dataclass
 from typing import Dict, Type
+
 from .base import BaseProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
+from .relay_provider import RelayProvider
 
 
 @dataclass
@@ -36,6 +38,11 @@ AVAILABLE_MODELS = [
         name="claude-sonnet-4-20250514",
         provider_class=AnthropicProvider,
         description="Claude 4 Sonnet - high performance (Released May 2025)",
+    ),
+    ModelConfig(
+        name="gcp-claude-4-sonnet",
+        provider_class=RelayProvider,
+        description="[Relay] Claude 4 Sonnet",
     ),
 ]
 
