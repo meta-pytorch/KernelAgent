@@ -300,7 +300,7 @@ def main():
                 model_dropdown = gr.Dropdown(
                     choices=choices,
                     label="🤖 Model Selection",
-                    value=choices[0],
+                    value=choices[0][1],
                     interactive=True,
                 )
 

@@ -5,11 +5,10 @@ Model registry and configuration for KernelAgent.
 from dataclasses import dataclass
 from typing import Dict, Type
 
-from triton_kernel_agent.providers.relay_provider import RelayProvider
 from .base import BaseProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
-
+from .relay_provider import RelayProvider
 
 @dataclass
 class ModelConfig:
