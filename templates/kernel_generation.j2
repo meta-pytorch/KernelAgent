@@ -36,6 +36,9 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 5. Follow all Triton programming guidelines above
 6. Include appropriate docstrings and comments
 7. Handle edge cases and boundary conditions properly
+8. OPTIMIZE for PERFORMANCE - Your kernel must be FASTER than the PyTorch operations in the TEST
+9. Consider memory coalescing, cache usage, and parallelism for best performance
+10. The test will benchmark your kernel against its PyTorch implementation - you must win!
 
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python

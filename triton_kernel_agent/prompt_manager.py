@@ -81,31 +81,32 @@ class PromptManager:
             else:
                 raise FileNotFoundError(f"Template file not found: {template_path}")
 
-    def render_test_generation_prompt(
-        self, problem_description: str, provided_test_code: Optional[str] = None
-    ) -> str:
+    def render_test_generation_prompt(self, problem_description: str,
+                                    provided_test_code: Optional[str] = None,
+                                    additional_code: Optional[str] = None) -> str:
         """
         Render the test generation prompt.
 
         Args:
             problem_description: Description of the problem to generate tests for
             provided_test_code: Optional reference test code provided by user
+            additional_code: Optional additional code to include in context
 
         Returns:
             Rendered prompt string
         """
-        template = self.templates["test_generation"]
+        template = self.templates['test_generation']
         return template.render(
             problem_description=problem_description,
             provided_test_code=provided_test_code,
+            additional_code=additional_code
         )
 
-    def render_kernel_generation_prompt(
-        self,
-        problem_description: str,
-        test_code: str,
-        triton_guidelines: Optional[str] = None,
-    ) -> str:
+    def render_kernel_generation_prompt(self,
+                                      problem_description: str,
+                                      test_code: str,
+                                      triton_guidelines: Optional[str] = None,
+                                      additional_code: Optional[str] = None) -> str:
         """
         Render the kernel generation prompt.
 
@@ -113,11 +114,12 @@ class PromptManager:
             problem_description: Description of the kernel to generate
             test_code: Test code that the kernel must pass
             triton_guidelines: Optional guidelines (if None, loads from template)
+            additional_code: Optional additional code to include in context
 
         Returns:
             Rendered prompt string
         """
-        template = self.templates["kernel_generation"]
+        template = self.templates['kernel_generation']
 
         # Load triton guidelines if not provided
         if triton_guidelines is None:
@@ -127,17 +129,17 @@ class PromptManager:
             problem_description=problem_description,
             test_code=test_code,
             triton_guidelines=triton_guidelines,
+            additional_code=additional_code
         )
 
-    def render_kernel_refinement_prompt(
-        self,
-        problem_description: str,
-        test_code: str,
-        kernel_code: str,
-        error_info: Dict[str, str],
-        history_context: Optional[str] = None,
-        triton_guidelines: Optional[str] = None,
-    ) -> str:
+    def render_kernel_refinement_prompt(self,
+                                      problem_description: str,
+                                      test_code: str,
+                                      kernel_code: str,
+                                      error_info: Dict[str, str],
+                                      history_context: Optional[str] = None,
+                                      triton_guidelines: Optional[str] = None,
+                                      additional_code: Optional[str] = None) -> str:
         """
         Render the kernel refinement prompt.
 
@@ -148,11 +150,12 @@ class PromptManager:
             error_info: Dictionary with error information (stdout, stderr)
             history_context: Optional context from previous attempts
             triton_guidelines: Optional guidelines (if None, loads from template)
+            additional_code: Optional additional code to include in context
 
         Returns:
             Rendered prompt string
         """
-        template = self.templates["kernel_refinement"]
+        template = self.templates['kernel_refinement']
 
         # Load triton guidelines if not provided
         if triton_guidelines is None:
@@ -165,6 +168,7 @@ class PromptManager:
             error_info=error_info,
             history_context=history_context,
             triton_guidelines=triton_guidelines,
+            additional_code=additional_code
         )
 
     def render_triton_guidelines(self) -> str:

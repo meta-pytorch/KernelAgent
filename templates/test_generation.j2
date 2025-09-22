@@ -62,6 +62,15 @@ NUMERICAL TOLERANCE REQUIREMENTS:
   - If accumulation dimension is very large, use much larger tolerances, like 1e-1
 - Always document in comments why non-default tolerances are used
 
+PERFORMANCE BENCHMARKING REQUIREMENTS:
+- The test MUST include performance comparison against the PyTorch operations IN THE TEST
+- Use triton.testing.do_bench() to measure performance:
+  - triton.testing.do_bench(fn, warmup=25, rep=100, return_mode='mean')
+- Compare Triton kernel performance against the PyTorch implementation used for computing expected results
+- The kernel must be FASTER than the PyTorch test code to be considered successful
+- Print performance comparison results (e.g., "Triton: X ms, PyTorch: Y ms, Speedup: Z x")
+- NOTE: The reference implementation (if provided) is NOT the performance target - it's just for understanding
+
 IMPORTANT: Do NOT use any Triton kernel launch syntax. Treat kernel_function as a regular Python function.
 
 The test file structure should be:

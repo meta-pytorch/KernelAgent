@@ -99,6 +99,7 @@ class WorkerManager:
         test_code: str,
         problem_description: str,
         session_log_dir: Optional[Path] = None,
+        additional_code: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Run parallel verification on multiple kernel seeds.
@@ -108,6 +109,7 @@ class WorkerManager:
             test_code: Test code to verify kernel correctness
             problem_description: Description of the problem
             session_log_dir: Optional session directory for worker logs
+            additional_code: Optional additional code (reference implementation)
 
         Returns:
             Dictionary with successful kernel and metadata, or None
@@ -141,6 +143,7 @@ class WorkerManager:
                     self.openai_api_key,
                     self.openai_model,
                     self.high_reasoning_effort,
+                    additional_code
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -204,6 +207,7 @@ def worker_process(
     openai_api_key: Optional[str],
     openai_model: str,
     high_reasoning_effort: bool,
+    additional_code: Optional[str]
 ):
     """
     Worker process for kernel verification and refinement.
@@ -229,6 +233,7 @@ def worker_process(
         test_code=test_code,
         problem_description=problem_description,
         success_event=success_event,
+        additional_code=additional_code
     )
 
     result_queue.put(result)

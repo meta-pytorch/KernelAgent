@@ -28,6 +28,9 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 4. Follow all Triton programming guidelines
 5. Learn from previous attempts if any
 6. Focus on fixing the specific error while maintaining correctness
+7. OPTIMIZE for PERFORMANCE - Your kernel must be FASTER than the PyTorch code in the TEST
+8. If the error is "PERFORMANCE FAILURE", optimize the kernel to beat the test's PyTorch implementation
+9. Remember: The performance target is the TEST's PyTorch code, NOT the reference implementation
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
 - DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation

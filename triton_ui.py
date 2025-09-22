@@ -31,7 +31,8 @@ class TritonKernelUI:
         self,
         problem_description: str,
         test_code: Optional[str] = None,
-        model_name: str = "o3-2025-04-16",
+        additional_code: Optional[str] = None,
+        model_name: str = "gpt-5-2025-08-07",
         high_reasoning_effort: bool = True,
         user_api_key: Optional[str] = None,
     ) -> Tuple[str, str, str, str, str, str]:
@@ -81,10 +82,13 @@ class TritonKernelUI:
 
             # Use provided test code or let agent generate it
             test_input = test_code.strip() if test_code and test_code.strip() else None
+            additional_input = additional_code.strip() if additional_code and additional_code.strip() else None
 
             # Generate kernel
             result = agent.generate_kernel(
-                problem_description=problem_description, test_code=test_input
+                problem_description=problem_description,
+                test_code=test_input,
+                additional_code=additional_input
             )
 
             generation_time = time.time() - start_time
@@ -172,7 +176,7 @@ class TritonKernelUI:
         """Format error logs for display"""
         logs = f"""## Generation Failed
 
-**⏱️ Time:** {generation_time:.2f} seconds  
+**⏱️ Time:** {generation_time:.2f} seconds
 **❌ Error:** {result["message"]}
 **📁 Session:** `{os.path.basename(result["session_dir"])}`
 
@@ -273,9 +277,9 @@ def main():
         gr.Markdown(
             """
         # 🚀 Triton Kernel Agent
-        
+
         **AI-Powered GPU Kernel Generation**
-        
+
         Generate optimized OpenAI Triton kernels from high-level descriptions.
         """
         )
@@ -332,6 +336,16 @@ def main():
                     max_lines=15,
                 )
 
+                # Additional code (reference implementation)
+                gr.Markdown("### 📚 Additional Code (Optional)")
+                gr.Markdown("*Reference implementation to help understand the algorithm*")
+                additional_input = gr.Textbox(
+                    label="Reference implementation",
+                    placeholder="# Optional: Provide reference implementation\n# This helps the agent understand the algorithm\n# The generated kernel should be faster than PyTorch native operations",
+                    lines=8,
+                    max_lines=15
+                )
+
                 # Generate button
                 generate_btn = gr.Button(
                     "🚀 Generate Kernel", variant="primary", size="lg"
@@ -384,13 +398,14 @@ def main():
 
         # Event handlers
         def generate_with_status(
-            problem_desc, test_code, model_name, high_reasoning_effort, user_api_key
+            problem_desc, test_code, additional_code, model_name, high_reasoning_effort, user_api_key
         ):
             """Wrapper for generate_kernel with status updates"""
             try:
                 return ui.generate_kernel(
                     problem_desc,
                     test_code,
+                    additional_code,
                     model_name,
                     high_reasoning_effort,
                     user_api_key,
@@ -405,6 +420,7 @@ def main():
             inputs=[
                 problem_input,
                 test_input,
+                additional_input,
                 model_dropdown,
                 high_reasoning_effort_checkbox,
                 api_key_input,
@@ -424,13 +440,13 @@ def main():
         gr.Markdown(
             """
         ---
-        
+
         **💡 Tips:**
         - Be specific about input/output shapes and data types
-        - Include PyTorch equivalent code for reference  
+        - Include PyTorch equivalent code for reference
         - Check the logs for detailed generation information
-        
-        **🔧 Configuration:** 
+
+        **🔧 Configuration:**
         - Provide your OpenAI API key above (not saved, session-only)
         - Or set OPENAI_API_KEY environment variable in `.env` file
         - API key is only used for this session and automatically cleared

@@ -212,6 +212,7 @@ class VerificationWorker:
         error_info: Dict[str, str],
         problem_description: str,
         test_code: str,
+        additional_code: Optional[str] = None
     ) -> str:
         """
         Refine kernel based on error information using OpenAI API.
@@ -241,6 +242,7 @@ class VerificationWorker:
                     kernel_code=kernel_code,
                     error_info=error_info,
                     history_context=history_context,
+                    additional_code=additional_code
                 )
 
                 # Call LLM API
@@ -301,6 +303,7 @@ class VerificationWorker:
         test_code: str,
         problem_description: str,
         success_event: mp.Event,
+        additional_code: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Run verification and refinement loop.
@@ -310,6 +313,7 @@ class VerificationWorker:
             test_code: Test code to verify kernel
             problem_description: Problem description for context
             success_event: Shared event to check if another worker succeeded
+            additional_code: Optional additional code (reference implementation)
 
         Returns:
             Dictionary with results
@@ -365,7 +369,7 @@ class VerificationWorker:
             }
 
             current_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, test_code
+                current_kernel, error_info, problem_description, test_code, additional_code
             )
 
         # Max rounds reached without success

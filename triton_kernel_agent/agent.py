@@ -168,9 +168,9 @@ class TritonKernelAgent:
         response = self.provider.get_response(self.model_name, messages, **kwargs)
         return response.content
 
-    def _generate_test(
-        self, problem_description: str, provided_test_code: Optional[str] = None
-    ) -> str:
+    def _generate_test(self, problem_description: str,
+                      provided_test_code: Optional[str] = None,
+                      additional_code: Optional[str] = None) -> str:
         """
         Generate test code for the problem using OpenAI API.
 
@@ -180,6 +180,7 @@ class TritonKernelAgent:
         Args:
             problem_description: Description of the problem
             provided_test_code: Optional reference test code provided by user
+            additional_code: Optional additional code to include in context
 
         Returns:
             Generated test code in standardized format
@@ -193,6 +194,7 @@ class TritonKernelAgent:
                 prompt = self.prompt_manager.render_test_generation_prompt(
                     problem_description=problem_description,
                     provided_test_code=provided_test_code,
+                    additional_code=additional_code
                 )
 
                 # Call LLM API
@@ -228,15 +230,15 @@ import torch
 def test_kernel():
     """Test the kernel implementation."""
     from kernel import kernel_function
-    
+
     # Adapted from provided test code
     try:
         # Create test data (standardized format)
         test_input = torch.randn(1024, device='cuda')
-        
+
         # Call kernel_function as a normal Python function
         result = kernel_function(test_input)
-        
+
         # Basic validation
         if result is not None:
             print("Test passed!")
@@ -262,16 +264,16 @@ import torch
 def test_kernel():
     """Test the kernel implementation."""
     from kernel import kernel_function
-    
+
     # Mock test - replace with actual test logic
     try:
         # Create test data
         test_input = torch.randn(1024, device='cuda')
-        
+
         # Call kernel_function as a normal Python function
         # (kernel launch logic is handled inside kernel.py)
         result = kernel_function(test_input)
-        
+
         print("Test passed!")
         return True
     except Exception as e:
@@ -285,9 +287,10 @@ if __name__ == "__main__":
 '''
         return test_code
 
-    def _generate_kernel_seeds(
-        self, problem_description: str, test_code: str, num_seeds: Optional[int] = None
-    ) -> List[str]:
+    def _generate_kernel_seeds(self, problem_description: str,
+                              test_code: str,
+                              num_seeds: Optional[int] = None,
+                              additional_code: Optional[str] = None) -> List[str]:
         """
         Generate initial kernel implementations using OpenAI API.
 
@@ -295,6 +298,7 @@ if __name__ == "__main__":
             problem_description: Description of the kernel to generate
             test_code: Test code that the kernel must pass
             num_seeds: Number of kernel variations to generate
+            additional_code: Optional additional code to include in context
 
         Returns:
             List of kernel implementation strings
@@ -311,7 +315,9 @@ if __name__ == "__main__":
 
                 # Create prompt with Triton guidelines using template
                 prompt = self.prompt_manager.render_kernel_generation_prompt(
-                    problem_description=problem_description, test_code=test_code
+                    problem_description=problem_description,
+                    test_code=test_code,
+                    additional_code=additional_code
                 )
 
                 kernels = []
@@ -398,9 +404,9 @@ def kernel_function(*args, **kwargs):
 
         return kernels
 
-    def generate_kernel(
-        self, problem_description: str, test_code: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def generate_kernel(self, problem_description: str,
+                       test_code: Optional[str] = None,
+                       additional_code: Optional[str] = None) -> Dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
 
@@ -411,6 +417,8 @@ def kernel_function(*args, **kwargs):
                       1. Import the kernel function: from kernel import kernel_function
                       2. Test the kernel and return True/False
                       3. Exit with code 0 on success, 1 on failure
+            additional_code: Optional additional code (e.g., helper functions, imports)
+                           to be included in the context for kernel generation
 
         Returns:
             Dictionary with results including successful kernel
@@ -420,7 +428,7 @@ def kernel_function(*args, **kwargs):
         self.logger.info(f"Problem: {problem_description[:100]}...")
 
         # Always generate test code using LLM (even if test is provided as reference)
-        generated_test_code = self._generate_test(problem_description, test_code)
+        generated_test_code = self._generate_test(problem_description, test_code, additional_code)
         self.logger.info(
             "Generated test code using LLM" + (" with reference" if test_code else "")
         )
@@ -443,9 +451,12 @@ def kernel_function(*args, **kwargs):
             f.write(problem_description)
         with open(session_dir / "test.py", "w") as f:
             f.write(test_code)
+        if additional_code:
+            with open(session_dir / "additional_code.py", 'w') as f:
+                f.write(additional_code)
 
         # Generate kernel seeds
-        kernel_seeds = self._generate_kernel_seeds(problem_description, test_code)
+        kernel_seeds = self._generate_kernel_seeds(problem_description, test_code, additional_code=additional_code)
 
         # Save seeds
         for i, kernel in enumerate(kernel_seeds):
@@ -458,6 +469,7 @@ def kernel_function(*args, **kwargs):
             test_code=test_code,
             problem_description=problem_description,
             session_log_dir=session_dir,
+            additional_code=additional_code
         )
 
         # Process results
