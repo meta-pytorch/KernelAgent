@@ -23,7 +23,7 @@ class WorkerManager:
         history_size: int = 8,
         log_dir: Optional[str] = None,
         openai_api_key: Optional[str] = None,
-        openai_model: str = "o3-2025-04-16",
+        openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
     ):
         """

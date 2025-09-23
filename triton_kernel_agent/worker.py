@@ -28,7 +28,7 @@ class VerificationWorker:
         max_rounds: int = 10,
         history_size: int = 8,
         openai_api_key: Optional[str] = None,
-        openai_model: str = "o3-2025-04-16",
+        openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
     ):
         """
@@ -59,7 +59,10 @@ class VerificationWorker:
         # History for LLM context
         self.history = deque(maxlen=history_size)
 
-        # Initialize provider
+        # Setup logging early so it is available for any error paths
+        self._setup_logging()
+
+        # Initialize provider (may be unavailable in offline/test environments)
         self.provider = None
         try:
             self.provider = get_model_provider(self.openai_model)
@@ -69,9 +72,6 @@ class VerificationWorker:
 
         # Initialize prompt manager
         self.prompt_manager = PromptManager()
-
-        # Setup logging
-        self._setup_logging()
 
     def _setup_logging(self):
         """Setup worker-specific logging."""
