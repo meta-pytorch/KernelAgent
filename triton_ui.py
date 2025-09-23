@@ -82,13 +82,17 @@ class TritonKernelUI:
 
             # Use provided test code or let agent generate it
             test_input = test_code.strip() if test_code and test_code.strip() else None
-            additional_input = additional_code.strip() if additional_code and additional_code.strip() else None
+            additional_input = (
+                additional_code.strip()
+                if additional_code and additional_code.strip()
+                else None
+            )
 
             # Generate kernel
             result = agent.generate_kernel(
                 problem_description=problem_description,
                 test_code=test_input,
-                additional_code=additional_input
+                additional_code=additional_input,
             )
 
             generation_time = time.time() - start_time
@@ -338,12 +342,14 @@ def main():
 
                 # Additional code (reference implementation)
                 gr.Markdown("### 📚 Additional Code (Optional)")
-                gr.Markdown("*Reference implementation to help understand the algorithm*")
+                gr.Markdown(
+                    "*Reference implementation to help understand the algorithm*"
+                )
                 additional_input = gr.Textbox(
                     label="Reference implementation",
                     placeholder="# Optional: Provide reference implementation\n# This helps the agent understand the algorithm\n# The generated kernel should be faster than PyTorch native operations",
                     lines=8,
-                    max_lines=15
+                    max_lines=15,
                 )
 
                 # Generate button
@@ -398,7 +404,12 @@ def main():
 
         # Event handlers
         def generate_with_status(
-            problem_desc, test_code, additional_code, model_name, high_reasoning_effort, user_api_key
+            problem_desc,
+            test_code,
+            additional_code,
+            model_name,
+            high_reasoning_effort,
+            user_api_key,
         ):
             """Wrapper for generate_kernel with status updates"""
             try:

@@ -168,9 +168,12 @@ class TritonKernelAgent:
         response = self.provider.get_response(self.model_name, messages, **kwargs)
         return response.content
 
-    def _generate_test(self, problem_description: str,
-                      provided_test_code: Optional[str] = None,
-                      additional_code: Optional[str] = None) -> str:
+    def _generate_test(
+        self,
+        problem_description: str,
+        provided_test_code: Optional[str] = None,
+        additional_code: Optional[str] = None,
+    ) -> str:
         """
         Generate test code for the problem using OpenAI API.
 
@@ -194,7 +197,7 @@ class TritonKernelAgent:
                 prompt = self.prompt_manager.render_test_generation_prompt(
                     problem_description=problem_description,
                     provided_test_code=provided_test_code,
-                    additional_code=additional_code
+                    additional_code=additional_code,
                 )
 
                 # Call LLM API
@@ -287,10 +290,13 @@ if __name__ == "__main__":
 '''
         return test_code
 
-    def _generate_kernel_seeds(self, problem_description: str,
-                              test_code: str,
-                              num_seeds: Optional[int] = None,
-                              additional_code: Optional[str] = None) -> List[str]:
+    def _generate_kernel_seeds(
+        self,
+        problem_description: str,
+        test_code: str,
+        num_seeds: Optional[int] = None,
+        additional_code: Optional[str] = None,
+    ) -> List[str]:
         """
         Generate initial kernel implementations using OpenAI API.
 
@@ -317,7 +323,7 @@ if __name__ == "__main__":
                 prompt = self.prompt_manager.render_kernel_generation_prompt(
                     problem_description=problem_description,
                     test_code=test_code,
-                    additional_code=additional_code
+                    additional_code=additional_code,
                 )
 
                 kernels = []
@@ -404,9 +410,12 @@ def kernel_function(*args, **kwargs):
 
         return kernels
 
-    def generate_kernel(self, problem_description: str,
-                       test_code: Optional[str] = None,
-                       additional_code: Optional[str] = None) -> Dict[str, Any]:
+    def generate_kernel(
+        self,
+        problem_description: str,
+        test_code: Optional[str] = None,
+        additional_code: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
 
@@ -428,7 +437,9 @@ def kernel_function(*args, **kwargs):
         self.logger.info(f"Problem: {problem_description[:100]}...")
 
         # Always generate test code using LLM (even if test is provided as reference)
-        generated_test_code = self._generate_test(problem_description, test_code, additional_code)
+        generated_test_code = self._generate_test(
+            problem_description, test_code, additional_code
+        )
         self.logger.info(
             "Generated test code using LLM" + (" with reference" if test_code else "")
         )
@@ -452,11 +463,13 @@ def kernel_function(*args, **kwargs):
         with open(session_dir / "test.py", "w") as f:
             f.write(test_code)
         if additional_code:
-            with open(session_dir / "additional_code.py", 'w') as f:
+            with open(session_dir / "additional_code.py", "w") as f:
                 f.write(additional_code)
 
         # Generate kernel seeds
-        kernel_seeds = self._generate_kernel_seeds(problem_description, test_code, additional_code=additional_code)
+        kernel_seeds = self._generate_kernel_seeds(
+            problem_description, test_code, additional_code=additional_code
+        )
 
         # Save seeds
         for i, kernel in enumerate(kernel_seeds):
@@ -469,7 +482,7 @@ def kernel_function(*args, **kwargs):
             test_code=test_code,
             problem_description=problem_description,
             session_log_dir=session_dir,
-            additional_code=additional_code
+            additional_code=additional_code,
         )
 
         # Process results

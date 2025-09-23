@@ -72,8 +72,7 @@ def reference_dropout_residual(x, residual, p=0.1, training=True):
     print("Goal: Generate a kernel that is both correct AND faster than PyTorch\n")
 
     result = agent.generate_kernel(
-        problem_description=problem_description,
-        additional_code=additional_code
+        problem_description=problem_description, additional_code=additional_code
     )
 
     # Display results
@@ -85,7 +84,7 @@ def reference_dropout_residual(x, residual, p=0.1, training=True):
         print(f"  {result['session_dir']}/final_kernel.py")
 
         # Show a snippet of the kernel
-        kernel_lines = result['kernel_code'].split('\n')
+        kernel_lines = result["kernel_code"].split("\n")
         print("\nKernel preview (first 20 lines):")
         print("-" * 60)
         for i, line in enumerate(kernel_lines[:20]):
@@ -98,7 +97,9 @@ def reference_dropout_residual(x, residual, p=0.1, training=True):
         print("1. ✅ Produce the same results as the reference implementation")
         print("2. ✅ Run faster than the PyTorch operations used in the TEST")
         print("3. ✅ Handle edge cases and different input sizes")
-        print("\nNote: The performance target is the test's PyTorch code, NOT the reference implementation!")
+        print(
+            "\nNote: The performance target is the test's PyTorch code, NOT the reference implementation!"
+        )
 
     else:
         print(f"❌ FAILED: {result['message']}")
