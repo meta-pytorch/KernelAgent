@@ -8,8 +8,10 @@ will use to understand the algorithm. The generated Triton kernel should:
 2. Be faster than PyTorch native operations
 """
 
+import argparse
 import os
 import sys
+
 from dotenv import load_dotenv
 
 # Add the project root to the Python path
@@ -18,8 +20,41 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from triton_kernel_agent import TritonKernelAgent
 
 
+def get_parser():
+    parser = argparse.ArgumentParser(description="Generate and test a Triton kernel.")
+    parser.add_argument("--working-dir", type=str)
+    return parser
+
+
+def get_inputs():
+    base_dir = get_parser().parse_args().working_dir
+    problem_description = None
+    additional_code = None
+
+    print(f"Working directory: {base_dir}")
+    assert os.path.exists(base_dir), f"Directory {base_dir} does not exist"
+
+    path = os.path.join(base_dir, "problem_description.md")
+    assert os.path.exists(path), f"{path} does not exist"
+    with open(os.path.join(base_dir, "problem_description.md"), "r") as f:
+        problem_description = f.read()
+
+    path = os.path.join(base_dir, "additional_code.py")
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            additional_code = f.read()
+
+    return problem_description, additional_code
+
+
 def main():
     """Example of generating a kernel with reference implementation."""
+
+    # Get inputs
+    (problem_description, additional_code) = get_inputs()
+
+    print("Problem:", problem_description.strip()[:200] + "...")
+    print(f"\nReference implementation provided: {'Yes' if additional_code else 'No'}")
 
     # Load environment variables
     load_dotenv()
@@ -28,47 +63,8 @@ def main():
     print("Creating Triton Kernel Agent...")
     agent = TritonKernelAgent(num_workers=2, max_rounds=5)
 
-    # Define the problem
-    problem_description = """
-    Create a Triton kernel for fused dropout + residual addition.
-
-    The kernel should:
-    1. Apply dropout to input tensor with probability p
-    2. Add the result to a residual tensor
-    3. Return the final output
-
-    Input tensors shape: (batch_size, seq_len, hidden_dim)
-    All tensors are float32 on CUDA device.
-    """
-
-    # Provide a reference implementation
-    additional_code = '''
-def reference_dropout_residual(x, residual, p=0.1, training=True):
-    """
-    Reference implementation of dropout + residual.
-
-    This is a correct but potentially slow implementation using PyTorch.
-    The Triton kernel should produce the same results but run faster.
-    """
-    import torch
-    import torch.nn.functional as F
-
-    if training:
-        # Apply dropout
-        dropout_out = F.dropout(x, p=p, training=True)
-        # Add residual
-        output = dropout_out + residual
-    else:
-        # No dropout during inference
-        output = x + residual
-
-    return output
-'''
-
     # Generate the kernel
     print("\nGenerating optimized Triton kernel...")
-    print("Problem:", problem_description.strip()[:100] + "...")
-    print("\nReference implementation provided: Yes")
     print("Goal: Generate a kernel that is both correct AND faster than PyTorch\n")
 
     result = agent.generate_kernel(
