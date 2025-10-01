@@ -9,6 +9,11 @@ Analyze this test to understand what the kernel needs to implement:
 {{ test_code }}
 ```
 
+FUSION PRIORITY:
+- Inspect the problem description and test to identify sequences of operations that can run in a single pass.
+- Prefer returning a single fused Triton kernel that covers the entire operator pipeline when technically feasible (e.g., combine matmul, bias addition, activations).
+- Only fall back to an unfused implementation if fusion is provably impossible; in that case add a brief comment in the wrapper explaining the constraint.
+
 CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 1. The implementation must be a complete, valid Python file
 2. Import necessary modules (triton, triton.language as tl, torch)
@@ -36,6 +41,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 5. Follow all Triton programming guidelines above
 6. Include appropriate docstrings and comments
 7. Handle edge cases and boundary conditions properly
+8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
 
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python
@@ -75,5 +81,3 @@ def kernel_function(tensor_a, tensor_b):
     )
     return output
 ```
-
-Generate a complete kernel implementation with actual Triton code: 

@@ -3,6 +3,7 @@ Base provider for OpenAI-compatible APIs.
 """
 
 from typing import List, Dict, Any, Optional
+import logging
 from .base import BaseProvider, LLMResponse
 from ..utils import configure_proxy_environment
 
@@ -49,6 +50,9 @@ class OpenAICompatibleProvider(BaseProvider):
 
         api_params = self._build_api_params(model_name, messages, **kwargs)
         response = self.client.chat.completions.create(**api_params)
+        logging.getLogger(__name__).info(
+            "OpenAI chat response (single): %s", getattr(response, "model_dump", lambda: str(response))()
+        )
 
         return LLMResponse(
             content=response.choices[0].message.content,
@@ -68,6 +72,9 @@ class OpenAICompatibleProvider(BaseProvider):
 
         api_params = self._build_api_params(model_name, messages, n=n, **kwargs)
         response = self.client.chat.completions.create(**api_params)
+        logging.getLogger(__name__).info(
+            "OpenAI chat response (multi): %s", getattr(response, "model_dump", lambda: str(response))()
+        )
 
         return [
             LLMResponse(
@@ -90,15 +97,15 @@ class OpenAICompatibleProvider(BaseProvider):
             "messages": messages,
         }
 
-        # GPT-5 only supports default temperature (1.0), skip temperature for GPT-5
-        if not model_name.startswith("gpt-5"):
+        # GPT-5 and o-series models pin their own sampling behaviour
+        if not (model_name.startswith("gpt-5") or model_name.startswith("o")):
             params["temperature"] = kwargs.get("temperature", 0.7)
 
         # Use max_completion_tokens for newer models like GPT-5, fallback to max_tokens
         max_tokens_value = min(
             kwargs.get("max_tokens", 8192), self.get_max_tokens_limit(model_name)
         )
-        if model_name in ["gpt-5"]:
+        if model_name.startswith("gpt-5") or model_name.startswith("o"):
             params["max_completion_tokens"] = max_tokens_value
         else:
             params["max_tokens"] = max_tokens_value

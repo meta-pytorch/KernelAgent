@@ -24,13 +24,14 @@ TRITON KERNEL PROGRAMMING GUIDELINES:
    - Leverage tensor cores with tl.dot for matrix operations
    - Use warp specialization for better scheduling
    - Consider epilogue subtiling to reduce shared memory usage
+   - Aggressively fuse compatible operator stages to minimize memory traffic and kernel launch overhead; only keep stages separate if fusion is infeasible
 
 5. COMMON PATTERNS:
    a) Elementwise operations: Load -> Compute -> Store
    b) Reductions: Use tl.reduce with proper axis
    c) Matrix multiplication: Use tl.dot with accumulator
    d) Softmax: Online normalization for numerical stability
-   e) Fused operations: Combine multiple ops in single kernel
+   e) Fused operations: Combine multiple ops in single kernel and document the fused stages for reviewers
 
 6. ADVANCED FEATURES:
    - Persistent kernels for better SM utilization

@@ -184,6 +184,11 @@ class TritonKernelAgent:
         Returns:
             Generated test code in standardized format
         """
+        # Use LLM provider if available; no mock fallback allowed
+        if not self.provider:
+            raise RuntimeError(
+                "Unable to generate test code: no LLM provider available and mock fallback disabled"
+            )
         # Use LLM provider if available
         if self.provider:
             try:
@@ -197,7 +202,8 @@ class TritonKernelAgent:
 
                 # Call LLM API
                 messages = [{"role": "user", "content": prompt}]
-                response_text = self._call_llm(messages, max_tokens=8192)
+                response_text = self._call_llm(messages, max_tokens=20000)
+                self.logger.info("Raw test generation response:\n%s", response_text)
 
                 # Extract test code from response
                 test_code = self._extract_code_from_response(response_text)
@@ -213,7 +219,8 @@ class TritonKernelAgent:
 
             except Exception as e:
                 self.logger.error(f"Error generating test with LLM API: {e}")
-                # Fall back to mock implementation
+                raise
+
 
         # Mock test generation (fallback)
         self.logger.info("Generating test code (mock implementation)")
@@ -228,15 +235,15 @@ import torch
 def test_kernel():
     """Test the kernel implementation."""
     from kernel import kernel_function
-    
+
     # Adapted from provided test code
     try:
         # Create test data (standardized format)
         test_input = torch.randn(1024, device='cuda')
-        
+
         # Call kernel_function as a normal Python function
         result = kernel_function(test_input)
-        
+
         # Basic validation
         if result is not None:
             print("Test passed!")
@@ -262,16 +269,16 @@ import torch
 def test_kernel():
     """Test the kernel implementation."""
     from kernel import kernel_function
-    
+
     # Mock test - replace with actual test logic
     try:
         # Create test data
         test_input = torch.randn(1024, device='cuda')
-        
+
         # Call kernel_function as a normal Python function
         # (kernel launch logic is handled inside kernel.py)
         result = kernel_function(test_input)
-        
+
         print("Test passed!")
         return True
     except Exception as e:
@@ -318,6 +325,8 @@ if __name__ == "__main__":
                 messages = [{"role": "user", "content": prompt}]
 
                 # Use provider's multiple response capability
+                max_completion_tokens = 20000
+
                 if self.provider.supports_multiple_completions():
                     # Provider supports native multiple completions
                     responses = self.provider.get_multiple_responses(
@@ -325,7 +334,7 @@ if __name__ == "__main__":
                         messages,
                         n=num_seeds,
                         temperature=0.8,
-                        max_tokens=8192,
+                        max_tokens=max_completion_tokens,
                         high_reasoning_effort=self.high_reasoning_effort,
                     )
 
@@ -341,7 +350,9 @@ if __name__ == "__main__":
                     # Provider doesn't support multiple completions, make individual calls
                     for i in range(num_seeds):
                         response_text = self._call_llm(
-                            messages, max_tokens=8192, temperature=0.8 + (i * 0.1)
+                            messages,
+                            max_tokens=max_completion_tokens,
+                            temperature=0.8 + (i * 0.1),
                         )
                         kernel_code = self._extract_code_from_response(response_text)
 

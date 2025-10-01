@@ -22,6 +22,11 @@ class ModelConfig:
 
 # Registry of all available models
 AVAILABLE_MODELS = [
+    ModelConfig(
+        name="o4-mini",
+        provider_class=OpenAIProvider,
+        description="OpenAI o4-mini - fast reasoning model",
+    ),
     # OpenAI GPT-5 Model (Only GPT-5)
     ModelConfig(
         name="gpt-5",

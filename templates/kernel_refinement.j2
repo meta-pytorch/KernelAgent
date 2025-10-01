@@ -21,6 +21,11 @@ Standard output: {{ error_info.stdout or 'None' }}
 {{ history_context }}
 {%- endif %}
 
+FUSION PRIORITY:
+- Audit the existing implementation and the failing behavior to see where additional operations can be fused into the same pass.
+- Aim to return a single fused kernel that performs every dependent operation when feasible; do not regress to multiple kernels just because one passes the tests.
+- If fusion cannot be extended, leave a concise comment describing the technical reason so reviewers know you evaluated the option.
+
 CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 1. Analyze the error message and fix the issue
 2. The implementation must be a complete, valid Python file
@@ -28,6 +33,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 4. Follow all Triton programming guidelines
 5. Learn from previous attempts if any
 6. Focus on fixing the specific error while maintaining correctness
+7. Prefer solutions that preserve or extend operation fusion; never intentionally unfuse a pipeline unless you document why it is impossible to keep it fused
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
 - DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation
@@ -43,5 +49,3 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - Use proper Triton indexing with tl.program_id(), tl.arange(), etc.
 - Implement the algorithm step-by-step in Triton operations, not PyTorch shortcuts
 - The kernel should be decorated with @triton.jit, not the wrapper function
-
-Generate the complete fixed kernel implementation with actual Triton code: 
