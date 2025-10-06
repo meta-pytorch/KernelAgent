@@ -1,17 +1,18 @@
-"""
-Verification Worker for testing and refining individual kernels.
-"""
+"""Verification Worker for testing and refining individual kernels."""
 
-import sys
 import json
-import re
-import subprocess
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
-from datetime import datetime
 import logging
 import multiprocessing as mp
+import re
+import subprocess
+import sys
 from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+from .prompt_manager import PromptManager
+from .providers import get_model_provider
 
 
 DISALLOWED_TORCH_PATTERNS = [
@@ -26,9 +27,6 @@ DISALLOWED_TORCH_PATTERNS = [
     (re.compile(r"\bclass\s+\w+\s*\(\s*nn\.Module"), "Subclassing torch.nn.Module is not allowed"),
     (re.compile(r"\.forward\("), "Calling .forward() indicates torch.nn module usage and is not allowed"),
 ]
-
-from .prompt_manager import PromptManager
-from .providers import get_model_provider
 
 
 class VerificationWorker:

@@ -56,3 +56,6 @@ include = ["triton_kernel_agent*"]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = "-v --cov=triton_kernel_agent --cov-report=term-missing"
+
+[tool.ruff]
+extend-exclude = ["LICENSE"]
