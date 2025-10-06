@@ -16,16 +16,42 @@ from .providers import get_model_provider
 
 
 DISALLOWED_TORCH_PATTERNS = [
-    (re.compile(r"\bimport\s+torch\.nn(\b|\s+as\b)"), "importing torch.nn modules is not allowed"),
-    (re.compile(r"\bfrom\s+torch\s+import\s+nn\b"), "importing torch.nn modules is not allowed"),
-    (re.compile(r"\bimport\s+torch\.nn\.functional\s+as\s+F\b"), "aliasing torch.nn.functional as F is not allowed"),
+    (
+        re.compile(r"\bimport\s+torch\.nn(\b|\s+as\b)"),
+        "importing torch.nn modules is not allowed",
+    ),
+    (
+        re.compile(r"\bfrom\s+torch\s+import\s+nn\b"),
+        "importing torch.nn modules is not allowed",
+    ),
+    (
+        re.compile(r"\bimport\s+torch\.nn\.functional\s+as\s+F\b"),
+        "aliasing torch.nn.functional as F is not allowed",
+    ),
     (re.compile(r"\btorch\.nn\."), "torch.nn module usage is not allowed"),
-    (re.compile(r"\btorch\.nn\.functional\b"), "torch.nn.functional usage is not allowed"),
-    (re.compile(r"\bF\.[A-Za-z_]+\("), "torch.nn.functional alias calls (F.*) are not allowed"),
+    (
+        re.compile(r"\btorch\.nn\.functional\b"),
+        "torch.nn.functional usage is not allowed",
+    ),
+    (
+        re.compile(r"\bF\.[A-Za-z_]+\("),
+        "torch.nn.functional alias calls (F.*) are not allowed",
+    ),
     (re.compile(r"\btorch\.conv"), "torch convolution helpers are not allowed"),
-    (re.compile(r"\btorch\.(relu|sigmoid|tanh|softmax|gelu|mish|hardtanh|max_pool|avg_pool)[A-Za-z0-9_]*\("), "PyTorch activation/pooling helpers are not allowed"),
-    (re.compile(r"\bclass\s+\w+\s*\(\s*nn\.Module"), "Subclassing torch.nn.Module is not allowed"),
-    (re.compile(r"\.forward\("), "Calling .forward() indicates torch.nn module usage and is not allowed"),
+    (
+        re.compile(
+            r"\btorch\.(relu|sigmoid|tanh|softmax|gelu|mish|hardtanh|max_pool|avg_pool)[A-Za-z0-9_]*\("
+        ),
+        "PyTorch activation/pooling helpers are not allowed",
+    ),
+    (
+        re.compile(r"\bclass\s+\w+\s*\(\s*nn\.Module"),
+        "Subclassing torch.nn.Module is not allowed",
+    ),
+    (
+        re.compile(r"\.forward\("),
+        "Calling .forward() indicates torch.nn module usage and is not allowed",
+    ),
 ]
 
 

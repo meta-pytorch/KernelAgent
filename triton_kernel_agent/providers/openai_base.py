@@ -51,7 +51,8 @@ class OpenAICompatibleProvider(BaseProvider):
         api_params = self._build_api_params(model_name, messages, **kwargs)
         response = self.client.chat.completions.create(**api_params)
         logging.getLogger(__name__).info(
-            "OpenAI chat response (single): %s", getattr(response, "model_dump", lambda: str(response))()
+            "OpenAI chat response (single): %s",
+            getattr(response, "model_dump", lambda: str(response))(),
         )
 
         return LLMResponse(
@@ -73,7 +74,8 @@ class OpenAICompatibleProvider(BaseProvider):
         api_params = self._build_api_params(model_name, messages, n=n, **kwargs)
         response = self.client.chat.completions.create(**api_params)
         logging.getLogger(__name__).info(
-            "OpenAI chat response (multi): %s", getattr(response, "model_dump", lambda: str(response))()
+            "OpenAI chat response (multi): %s",
+            getattr(response, "model_dump", lambda: str(response))(),
         )
 
         return [
