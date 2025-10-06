@@ -1,0 +1,762 @@
+{
+  "root": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2",
+  "updated_from": "batch_summary.json",
+  "total_tracked": 100,
+  "results": [
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/100_ConvTranspose3d_Clamp_Min_Divide.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759269268/session_20250930_145851_124067",
+      "source": "batch_1759269268"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/10_ConvTranspose2d_MaxPool_Hardtanh_Mean_Tanh.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_151303_312719",
+      "worker_id": 1,
+      "rounds": 9,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/11_ConvTranspose2d_BatchNorm_Tanh_MaxPool_GroupNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/manual_retry/session_20251002_102408_50265",
+      "worker_id": 0,
+      "rounds": 8
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/12_Gemm_Multiply_LeakyReLU.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_170355_28212",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/13_ConvTranspose3d_Mean_Add_Softmax_Tanh_Scaling.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_170724_239089",
+      "worker_id": 1,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/14_Gemm_Divide_Sum_Scaling.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_172009_919989",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/15_ConvTranspose3d_BatchNorm_Subtract.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_172758_649134",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/16_ConvTranspose2d_Mish_Add_Hardtanh_Scaling.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_174641_236746",
+      "worker_id": 1,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/17_Conv2d_InstanceNorm_Divide.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_175351_197961",
+      "worker_id": 3,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/18_Matmul_Sum_Max_AvgPool_LogSumExp_LogSumExp.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_175945_750953",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/19_ConvTranspose2d_GELU_GroupNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/manual_retry/session_20251001_100436_238257",
+      "worker_id": 0,
+      "rounds": 4,
+      "source": "manual_retry"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/1_Conv2D_ReLU_BiasAdd.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_185601_275676",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/20_ConvTranspose3d_Sum_ResidualAdd_Multiply_ResidualAdd.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_190210_825090",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/21_Conv2d_Add_Scale_Sigmoid_GroupNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_190909_927913",
+      "worker_id": 0,
+      "rounds": 4,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/22_Matmul_Scale_ResidualAdd_Clamp_LogSumExp_Mish.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_193100_268325",
+      "worker_id": 3,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/23_Conv3d_GroupNorm_Mean.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_194104_833440",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/24_Conv3d_Min_Softmax.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_194904_414682",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/25_Conv2d_Min_Tanh_Tanh.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_195355_587262",
+      "worker_id": 2,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/26_ConvTranspose3d_Add_HardSwish.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_200524_750649",
+      "worker_id": 3,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/27_Conv3d_HardSwish_GroupNorm_Mean.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_203126_662734",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/28_BMM_InstanceNorm_Sum_ResidualAdd_Multiply.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_204117_75693",
+      "worker_id": 2,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/29_Matmul_Mish_Mish.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_205159_980575",
+      "worker_id": 1,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/2_ConvTranspose2d_BiasAdd_Clamp_Scaling_Clamp_Divide.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_210019_31747",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/30_Gemm_GroupNorm_Hardtanh.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_210753_822699",
+      "worker_id": 1,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/31_Conv2d_Min_Add_Multiply.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_212109_444695",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/32_Conv2d_Scaling_Min.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_213122_389746",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/33_Gemm_Scale_BatchNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_214242_827963",
+      "worker_id": 3,
+      "rounds": 3,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/34_ConvTranspose3d_LayerNorm_GELU_Scaling.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_220812_717601",
+      "worker_id": 2,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/35_Conv2d_Subtract_HardSwish_MaxPool_Mish.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/manual_retry/session_20251001_104619_117020",
+      "worker_id": 2,
+      "rounds": 2,
+      "source": "manual_retry"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/36_ConvTranspose2d_Min_Sum_GELU_Add.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_223929_168331",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/37_Matmul_Swish_Sum_GroupNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_224649_440032",
+      "worker_id": 1,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/38_ConvTranspose3d_AvgPool_Clamp_Softmax_Multiply.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_225549_580608",
+      "worker_id": 0,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/39_Gemm_Scale_BatchNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_231958_376676",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/3_ConvTranspose3d_Sum_LayerNorm_AvgPool_GELU.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_232508_460308",
+      "worker_id": 2,
+      "rounds": 3,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/40_Matmul_Scaling_ResidualAdd.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_233709_121991",
+      "worker_id": 3,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/41_Gemm_BatchNorm_GELU_ReLU.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_234144_628763",
+      "worker_id": 2,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/42_ConvTranspose2d_GlobalAvgPool_BiasAdd_LogSumExp_Sum_Multiply.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_235022_685135",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/43_Conv3d_Max_LogSumExp_ReLU.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20250930_235604_681021",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/44_ConvTranspose2d_Multiply_GlobalAvgPool_GlobalAvgPool_Mean.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_000256_64632",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/45_Gemm_Sigmoid_LogSumExp.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_001042_78387",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/46_Conv2d_Subtract_Tanh_Subtract_AvgPool.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_001750_386411",
+      "worker_id": 2,
+      "rounds": 10,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/47_Conv3d_Mish_Tanh.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_005246_812314",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/48_Conv3d_Scaling_Tanh_Multiply_Sigmoid.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/manual_retry/session_20251001_111752_752867",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "manual_retry"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/49_ConvTranspose3d_Softmax_Sigmoid.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_014028_988968",
+      "worker_id": 3,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/4_Conv2d_Mish_Mish.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_014854_110817",
+      "worker_id": 1,
+      "rounds": 3,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/50_ConvTranspose3d_Scaling_AvgPool_BiasAdd_Scaling.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_020103_399628",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/51_Gemm_Subtract_GlobalAvgPool_LogSumExp_GELU_ResidualAdd.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_021041_634695",
+      "worker_id": 2,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/52_Conv2d_Activation_BatchNorm.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_022544_538148",
+      "worker_id": 3,
+      "rounds": 2,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/53_Gemm_Scaling_Hardtanh_GELU.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/batch_1759270253/session_20251001_023605_173628",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759270253"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/54_Conv2d_Multiply_LeakyReLU_GELU.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/manual_retry/session_20251001_113005_36569",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "manual_retry"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/55_Matmul_MaxPool_Sum_Scale.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_132847_593361",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/56_Matmul_Sigmoid_Sum.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_133924_50720",
+      "worker_id": 3,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/57_Conv2d_ReLU_HardSwish.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_134844_911574",
+      "worker_id": 2,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/58_ConvTranspose3d_LogSumExp_HardSwish_Subtract_Clamp.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_135845_708718",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/59_Matmul_Swish_Scaling.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_141206_969543",
+      "worker_id": 3,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/5_ConvTranspose2d_Subtract_Tanh.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_142124_237292",
+      "worker_id": 0,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/60_ConvTranspose3d_Swish_GroupNorm_HardSwish.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_144415_672175",
+      "worker_id": 2,
+      "rounds": 3
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/61_ConvTranspose3d_ReLU_GroupNorm.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759445690/session_20251002_155843_834310",
+      "worker_id": 0,
+      "rounds": 1,
+      "source": "batch_1759445690"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/62_Matmul_GroupNorm_LeakyReLU_Sum.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_160838_212239",
+      "worker_id": 3,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/63_Gemm_ReLU_Divide.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_161550_669333",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/64_Gemm_LogSumExp_LeakyReLU_LeakyReLU_GELU_GELU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_161956_592834",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/65_Conv2d_AvgPool_Sigmoid_Sum.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_162905_568339",
+      "worker_id": 2,
+      "rounds": 3
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/66_Matmul_Dropout_Softmax.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_165310_260894",
+      "worker_id": 3,
+      "rounds": 5
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/67_Conv2d_GELU_GlobalAvgPool.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_172844_917875",
+      "worker_id": 0,
+      "rounds": 4
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/68_Matmul_Min_Subtract.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_175258_587067",
+      "worker_id": 2,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/69_Conv2d_HardSwish_ReLU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_175922_384777",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/6_Conv3d_Softmax_MaxPool_MaxPool.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759431005/session_20251002_142551_158619",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759431005"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/70_Gemm_Sigmoid_Scaling_ResidualAdd.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_192836_311611",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/71_Conv2d_Divide_LeakyReLU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_193357_975146",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/72_ConvTranspose3d_BatchNorm_AvgPool_AvgPool.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_194134_182139",
+      "worker_id": 2,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/73_Conv2d_BatchNorm_Scaling.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_200513_521551",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/74_ConvTranspose3d_LeakyReLU_Multiply_LeakyReLU_Max.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_201239_201487",
+      "worker_id": 2,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/75_Gemm_GroupNorm_Min_BiasAdd.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_202322_430492",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/76_Gemm_Add_ReLU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_203108_907325",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/77_ConvTranspose3d_Scale_BatchNorm_GlobalAvgPool.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759431005/session_20251002_143922_487712",
+      "worker_id": 0,
+      "rounds": 8,
+      "source": "batch_1759431005"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/78_ConvTranspose3d_Max_Max_Sum.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_213212_440338",
+      "worker_id": 2,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/79_Conv3d_Multiply_InstanceNorm_Clamp_Multiply_Max.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_215614_635502",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/7_Conv3d_ReLU_LeakyReLU_GELU_Sigmoid_BiasAdd.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759431005/session_20251002_152753_257646",
+      "worker_id": 3,
+      "rounds": 2,
+      "source": "batch_1759431005"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/80_Gemm_Max_Subtract_GELU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251001_230224_882600",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/81_Gemm_Swish_Divide_Clamp_Tanh_Clamp.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759431005/session_20251002_154001_954096",
+      "worker_id": 1,
+      "rounds": 1,
+      "source": "batch_1759431005"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/82_Conv2d_Tanh_Scaling_BiasAdd_Max.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_000310_137359",
+      "worker_id": 3,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/83_Conv3d_GroupNorm_Min_Clamp_Dropout.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_001737_65278",
+      "worker_id": 0,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/84_Gemm_BatchNorm_Scaling_Softmax.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_002451_913051",
+      "worker_id": 2,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/85_Conv2d_GroupNorm_Scale_MaxPool_Clamp.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759431005/session_20251002_154632_810375",
+      "worker_id": 2,
+      "rounds": 1,
+      "source": "batch_1759431005"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/86_Matmul_Divide_GELU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_014614_707939",
+      "worker_id": 3,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/87_Conv2d_Subtract_Subtract_Mish.py",
+      "success": true,
+      "session_dir": "triton_kernel_logs/manual_retry/session_20251002_090328_519980",
+      "worker_id": 3,
+      "rounds": 4,
+      "error": "Failed to generate working kernel",
+      "source": "manual_retry"
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/88_Gemm_GroupNorm_Swish_Multiply_Swish.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_024152_149966",
+      "worker_id": 3,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/89_ConvTranspose3d_MaxPool_Softmax_Subtract_Swish_Max.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_025250_618941",
+      "worker_id": 3,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/8_Conv3d_Divide_Max_GlobalAvgPool_BiasAdd_Sum.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_030941_650399",
+      "worker_id": 2,
+      "rounds": 5
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/90_Conv3d_LeakyReLU_Sum_Clamp_GELU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_033652_110935",
+      "worker_id": 3,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/91_ConvTranspose2d_Softmax_BiasAdd_Scaling_Sigmoid.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_034317_57846",
+      "worker_id": 2,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/92_Conv2d_GroupNorm_Tanh_HardSwish_ResidualAdd_LogSumExp.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_035404_520325",
+      "worker_id": 1,
+      "rounds": 4
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/93_ConvTranspose2d_Add_Min_GELU_Multiply.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_041726_264071",
+      "worker_id": 2,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/94_Gemm_BiasAdd_Hardtanh_Mish_GroupNorm.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_043136_291965",
+      "worker_id": 3,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/95_Matmul_Add_Swish_Tanh_GELU_Hardtanh.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_044346_182899",
+      "worker_id": 2,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/96_ConvTranspose3d_Multiply_Max_GlobalAvgPool_Clamp.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_045426_952046",
+      "worker_id": 2,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/97_Matmul_BatchNorm_BiasAdd_Divide_Swish.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_052153_404467",
+      "worker_id": 3,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/98_Matmul_AvgPool_GELU_Scale_Max.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_053125_112745",
+      "worker_id": 0,
+      "rounds": 2
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/99_Matmul_GELU_Softmax.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_054400_929124",
+      "worker_id": 1,
+      "rounds": 1
+    },
+    {
+      "path": "/home/leyuan/workplace/KernelAgent/external/KernelBench/KernelBench/level2/9_Matmul_Subtract_Multiply_ReLU.py",
+      "success": true,
+      "session_dir": "/home/leyuan/workplace/KernelAgent/triton_kernel_logs/batch_1759344308/session_20251002_055310_967968",
+      "worker_id": 3,
+      "rounds": 1
+    }
+  ]
+}

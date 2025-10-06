@@ -26,6 +26,12 @@ FUSION PRIORITY:
 - Aim to return a single fused kernel that performs every dependent operation when feasible; do not regress to multiple kernels just because one passes the tests.
 - If fusion cannot be extended, leave a concise comment describing the technical reason so reviewers know you evaluated the option.
 
+RUNTIME RESTRICTIONS:
+- The Python wrapper may only perform argument validation, tensor allocation, and launch configuration.
+- All math (convs, activations, pooling, reductions, etc.) must reside inside Triton kernels.
+- Never import or instantiate `torch.nn` modules, call `torch.nn.functional` (including aliases like `F.*`), or rely on PyTorch helpers such as `torch.conv*`, `torch.relu`, `torch.max_pool*`, etc.
+- PyTorch usage is limited to allocation helpers, dtype/device checks, and assertions needed to launch the Triton kernel.
+
 CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 1. Analyze the error message and fix the issue
 2. The implementation must be a complete, valid Python file
@@ -34,6 +40,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 5. Learn from previous attempts if any
 6. Focus on fixing the specific error while maintaining correctness
 7. Prefer solutions that preserve or extend operation fusion; never intentionally unfuse a pipeline unless you document why it is impossible to keep it fused
+8. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch ops in the execution path
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
 - DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation
@@ -41,6 +48,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
+- DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations

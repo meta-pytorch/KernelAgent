@@ -202,7 +202,7 @@ class TritonKernelAgent:
 
                 # Call LLM API
                 messages = [{"role": "user", "content": prompt}]
-                response_text = self._call_llm(messages, max_tokens=20000)
+                response_text = self._call_llm(messages, max_tokens=24000)
                 self.logger.info("Raw test generation response:\n%s", response_text)
 
                 # Extract test code from response

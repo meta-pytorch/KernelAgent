@@ -14,6 +14,12 @@ FUSION PRIORITY:
 - Prefer returning a single fused Triton kernel that covers the entire operator pipeline when technically feasible (e.g., combine matmul, bias addition, activations).
 - Only fall back to an unfused implementation if fusion is provably impossible; in that case add a brief comment in the wrapper explaining the constraint.
 
+RUNTIME RESTRICTIONS:
+- The Python wrapper may only perform argument validation, shape/dtype checks, tensor allocation, and grid configuration.
+- All mathematical work (convolutions, activations, pooling, reductions, etc.) must execute inside Triton kernels.
+- Never import or instantiate `torch.nn` modules, call `torch.nn.functional` (or aliases such as `F.*`), or rely on PyTorch helpers like `torch.conv*`, `torch.tanh`, `torch.sigmoid`, `torch.max_pool*`, etc.
+- Allowed PyTorch usage is limited to allocation helpers (`torch.empty_like`, `torch.zeros`, etc.), dtype/device checks, and assertions needed to launch the Triton kernel.
+
 CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 1. The implementation must be a complete, valid Python file
 2. Import necessary modules (triton, triton.language as tl, torch)
@@ -30,6 +36,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
+- DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
@@ -42,6 +49,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 6. Include appropriate docstrings and comments
 7. Handle edge cases and boundary conditions properly
 8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
+9. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch operators in the execution path
 
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python
