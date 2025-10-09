@@ -41,6 +41,7 @@ CRITICAL TEST DATA REQUIREMENTS:
 - If the problem description specifies exact shapes, dtypes, or tensor dimensions, use EXACTLY those specifications
 - Do NOT create multiple test cases with different shapes/dtypes if specific ones are mentioned
 - Use the exact shapes and dtypes mentioned in the problem description
+- Use non-zero random tensors (e.g., torch.randn/torch.rand) for inputs; never feed all-zero data unless the problem explicitly requires it, because zero inputs can hide missing computation.
 - Only create variations if the problem description is vague about the input specifications
 - If original problem description specifies FP32, convert to BF16 problems instead of FP32 problems
 - AVOID FP32 for inputs and outputs - use BF16 instead when users specify FP32 problems
