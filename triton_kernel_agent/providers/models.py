@@ -57,6 +57,11 @@ AVAILABLE_MODELS = [
         description="Claude 4 Sonnet - high performance (Released May 2025)",
     ),
     ModelConfig(
+        name="claude-sonnet-4-5-20250929",
+        provider_class=AnthropicProvider,
+        description="Claude 4.5 Sonnet - latest balanced model (Released Sep 2025)",
+    ),
+    ModelConfig(
         name="gcp-claude-4-sonnet",
         provider_class=RelayProvider,
         description="[Relay] Claude 4 Sonnet",
