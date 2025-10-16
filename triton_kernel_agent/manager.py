@@ -125,6 +125,13 @@ class WorkerManager:
             Dictionary with successful kernel and metadata, or None
         """
         self.logger.info(f"Starting verification with {len(kernel_seeds)} seeds")
+        # Reset cross-worker success signal for a fresh run
+        try:
+            self.success_event.clear()
+        except Exception:
+            pass
+        # Reset workers list to avoid holding stale processes between runs
+        self.workers = []
 
         # Determine where to put worker logs
         if session_log_dir:

@@ -350,9 +350,14 @@ def main():
                     info="⚠️ Not saved - only used for this session",
                 )
 
-                choices = [
-                    (config.description, config.name) for config in AVAILABLE_MODELS
-                ]
+                CLAUDE_SONNET_4_5_MODEL_NAME = "claude-sonnet-4-5-20250929"
+                CLAUDE_SONNET_4_5_LABEL = "Claude Sonnet 4.5"
+                choices = []
+                for config in AVAILABLE_MODELS:
+                    label = config.description
+                    if config.name == CLAUDE_SONNET_4_5_MODEL_NAME:
+                        label = CLAUDE_SONNET_4_5_LABEL  # Shorten the Anthropic label for clarity
+                    choices.append((label, config.name))
                 # Model selection
                 model_dropdown = gr.Dropdown(
                     choices=choices,
