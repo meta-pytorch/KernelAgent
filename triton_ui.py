@@ -31,10 +31,7 @@ from triton_kernel_agent.providers.models import AVAILABLE_MODELS
 
 
 KERNELBENCH_BASE_PATH = (
-    Path(__file__).resolve().parent
-    / "external"
-    / "KernelBench"
-    / "KernelBench"
+    Path(__file__).resolve().parent / "external" / "KernelBench" / "KernelBench"
 )
 KERNELBENCH_LEVEL_LABELS = {
     "level1": "Level 1",
@@ -304,15 +301,16 @@ def main():
     ui = TritonKernelUI()
     kernelbench_problem_map = load_kernelbench_problem_map()
     kernelbench_problem_choices = list(kernelbench_problem_map.keys())
-    default_problem_choice = kernelbench_problem_choices[0] if kernelbench_problem_choices else None
+    default_problem_choice = (
+        kernelbench_problem_choices[0] if kernelbench_problem_choices else None
+    )
     kernelbench_problem_cache: Dict[str, str] = {}
 
     if default_problem_choice:
         try:
-            kernelbench_problem_cache[default_problem_choice] = (
-                kernelbench_problem_map[default_problem_choice]
-                .read_text(encoding="utf-8")
-            )
+            kernelbench_problem_cache[default_problem_choice] = kernelbench_problem_map[
+                default_problem_choice
+            ].read_text(encoding="utf-8")
         except OSError:
             kernelbench_problem_cache[default_problem_choice] = ""
 
@@ -477,9 +475,7 @@ def main():
                         encoding="utf-8"
                     )
                 except OSError as exc:
-                    return gr.update(
-                        value=f"# Error loading {selection}\n\n{exc}"
-                    )
+                    return gr.update(value=f"# Error loading {selection}\n\n{exc}")
 
             return gr.update(value=kernelbench_problem_cache[selection])
 

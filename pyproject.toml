@@ -58,4 +58,14 @@ python_files = ["test_*.py", "*_test.py"]
 addopts = "-v --cov=triton_kernel_agent --cov-report=term-missing"
 
 [tool.ruff]
-extend-exclude = ["LICENSE"]
+extend-exclude = [
+    "LICENSE",
+    "external",
+    ".fuse",
+    "compose_out",
+    "kernels_out",
+    "triton_kernel_logs",
+    "coverage_*",
+    "compose_out_auto",
+    "KernelBench",
+]
