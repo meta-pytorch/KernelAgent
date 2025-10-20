@@ -1,0 +1,66 @@
+from __future__ import annotations
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Optional
+import json
+import time
+import uuid
+
+
+@dataclass
+class OrchestratorConfig:
+    problem_path: Path
+    model: str
+    workers: int = 4
+    max_iters: int = 10
+    llm_timeout_s: int = 120
+    run_timeout_s: int = 180
+    stream_mode: str = "all"  # all|winner|none
+    store_responses: bool = False
+    isolated: bool = False
+    deny_network: bool = False
+    enable_reasoning_extras: bool = True
+
+    def to_json(self) -> str:
+        d = asdict(self)
+        d["problem_path"] = str(self.problem_path)
+        return json.dumps(d, indent=2)
+
+
+@dataclass
+class OrchestratorState:
+    run_id: str
+    run_dir: Path
+    started_ts: float
+
+
+@dataclass
+class WorkerConfig:
+    run_id: str
+    worker_id: str
+    variant_index: int
+    model: str
+    max_iters: int
+    llm_timeout_s: int
+    run_timeout_s: int
+    store_responses: bool
+    isolated: bool
+    deny_network: bool
+    enable_reasoning_extras: bool
+    stream_dir: Path
+    workspace_dir: Path
+    shared_digests_dir: Path
+
+
+@dataclass
+class ResultSummary:
+    run_id: str
+    winner_worker_id: Optional[str]
+    artifact_path: Optional[str]
+    reason: str
+
+
+def new_run_id() -> str:
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    short = uuid.uuid4().hex[:8]
+    return f"run_{ts}_{short}"
