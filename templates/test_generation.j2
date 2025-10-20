@@ -52,6 +52,7 @@ REQUIREMENTS:
 9. Exit with code 0 on success, 1 on failure
 10. Include error messages and debugging output
 11. Handle exceptions gracefully
+12. If the problem description includes a Reference PyTorch implementation (a function named `reference` or equivalent), CALL IT to compute the expected output
 
 CRITICAL TEST DATA REQUIREMENTS:
 - If the problem description specifies exact shapes, dtypes, or tensor dimensions, use EXACTLY those specifications
