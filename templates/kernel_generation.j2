@@ -3,18 +3,27 @@
 TASK: Generate a complete Python implementation of a Triton kernel based on the following test requirements.
 
 {% if additional_code -%}
-REFERENCE IMPLEMENTATION:
-The following code is a numerically correct reference implementation to help understand the problem:
-
+REFERENCE IMPLEMENTATION (understand the math, but do not copy PyTorch shortcuts):
 ```python
 {{ additional_code }}
 ```
-
-This reference code helps you understand the algorithm. Your Triton kernel should:
-1. Produce the same numerical results as this reference
-2. Be optimized to run FASTER than the PyTorch operations used in the TEST CODE
-3. The reference implementation is NOT the performance target - focus on beating the test's PyTorch code
 {%- endif %}
+
+{% if baseline_code -%}
+USER-PROVIDED BASELINE TRITON KERNEL (context for further optimization):
+```python
+{{ baseline_code }}
+```
+{%- endif %}
+
+{% if baseline_metrics %}
+BASELINE PERFORMANCE TARGET:
+- Baseline speedup vs PyTorch: {{ "%.4f"|format(baseline_metrics.speedup) }}x (Triton {{ "%.4f"|format(baseline_metrics.triton_ms) }} ms vs PyTorch {{ "%.4f"|format(baseline_metrics.pytorch_ms) }} ms)
+- Your kernel MUST exceed this speedup while also beating the PyTorch reference timed inside the test harness.
+{% else %}
+BASELINE PERFORMANCE TARGET:
+- The test harness will inject `BASELINE_METRICS["speedup"]` at runtime; your kernel must strictly beat that value in addition to PyTorch.
+{% endif %}
 
 TEST CODE:
 Analyze this test to understand what the kernel needs to implement:
@@ -39,6 +48,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
+- DO NOT add memoization/global caches or reuse tricks that skip computation on subsequent calls; every invocation must execute the real Triton work.
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
@@ -50,9 +60,10 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 5. Follow all Triton programming guidelines above
 6. Include appropriate docstrings and comments
 7. Handle edge cases and boundary conditions properly
-8. OPTIMIZE for PERFORMANCE - Your kernel must be FASTER than the PyTorch operations in the TEST
-9. Consider memory coalescing, cache usage, and parallelism for best performance
-10. The test will benchmark your kernel against its PyTorch implementation - you must win!
+8. OPTIMIZE for PERFORMANCE - beat both the PyTorch operations in the test AND the baseline speedup target.
+9. Consider memory coalescing, cache usage, autotune configs, and parallelism for best performance.
+10. NEVER implement memoization, global caching, or reuse tricks (e.g., hashing tensor data_ptrs) to skip work; your kernel must recompute results on every call. Any attempt to short-circuit execution via cached outputs is treated as cheating and will fail the test harness.
+11. The test emits a structured JSON line (`PERF_METRICS:{...}`); ensure your kernel wrapper is compatible with that measurement (e.g., supports cloning inputs when mutated, exposes optional out buffers, etc.).
 
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python

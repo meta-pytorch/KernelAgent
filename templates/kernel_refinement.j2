@@ -3,18 +3,27 @@
 TASK: Fix the following Triton kernel implementation based on the test results.
 
 {% if additional_code -%}
-REFERENCE IMPLEMENTATION:
-The following code is a numerically correct reference implementation to help understand the problem:
-
+REFERENCE IMPLEMENTATION (for correctness intuition only):
 ```python
 {{ additional_code }}
 ```
-
-This reference code helps you understand the algorithm. Your fixed Triton kernel should:
-1. Produce the same numerical results as this reference
-2. Be optimized to run FASTER than the PyTorch operations used in the TEST CODE
-3. The reference implementation is NOT the performance target - focus on beating the test's PyTorch code
 {%- endif %}
+
+{% if baseline_code -%}
+BASELINE TRITON IMPLEMENTATION (CURRENT PERFORMANCE BAR):
+```python
+{{ baseline_code }}
+```
+{%- endif %}
+
+{% if baseline_metrics %}
+BASELINE PERFORMANCE TARGET:
+- Baseline speedup vs PyTorch: {{ "%.4f"|format(baseline_metrics.speedup) }}x (Triton {{ "%.4f"|format(baseline_metrics.triton_ms) }} ms vs PyTorch {{ "%.4f"|format(baseline_metrics.pytorch_ms) }} ms)
+- Your fix must exceed this speedup as well as the PyTorch baseline measured inside the test harness.
+{% else %}
+BASELINE PERFORMANCE TARGET:
+- The test harness will provide `BASELINE_METRICS["speedup"]` at runtime; ensure your kernel produces a strictly greater speedup in addition to beating PyTorch.
+{% endif %}
 
 TEST CODE:
 Analyze this test to understand what the kernel needs to implement:
@@ -42,9 +51,10 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 4. Follow all Triton programming guidelines
 5. Learn from previous attempts if any
 6. Focus on fixing the specific error while maintaining correctness
-7. OPTIMIZE for PERFORMANCE - Your kernel must be FASTER than the PyTorch code in the TEST
-8. If the error is "PERFORMANCE FAILURE", optimize the kernel to beat the test's PyTorch implementation
-9. Remember: The performance target is the TEST's PyTorch code, NOT the reference implementation
+7. OPTIMIZE for PERFORMANCE - your kernel must beat BOTH the PyTorch code in the test and the recorded baseline speedup.
+8. If the error is "PERFORMANCE FAILURE", focus on autotune configs, memory patterns, vectorization, etc., until the JSON metrics line (`PERF_METRICS:{...}`) reports a speedup greater than the baseline.
+9. NEVER introduce memoization, global caches, or data_ptr-based shortcuts; every call must execute the full Triton computation from scratch or it will be treated as cheating.
+10. Remember: cheating with PyTorch ops is forbidden; improvements must come from genuine Triton optimizations.
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
 - DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation
@@ -52,6 +62,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
+- DO NOT add memoization/global caches or pointer-based reuse to bypass real computation on repeated calls; such shortcuts are disallowed.
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
