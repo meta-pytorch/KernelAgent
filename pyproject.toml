@@ -32,6 +32,7 @@ dependencies = [
     "jinja2",
     "python-dotenv",
     "gradio",
+    "requests",
     "pathlib2>=2.3.0; python_version < '3.4'",
 ]
 
