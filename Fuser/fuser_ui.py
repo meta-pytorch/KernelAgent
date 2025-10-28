@@ -308,9 +308,21 @@ class FuserAgentUI:
 
     def __init__(self) -> None:
         load_dotenv()
-        self.problem_choices = _list_kernelbench_problems(
-            Path.cwd() / "KernelBench" / "KernelBench"
-        )
+        # Try common KernelBench locations and aggregate unique problems
+        repo_root = Path(__file__).resolve().parents[1]
+        candidate_roots = [
+            repo_root / "external" / "KernelBench" / "KernelBench",
+            Path.cwd() / "external" / "KernelBench" / "KernelBench",
+            Path.cwd() / "KernelBench" / "KernelBench",
+        ]
+        seen: set[str] = set()
+        collected: list[tuple[str, str]] = []
+        for base in candidate_roots:
+            for label, abspath in _list_kernelbench_problems(base):
+                if abspath not in seen:
+                    collected.append((label, abspath))
+                    seen.add(abspath)
+        self.problem_choices = collected
 
     # ---------- Subgraph helpers ----------
     def _format_fuser_subgraphs_markdown(self, items: list[dict]) -> str:

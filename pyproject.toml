@@ -29,6 +29,7 @@ classifiers = [
 
 dependencies = [
     "openai",
+    "anthropic",
     "jinja2",
     "python-dotenv",
     "gradio",

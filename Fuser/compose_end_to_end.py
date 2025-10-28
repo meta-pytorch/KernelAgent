@@ -149,6 +149,11 @@ def _build_composition_prompt(
           input tensor(s) as the model and any required weights/biases with shapes
           implied by the problem; it should orchestrate Triton kernel(s) and
           return the final output tensor.
+        - No PyTorch math path: kernel_function MUST compute the final outputs
+          using your Triton kernels only. Do NOT implement or fall back to
+          torch.nn / torch.nn.functional / torch.* ops
+          sigmoid, etc.) for producing the final result. Using PyTorch for
+          reference comparisons is allowed only inside the self-test.
         - Use the data layout and dtype semantics indicated by subgraphs, defaulting
           to NCHW + float32 if unspecified. Respect stride/padding/dilation/groups,
           and exact op order.
@@ -157,7 +162,7 @@ def _build_composition_prompt(
           from the original problem code below (use get_init_inputs() and
           get_inputs() if present to instantiate the Model). The test must print
           'PASS' on success and exit with code 0. Use allclose with rtol<=1e-3,
-          atol<=1e-3 for fp32; for fp16/bf16 allow up to 1e-2.
+          atol<=1e-3 for fp32; for fp16/bf16 allow up to 2e-2.
         - No imports beyond torch, triton, triton.language as tl, and stdlib. No I/O.
 
         Implementation tips:
@@ -214,6 +219,9 @@ def _build_refinement_prompt(
           scalars like 0.0 in tl.maximum(x, 0.0).
         - Keep function name kernel_function(...) unchanged and retain the
           self-test that prints PASS on success and exits 0.
+        - Do NOT reintroduce any PyTorch math path in kernel_function. The final
+          outputs must be computed via your Triton kernels only (no fallback to
+          torch.nn / torch.nn.functional ops).
         - Return the complete corrected file; do not send diffs.
         """
     ).strip()

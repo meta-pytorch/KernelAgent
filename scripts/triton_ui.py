@@ -28,6 +28,9 @@ from dotenv import load_dotenv
 
 from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.providers.models import AVAILABLE_MODELS
+from triton_kernel_agent.providers.openai_provider import OpenAIProvider
+from triton_kernel_agent.providers.anthropic_provider import AnthropicProvider
+from triton_kernel_agent.providers.relay_provider import RelayProvider
 
 
 KERNELBENCH_BASE_PATH = (
@@ -67,6 +70,18 @@ class TritonKernelUI:
         load_dotenv()
         self.agent = None
         self.last_result = None
+        # Build a mapping from model name -> provider class for quick lookup
+        self._model_to_provider = {cfg.name: cfg.provider_class for cfg in AVAILABLE_MODELS}
+
+    def _provider_env_var_for_model(self, model_name: str) -> str:
+        """Return the correct API key env var name for the selected model."""
+        provider_cls = self._model_to_provider.get(model_name)
+        if provider_cls is OpenAIProvider:
+            return "OPENAI_API_KEY"
+        if provider_cls is AnthropicProvider:
+            return "ANTHROPIC_API_KEY"
+        # Relay provider or unknown default to no key required
+        return ""
 
     def generate_kernel(
         self,
@@ -98,27 +113,45 @@ class TritonKernelUI:
             status = "❌ Please provide a problem description."
             return status, "", "", "", "", ""
 
-        # Check API key availability
+        # Determine provider-specific API key env var based on selected model
+        key_env_var = self._provider_env_var_for_model(model_name)
         api_key = user_api_key.strip() if user_api_key else None
-        env_api_key = os.getenv("OPENAI_API_KEY")
+        env_api_key = os.getenv(key_env_var) if key_env_var else ""
 
-        if not api_key and not env_api_key:
-            status = "❌ Please provide an OpenAI API key or set OPENAI_API_KEY environment variable."
+        # For providers that require a key, check availability
+        if key_env_var and not (api_key or env_api_key):
+            provider_label = (
+                "OpenAI" if key_env_var == "OPENAI_API_KEY" else "Anthropic"
+            )
+            status = (
+                f"❌ Please provide a {provider_label} API key or set {key_env_var} in your environment/.env."
+            )
             return status, "", "", "", "", ""
 
         try:
             # Create agent with selected model and reasoning effort
             start_time = time.time()
 
-            # Temporarily set API key if provided by user (without saving to environment)
+            # Temporarily set provider-specific API key if provided by user (session-only)
             original_env_key = None
-            if api_key:
-                original_env_key = os.environ.get("OPENAI_API_KEY")
-                os.environ["OPENAI_API_KEY"] = api_key
+            if api_key and key_env_var:
+                original_env_key = os.environ.get(key_env_var)
+                os.environ[key_env_var] = api_key
 
             agent = TritonKernelAgent(
                 model_name=model_name, high_reasoning_effort=high_reasoning_effort
             )
+
+            # If provider failed to initialize, return a clear error immediately
+            if not getattr(agent, "provider", None):
+                provider_label = (
+                    "OpenAI" if key_env_var == "OPENAI_API_KEY" else "Anthropic"
+                ) if key_env_var else "Relay"
+                details = getattr(agent, "_provider_error", "Provider unavailable")
+                status = (
+                    f"❌ Provider initialization failed for {provider_label}: {details}"
+                )
+                return status, "", "", "", "", ""
 
             # Use provided test code or let agent generate it
             test_input = test_code.strip() if test_code and test_code.strip() else None
@@ -176,13 +209,13 @@ class TritonKernelUI:
             return error_msg, "", "", "", "", ""
         finally:
             # Clean up: restore original API key environment variable
-            if api_key:
+            if api_key and key_env_var:
                 if original_env_key is not None:
-                    os.environ["OPENAI_API_KEY"] = original_env_key
+                    os.environ[key_env_var] = original_env_key
                 else:
                     # Remove the key if it wasn't set originally
-                    if "OPENAI_API_KEY" in os.environ:
-                        del os.environ["OPENAI_API_KEY"]
+                    if key_env_var in os.environ:
+                        del os.environ[key_env_var]
 
     def _format_logs(self, result: Dict[str, Any], generation_time: float) -> str:
         """Format generation logs for display"""
@@ -297,20 +330,39 @@ cd my_kernel_session && python test.py
 def _create_app() -> gr.Blocks:
     """Create and return the Gradio interface (without launching)"""
     ui = TritonKernelUI()
+    # Load KernelBench problems
     kernelbench_problem_map = load_kernelbench_problem_map()
-    kernelbench_problem_choices = list(kernelbench_problem_map.keys())
-    default_problem_choice = (
-        kernelbench_problem_choices[0] if kernelbench_problem_choices else None
-    )
-    kernelbench_problem_cache: Dict[str, str] = {}
+
+    # Add external problems (manual entries)
+    extra_problem_map: Dict[str, Path] = {}
+    try:
+        external_cf = Path("/home/leyuan/workplace/kernel_fuser/external/control_flow.py")
+        if external_cf.exists():
+            extra_problem_map["External · control_flow"] = external_cf
+        else:
+            # Fallback to repo-relative external/control_flow.py
+            repo_rel_cf = (
+                Path(__file__).resolve().parent.parent / "external" / "control_flow.py"
+            )
+            if repo_rel_cf.exists():
+                extra_problem_map["External · control_flow"] = repo_rel_cf
+    except Exception:
+        # Ignore issues probing external paths
+        pass
+
+    # Combine: external first, then KernelBench
+    combined_problem_map: Dict[str, Path] = {**extra_problem_map, **kernelbench_problem_map}
+    problem_choices = list(combined_problem_map.keys())
+    default_problem_choice = problem_choices[0] if problem_choices else None
+    problem_cache: Dict[str, str] = {}
 
     if default_problem_choice:
         try:
-            kernelbench_problem_cache[default_problem_choice] = kernelbench_problem_map[
+            problem_cache[default_problem_choice] = combined_problem_map[
                 default_problem_choice
             ].read_text(encoding="utf-8")
         except OSError:
-            kernelbench_problem_cache[default_problem_choice] = ""
+            problem_cache[default_problem_choice] = ""
 
     # Create Gradio interface
     with gr.Blocks(
@@ -339,11 +391,13 @@ def _create_app() -> gr.Blocks:
 
                 # API Key input (optional, not saved)
                 api_key_input = gr.Textbox(
-                    label="🔑 OpenAI API Key (Optional)",
-                    placeholder="sk-... (leave empty to use environment variable)",
+                    label="🔑 LLM API Key (Optional)",
+                    placeholder="Paste your API key here, or set it in .env",
                     type="password",
                     interactive=True,
-                    info="⚠️ Not saved - only used for this session",
+                    info=(
+                        "⚠️ Not saved — session-only. Will use the correct env var based on the selected model."
+                    ),
                 )
 
                 CLAUDE_SONNET_4_5_MODEL_NAME = "claude-sonnet-4-5-20250929"
@@ -370,17 +424,19 @@ def _create_app() -> gr.Blocks:
                     interactive=True,
                 )
 
-                gr.Markdown("## 🧩 KernelBench Problem")
+                gr.Markdown("## 🧩 Problem Library")
 
                 problem_dropdown = gr.Dropdown(
-                    choices=kernelbench_problem_choices,
-                    label="KernelBench problem selection",
+                    choices=problem_choices,
+                    label="Problem selection",
                     value=default_problem_choice,
-                    interactive=bool(kernelbench_problem_choices),
+                    interactive=bool(problem_choices),
                     info=(
-                        "Select a KernelBench Level 1 or Level 2 problem to auto-fill the descriptor below."
-                        if kernelbench_problem_choices
-                        else f"No KernelBench problems found at {KERNELBENCH_BASE_PATH}"
+                        "Select a KernelBench problem or an External problem to auto-fill the descriptor below."
+                        if problem_choices
+                        else (
+                            f"No KernelBench problems found at {KERNELBENCH_BASE_PATH} and no external problems detected"
+                        )
                     ),
                     allow_custom_value=False,
                 )
@@ -391,8 +447,8 @@ def _create_app() -> gr.Blocks:
                     placeholder="Select a KernelBench problem above or paste your own problem descriptor...",
                     lines=10,
                     max_lines=20,
-                    value=kernelbench_problem_cache.get(default_problem_choice, ""),
-                    info="Editing this field overrides the selected KernelBench descriptor.",
+                    value=problem_cache.get(default_problem_choice, ""),
+                    info="Editing this field overrides the selected descriptor.",
                 )
 
                 # Optional test code
@@ -461,21 +517,21 @@ def _create_app() -> gr.Blocks:
             if not selection:
                 return gr.update()
 
-            path = kernelbench_problem_map.get(selection)
+            path = combined_problem_map.get(selection)
             if not path or not path.exists():
                 return gr.update(
                     value=f"# Unable to load descriptor for {selection}\n\nMissing file: {path}"
                 )
 
-            if selection not in kernelbench_problem_cache:
+            if selection not in problem_cache:
                 try:
-                    kernelbench_problem_cache[selection] = path.read_text(
+                    problem_cache[selection] = path.read_text(
                         encoding="utf-8"
                     )
                 except OSError as exc:
                     return gr.update(value=f"# Error loading {selection}\n\n{exc}")
 
-            return gr.update(value=kernelbench_problem_cache[selection])
+            return gr.update(value=problem_cache[selection])
 
         def generate_with_status(
             problem_desc, test_code, model_name, high_reasoning_effort, user_api_key
@@ -494,7 +550,43 @@ def _create_app() -> gr.Blocks:
                 return error_msg, "", "", "", "", ""
 
         # Wire up events
-        if kernelbench_problem_choices:
+        # Update API key input hint based on selected model/provider
+        def update_api_key_hint(selected_model_name: Optional[str]):
+            if not selected_model_name:
+                return gr.update()
+            key_env_var = ui._provider_env_var_for_model(selected_model_name)
+            if key_env_var == "OPENAI_API_KEY":
+                return gr.update(
+                    label="🔑 OpenAI API Key (Optional)",
+                    placeholder="sk-... (or set OPENAI_API_KEY)",
+                    info=(
+                        "Used only for this session. You can also set OPENAI_API_KEY in your environment or .env."
+                    ),
+                )
+            elif key_env_var == "ANTHROPIC_API_KEY":
+                return gr.update(
+                    label="🔑 Anthropic API Key (Optional)",
+                    placeholder="sk-ant-... (or set ANTHROPIC_API_KEY)",
+                    info=(
+                        "Used only for this session. You can also set ANTHROPIC_API_KEY in your environment or .env."
+                    ),
+                )
+            else:
+                return gr.update(
+                    label="🔑 API Key (Not required for Relay)",
+                    placeholder="Relay provider uses local server; no key required.",
+                    info=(
+                        "Relay models use a local relay server. Ensure it’s running; no API key needed."
+                    ),
+                )
+
+        model_dropdown.change(
+            fn=update_api_key_hint,
+            inputs=model_dropdown,
+            outputs=api_key_input,
+        )
+
+        if problem_choices:
             problem_dropdown.change(
                 fn=update_problem_descriptor,
                 inputs=problem_dropdown,
@@ -541,9 +633,9 @@ def _create_app() -> gr.Blocks:
         - Check the logs for detailed generation information
         
         **🔧 Configuration:** 
-        - Provide your OpenAI API key above (not saved, session-only)
-        - Or set OPENAI_API_KEY environment variable in `.env` file
-        - API key is only used for this session and automatically cleared
+        - Provide your OpenAI or Anthropic API key above (not saved; session-only)
+        - Or set the appropriate env var in `.env` (OPENAI_API_KEY or ANTHROPIC_API_KEY)
+        - The key is only used for this session and automatically cleared
         """
         )
 

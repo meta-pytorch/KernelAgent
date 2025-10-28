@@ -48,17 +48,30 @@ TRITON KERNEL PROGRAMMING GUIDELINES:
    c) Matrix multiplication: Use tl.dot with accumulator
    d) Softmax: Online normalization for numerical stability
    e) Fused operations: Combine multiple ops in single kernel and document the fused stages for reviewers
-
-7. RUNTIME CONSTRAINTS:
-   - Keep Python wrappers lightweight—they may validate arguments, allocate tensors, and configure launches but must not perform real math.
-   - Absolutely avoid `torch.nn` modules, `torch.nn.functional` (including aliases such as `F.*`), or other PyTorch compute helpers inside the execution path; all computation belongs in Triton kernels.
-   - Acceptable PyTorch usage is limited to tensor allocation (`torch.empty_like`, etc.), dtype/device assertions, and result packaging after Triton finishes.
+     - BN inside fused conv:
+      - bn_mean_f32 = tl.load(mean_ptr + oc).to(tl.float32)
+      - bn_var_f32 = tl.load(var_ptr + oc).to(tl.float32)
+      - gamma_f32 = tl.load(gamma_ptr + oc).to(tl.float32)
+      - beta_f32  = tl.load(beta_ptr + oc).to(tl.float32)
+      - acc_f32   = acc.to(tl.float32)  # conv accumulator
+      - x_norm    = (acc_f32 - bn_mean_f32) / tl.sqrt(bn_var_f32 + eps)
+      - out_f32   = x_norm * gamma_f32 + beta_f32
+      - tl.store(out_ptr + out_idx, out_f32.to(out_ptr.dtype.element_ty), mask=mask)
+     - LayerNorm per row:
+      - mean_f32 = tl.zeros((), dtype=tl.float32)
+      - var_f32  = tl.zeros((), dtype=tl.float32)
+      - accumulate in fp32; use tl.sqrt(var_f32 + eps); cast on store.
 
 6. ADVANCED FEATURES:
    - Persistent kernels for better SM utilization
    - Tensor Memory Accelerator (TMA) descriptors
    - Multi-stage pipelines with num_stages
    - Warp specialization with warp_specialize parameter
+
+7. RUNTIME CONSTRAINTS:
+   - Wrappers: validate/allocate/launch only; no math.
+   - All compute runs in Triton kernels; no torch.nn, torch.nn.functional (e.g., F.*), or other PyTorch compute ops.
+   - PyTorch allowed only for allocation, dtype/device checks, and packaging results.
 
 Here are real examples of Triton kernels:
 

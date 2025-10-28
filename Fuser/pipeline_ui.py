@@ -406,6 +406,15 @@ class PipelineUI:
         self.problem_choices = _list_kernelbench_problems(
             Path.cwd() / "external" / "KernelBench" / "KernelBench"
         )
+        control_flow_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "external"
+            / "control_flow.py"
+        )
+        if control_flow_path.exists():
+            self.problem_choices.append(
+                ("external/control_flow.py", str(control_flow_path))
+            )
 
     def run(
         self,
