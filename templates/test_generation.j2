@@ -18,111 +18,146 @@ Generate a comprehensive test for a Triton kernel based on the following problem
 
 {{ problem_description }}
 
+{% if additional_code -%}
+REFERENCE IMPLEMENTATION (for numerical intuition only – PyTorch remains the baseline target):
+```python
+{{ additional_code }}
+```
+{%- endif %}
+
+{% if baseline_code -%}
+BASELINE TRITON IMPLEMENTATION PROVIDED BY USER (context only, do NOT execute unless explicitly required):
+```python
+{{ baseline_code }}
+```
+{%- endif %}
+
+{% if baseline_metrics %}
+BASELINE PERFORMANCE TARGET:
+- Baseline Triton speedup vs PyTorch: {{ "%.4f"|format(baseline_metrics.speedup) }}x (Triton {{ "%.4f"|format(baseline_metrics.triton_ms) }} ms vs PyTorch {{ "%.4f"|format(baseline_metrics.pytorch_ms) }} ms)
+- Any candidate that does not EXCEED this speedup must fail, even if it beats PyTorch.
+{% else %}
+BASELINE PERFORMANCE TARGET:
+- The agent will inject a `BASELINE_METRICS` dictionary at runtime containing `{"triton_ms": ..., "pytorch_ms": ..., "speedup": ...}` for the user-supplied baseline.
+- Your test must fail whenever the candidate speedup is missing OR not strictly greater than `BASELINE_METRICS["speedup"]`.
+{% endif %}
+
 {% if provided_test_code -%}
 REFERENCE TEST CODE:
-The user has provided the following test code as reference. Use this to understand the expected behavior and requirements, but generate a new test that follows our standardized format:
-
 ```python
 {{ provided_test_code }}
 ```
-
-IMPORTANT: Do NOT copy the reference test directly. Instead, analyze it to understand:
-- What inputs and outputs are expected
-- What the kernel should compute
-- Any specific requirements or edge cases
-- Expected data types and shapes
-- If original problem description specifies FP32, convert to BF16 problems, never use FP32
-- Do NOT compute expected result in FP32 then cast back to BF16
-- Use BF16 for all if the problem description specifies FP32, including computation
-- The highest precision for the test is BF16, again DO NOT use FP32 for reference computation
-- Add a summary comment of the original problem description in the test code
-
-Then generate a new test following our format requirements below.
+Analyze the reference but generate a new test that follows the updated structure below.
 {%- endif %}
 
-REQUIREMENTS:
-1. The test must be a complete, valid Python file
-2. Import the kernel function using: from kernel import kernel_function
-3. Call kernel_function as a NORMAL PYTHON FUNCTION (no grid configuration or kernel launch)
-4. The kernel.py file will handle all Triton-specific launch logic internally
-5. Create appropriate test data (e.g., torch tensors on CUDA device)
-6. Pass test data to kernel_function as regular function arguments
-7. Verify the results are correct
-8. Return True if test passes, False if it fails
-9. Exit with code 0 on success, 1 on failure
-10. Include error messages and debugging output
-11. Handle exceptions gracefully
-12. If the problem description includes a Reference PyTorch implementation (a function named `reference` or equivalent), CALL IT to compute the expected output
+GENERAL REQUIREMENTS:
+1. Produce a single, self-contained Python file.
+2. Import the kernel via `from kernel import kernel_function` – never launch Triton manually.
+3. Use EXACT shapes/dtypes stated in the problem. If FP32 is requested, use BF16 everywhere instead (inputs, expected results, computations).
+4. Include rich debugging on mismatches (shapes, dtype, values, diffs, tolerances).
+5. Wrap comparisons in try/except so failures produce actionable logs.
+6. Exit with status 0 on success, 1 on failure.
+7. Prevent time-doping: during benchmarking, clone or regenerate every input inside the timed functions so each call uses fresh storage; this defeats pointer-based caching tricks.
 
-CRITICAL TEST DATA REQUIREMENTS:
-- If the problem description specifies exact shapes, dtypes, or tensor dimensions, use EXACTLY those specifications
-- Do NOT create multiple test cases with different shapes/dtypes if specific ones are mentioned
-- Use the exact shapes and dtypes mentioned in the problem description
-- Use non-zero random tensors (e.g., torch.randn/torch.rand) for inputs; never feed all-zero data unless the problem explicitly requires it, because zero inputs can hide missing computation.
-- Only create variations if the problem description is vague about the input specifications
-- If original problem description specifies FP32, convert to BF16 problems instead of FP32 problems
-- AVOID FP32 for inputs and outputs - use BF16 instead when users specify FP32 problems
+NUMERICAL REQUIREMENTS:
+- Default tolerances: `rtol=1e-3`, `atol=1e-3`; relax only with clear justification and comments.
+- Document any deviation from defaults.
 
-DEBUGGING REQUIREMENTS:
-- When numerical results are incorrect, print detailed debugging information including:
-  - Expected vs actual output values (or samples if large)
-  - Input tensor shapes, dtypes, and sample values
-  - Any intermediate results that can help identify the issue
-  - Use torch.allclose() with appropriate tolerances for floating point comparisons
-- Include try/except blocks around numerical comparisons to catch and debug assertion errors
+PERFORMANCE & METRICS REQUIREMENTS:
+- Benchmark both the Triton kernel and the PyTorch reference using `triton.testing.do_bench(fn, warmup=25, rep=100, return_mode="mean")`.
+- After benchmarking, emit **exactly one** structured metrics line: `print("PERF_METRICS:" + json.dumps({"triton_ms": triton_ms, "pytorch_ms": pytorch_ms, "speedup": speedup}))`.
+- Print a short human-readable summary as well, but the JSON line is mandatory.
+- Fail the test if:
+  * `speedup <= 1.0`, or
+  * Baseline metrics are present and `speedup <= BASELINE_METRICS["speedup"]`.
 
-NUMERICAL TOLERANCE REQUIREMENTS:
-- Use DEFAULT tolerances: rtol=1e-3, atol=1e-3 for torch.allclose()
-- Adjust tolerances ONLY if needed based on:
-  - Input data type (float16 may need looser tolerances like rtol=1e-2, atol=1e-2)
-  - Input value ranges (very large or very small values may need adjusted tolerances)
-  - Specific algorithm characteristics (iterative algorithms may accumulate more error)
-  - If accumulation dimension is very large, use much larger tolerances, like 1e-1
-- Always document in comments why non-default tolerances are used
+STRUCTURE TO FOLLOW:
 
-IMPORTANT: Do NOT use any Triton kernel launch syntax. Treat kernel_function as a regular Python function.
 
-The test file structure should be:
 ```python
+import json
 import torch
-# other imports as needed (but NOT triton - that's handled in kernel.py)
+import triton
+import triton.testing as tt
 
-# Comment for summary of original problem description
-def test_kernel():
-    """Test the kernel implementation."""
+BASELINE_METRICS = None  # Agent will replace with dict when metrics are known.
+
+# Summary comment of the original problem
+def test_kernel() -> bool:
     try:
         from kernel import kernel_function
-        
-        # Create test data using EXACT specifications from problem description
-        # If problem specifies shape/dtype, use those exact values
-        # input_tensor = torch.randn(EXACT_SHAPE, dtype=EXACT_DTYPE, device='cuda')
-        
-        # Call kernel_function as a normal Python function
-        # result = kernel_function(input_tensor, other_args...)
-        
-        # Verify results with detailed debugging on failure
-        # Use default tolerances: rtol=1e-3, atol=1e-3
-        # Adjust only if needed based on dtype/range (document why)
-        #
-        # Examples of when to adjust tolerances:
-        # - For float16: rtol=1e-2, atol=1e-2  # Lower precision
-        # - For very large values (>1e6): rtol=1e-2, atol=1e-1  # Larger absolute errors expected
-        # - For iterative algorithms: rtol=1e-2, atol=1e-2  # Accumulation of errors
-        #
+    except Exception as exc:
+        print(f"Failed to import kernel_function: {exc}")
+        return False
+
+    try:
+        if not torch.cuda.is_available():
+            print("CUDA is not available. This test requires a CUDA-capable GPU.")
+            return False
+
+        current_dev = torch.cuda.current_device()
+        device = torch.device(f"cuda:{current_dev}")
+        torch.cuda.set_device(device)
+        torch.manual_seed(0)
+
+        # 1. PREPARE INPUTS EXACTLY AS SPECIFIED
+        # x = torch.randn(..., device=device, dtype=torch.bfloat16)
+        # ... additional tensors as needed ...
+
+        # 2. COMPUTE EXPECTED RESULT WITH PYTORCH
+        # expected = reference_impl(x, ...)
+
+        # 3. RUN KERNEL (HANDLE RETURN / OUT PARAMETER PATTERNS)
+        # result = kernel_function(x, ...)
+
+        # 4. VERIFY CORRECTNESS WITH DETAILED DEBUGGING
         # if not torch.allclose(result, expected, rtol=1e-3, atol=1e-3):
-        #     print(f"NUMERICAL MISMATCH:")
-        #     print(f"Input shape: {input_tensor.shape}, dtype: {input_tensor.dtype}")
-        #     print(f"Expected shape: {expected.shape}, dtype: {expected.dtype}")
-        #     print(f"Result shape: {result.shape}, dtype: {result.dtype}")
-        #     print(f"Expected (first few): {expected.flatten()[:10]}")
-        #     print(f"Got (first few): {result.flatten()[:10]}")
-        #     print(f"Max absolute difference: {torch.max(torch.abs(result - expected))}")
-        #     print(f"Relative error: {torch.max(torch.abs((result - expected) / (expected + 1e-8)))}")
+        #     print("NUMERICAL MISMATCH:")
+        #     ...
         #     return False
-        
-        return True  # if successful
-    except Exception as e:
-        print(f"Test failed: {e}")
+
+        # 5. BENCHMARK
+        def triton_run():
+            # Clone ALL inputs here so each call has fresh storage (prevents caching cheats).
+            return kernel_function(x.clone())  # replace with clones for every argument the kernel expects
+
+        def torch_run():
+            # Mirror the cloning pattern for the PyTorch reference to keep comparisons fair.
+            return torch.relu(x.clone())  # replace with correct PyTorch op and cloned inputs
+
+        _ = triton_run(); _ = torch_run(); torch.cuda.synchronize()
+        triton_ms = tt.do_bench(triton_run, warmup=25, rep=100, return_mode="mean")
+        pytorch_ms = tt.do_bench(torch_run, warmup=25, rep=100, return_mode="mean")
+        speedup = pytorch_ms / triton_ms if triton_ms > 0 else float("inf")
+
+        metrics = {
+            "triton_ms": float(triton_ms),
+            "pytorch_ms": float(pytorch_ms),
+            "speedup": float(speedup),
+        }
+        print("Performance Results:")
+        print(f"  Triton kernel: {triton_ms:.4f} ms")
+        print(f"  PyTorch native: {pytorch_ms:.4f} ms")
+        print(f"  Speedup: {speedup:.2f}x")
+        print("PERF_METRICS:" + json.dumps(metrics))
+
+        if speedup <= 1.0:
+            print("PERFORMANCE FAILURE: Triton kernel is not faster than PyTorch.")
+            return False
+
+        if BASELINE_METRICS is not None and speedup <= BASELINE_METRICS.get("speedup", float("inf")):
+            print(
+                "PERFORMANCE FAILURE: candidate speedup "
+                f"{speedup:.4f}x <= baseline {BASELINE_METRICS.get('speedup'):.4f}x"
+            )
+            return False
+
+        return True
+
+    except Exception as exc:
+        print(f"Test failed due to unexpected exception: {exc}")
+        import traceback
+        traceback.print_exc()
         return False
 
 if __name__ == "__main__":
@@ -131,4 +166,4 @@ if __name__ == "__main__":
     sys.exit(0 if success else 1)
 ```
 
-Generate a complete test implementation: 
+Generate the full complete test implementation  following the template above, adapting shapes, dtypes, and operations to the supplied problem (and any contextual code) while respecting all correctness and performance gates.

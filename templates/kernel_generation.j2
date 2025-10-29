@@ -18,6 +18,29 @@ limitations under the License.
 
 TASK: Generate a complete Python implementation of a Triton kernel based on the following test requirements.
 
+{% if additional_code -%}
+REFERENCE IMPLEMENTATION (understand the math, but do not copy PyTorch shortcuts):
+```python
+{{ additional_code }}
+```
+{%- endif %}
+
+{% if baseline_code -%}
+USER-PROVIDED BASELINE TRITON KERNEL (context for further optimization):
+```python
+{{ baseline_code }}
+```
+{%- endif %}
+
+{% if baseline_metrics %}
+BASELINE PERFORMANCE TARGET:
+- Baseline speedup vs PyTorch: {{ "%.4f"|format(baseline_metrics.speedup) }}x (Triton {{ "%.4f"|format(baseline_metrics.triton_ms) }} ms vs PyTorch {{ "%.4f"|format(baseline_metrics.pytorch_ms) }} ms)
+- Your kernel MUST exceed this speedup while also beating the PyTorch reference timed inside the test harness.
+{% else %}
+BASELINE PERFORMANCE TARGET:
+- The test harness will inject `BASELINE_METRICS["speedup"]` at runtime; your kernel must strictly beat that value in addition to PyTorch.
+{% endif %}
+
 TEST CODE:
 Analyze this test to understand what the kernel needs to implement:
 
@@ -53,11 +76,12 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
 - DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
+- DO NOT add memoization/global caches or reuse tricks that skip computation on subsequent calls; every invocation must execute the real Triton work.
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
 - Use tl.load() and tl.store() for memory access
-- Use tl.sum(), tl.max(), tl.min() etc. for reductions  
+- Use tl.sum(), tl.max(), tl.min() etc. for reductions
 - Use proper Triton indexing with tl.program_id(), tl.arange(), etc.
 - Implement the algorithm step-by-step in Triton operations, not PyTorch shortcuts
 
@@ -66,6 +90,10 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 7. Handle edge cases and boundary conditions properly
 8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
 9. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch operators in the execution path
+10. OPTIMIZE for PERFORMANCE - beat both the PyTorch operations in the test AND the baseline speedup target.
+11. Consider memory coalescing, cache usage, autotune configs, and parallelism for best performance.
+12. NEVER implement memoization, global caching, or reuse tricks (e.g., hashing tensor data_ptrs) to skip work; your kernel must recompute results on every call. Any attempt to short-circuit execution via cached outputs is treated as cheating and will fail the test harness.
+13. The test emits a structured JSON line (`PERF_METRICS:{...}`); ensure your kernel wrapper is compatible with that measurement (e.g., supports cloning inputs when mutated, exposes optional out buffers, etc.).
 
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python
@@ -80,14 +108,14 @@ def _actual_kernel(ptr_a, ptr_b, ptr_out, n_elements, BLOCK_SIZE: tl.constexpr):
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
-    
+
     # Load using Triton
     a = tl.load(ptr_a + offsets, mask=mask)
     b = tl.load(ptr_b + offsets, mask=mask)
-    
+
     # Compute using Triton operations (NOT torch.add!)
     result = a + b
-    
+
     # Store using Triton
     tl.store(ptr_out + offsets, result, mask=mask)
 
@@ -96,7 +124,7 @@ def kernel_function(tensor_a, tensor_b):
     # PyTorch operations allowed here for setup
     output = torch.empty_like(tensor_a)
     n_elements = tensor_a.numel()
-    
+
     # Calculate grid and launch Triton kernel
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)

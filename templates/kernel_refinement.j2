@@ -18,6 +18,29 @@ limitations under the License.
 
 TASK: Fix the following Triton kernel implementation based on the test results.
 
+{% if additional_code -%}
+REFERENCE IMPLEMENTATION (for correctness intuition only):
+```python
+{{ additional_code }}
+```
+{%- endif %}
+
+{% if baseline_code -%}
+BASELINE TRITON IMPLEMENTATION (CURRENT PERFORMANCE BAR):
+```python
+{{ baseline_code }}
+```
+{%- endif %}
+
+{% if baseline_metrics %}
+BASELINE PERFORMANCE TARGET:
+- Baseline speedup vs PyTorch: {{ "%.4f"|format(baseline_metrics.speedup) }}x (Triton {{ "%.4f"|format(baseline_metrics.triton_ms) }} ms vs PyTorch {{ "%.4f"|format(baseline_metrics.pytorch_ms) }} ms)
+- Your fix must exceed this speedup as well as the PyTorch baseline measured inside the test harness.
+{% else %}
+BASELINE PERFORMANCE TARGET:
+- The test harness will provide `BASELINE_METRICS["speedup"]` at runtime; ensure your kernel produces a strictly greater speedup in addition to beating PyTorch.
+{% endif %}
+
 TEST CODE:
 Analyze this test to understand what the kernel needs to implement:
 ```python
@@ -57,6 +80,11 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 6. Focus on fixing the specific error while maintaining correctness
 7. Prefer solutions that preserve or extend operation fusion; never intentionally unfuse a pipeline unless you document why it is impossible to keep it fused
 8. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch ops in the execution path
+9. OPTIMIZE for PERFORMANCE - your kernel must beat BOTH the PyTorch code in the test and the recorded baseline speedup.
+10. If the error is "PERFORMANCE FAILURE", focus on autotune configs, memory patterns, vectorization, etc., until the JSON metrics line (`PERF_METRICS:{...}`) reports a speedup greater than the baseline.
+11. NEVER introduce memoization, global caches, or data_ptr-based shortcuts; every call must execute the full Triton computation from scratch or it will be treated as cheating.
+12. Remember: cheating with PyTorch ops is forbidden; improvements must come from genuine Triton optimizations.
+
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
 - DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation
@@ -65,11 +93,12 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
 - DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
+- DO NOT add memoization/global caches or pointer-based reuse to bypass real computation on repeated calls; such shortcuts are disallowed.
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
 - Use tl.load() and tl.store() for memory access
-- Use tl.sum(), tl.max(), tl.min() etc. for reductions  
+- Use tl.sum(), tl.max(), tl.min() etc. for reductions
 - Use proper Triton indexing with tl.program_id(), tl.arange(), etc.
 - Implement the algorithm step-by-step in Triton operations, not PyTorch shortcuts
 - The kernel should be decorated with @triton.jit, not the wrapper function
