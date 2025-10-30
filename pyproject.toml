@@ -43,7 +43,8 @@ dev = [
 ]
 
 [project.scripts]
-kernel-agent = "triton_ui:main"
+kernel-agent = "scripts.triton_ui:main"
+list-models = "scripts.list_models:main"
 
 [project.urls]
 "Homepage" = "https://github.com/pytorch-labs/KernelAgent"
@@ -51,7 +52,7 @@ kernel-agent = "triton_ui:main"
 "Repository" = "https://github.com/pytorch-labs/KernelAgent"
 
 [tool.setuptools.packages.find]
-include = ["triton_kernel_agent*"]
+include = ["triton_kernel_agent*", "scripts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
