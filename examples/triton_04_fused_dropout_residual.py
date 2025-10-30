@@ -34,29 +34,25 @@ def main():
         description="Generate fused dropout-residual kernel with optional additional code."
     )
     parser.add_argument(
-        "--working-dir", type=str, help="Directory containing additional_code.py"
+        "--additional-code", type=str, help="Path to additional reference code file"
     )
     args = parser.parse_args()
 
     additional_code = None
-    if args.working_dir:
-        if not os.path.exists(args.working_dir):
-            print(f"Error: Directory {args.working_dir} does not exist")
+    if args.additional_code:
+        if not os.path.exists(args.additional_code):
+            print(f"Error: File {args.additional_code} does not exist")
             sys.exit(1)
 
-        additional_code_path = os.path.join(args.working_dir, "additional_code.py")
-        if os.path.exists(additional_code_path):
-            try:
-                with open(additional_code_path, "r") as f:
-                    additional_code = f.read()
-                print(f"Loaded additional code from: {additional_code_path}")
-            except Exception as e:
-                print(f"Warning: Failed to read additional code: {e}")
-                print("Continuing without additional code...")
-        else:
-            print(f"No additional_code.py found in {args.working_dir}")
+        try:
+            with open(args.additional_code, "r") as f:
+                additional_code = f.read()
+            print(f"Loaded additional code from: {args.additional_code}")
+        except Exception as e:
+            print(f"Error: Failed to read additional code: {e}")
+            sys.exit(1)
     else:
-        print("No --working-dir provided, skipping additional_code")
+        print("No --additional-code provided, skipping additional_code")
 
     # Load environment
     load_dotenv()
