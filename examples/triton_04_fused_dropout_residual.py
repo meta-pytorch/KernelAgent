@@ -26,38 +26,37 @@ from dotenv import load_dotenv
 from triton_kernel_agent import TritonKernelAgent
 
 
-def get_parser():
-    parser = argparse.ArgumentParser(
-        description="Retrieve the directory for additional_code."
-    )
-    parser.add_argument("--working-dir", type=str)
-    return parser
-
-
-def get_inputs():
-    base_dir = get_parser().parse_args().working_dir
-    additional_code = None
-
-    if base_dir is None:
-        print("No --working-dir provided, skipping additional_code")
-        return None
-
-    print(f"Working directory: {base_dir}")
-    assert os.path.exists(base_dir), f"Directory {base_dir} does not exist"
-
-    path = os.path.join(base_dir, "additional_code.py")
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            additional_code = f.read()
-
-    return additional_code
-
-
 def main():
     """Generate and test a fused dropout-residual kernel."""
 
-    # Get inputs
-    additional_code = get_inputs()
+    # Load additional code if working directory provided
+    parser = argparse.ArgumentParser(
+        description="Generate fused dropout-residual kernel with optional additional code."
+    )
+    parser.add_argument(
+        "--working-dir", type=str, help="Directory containing additional_code.py"
+    )
+    args = parser.parse_args()
+
+    additional_code = None
+    if args.working_dir:
+        if not os.path.exists(args.working_dir):
+            print(f"Error: Directory {args.working_dir} does not exist")
+            sys.exit(1)
+
+        additional_code_path = os.path.join(args.working_dir, "additional_code.py")
+        if os.path.exists(additional_code_path):
+            try:
+                with open(additional_code_path, "r") as f:
+                    additional_code = f.read()
+                print(f"Loaded additional code from: {additional_code_path}")
+            except Exception as e:
+                print(f"Warning: Failed to read additional code: {e}")
+                print("Continuing without additional code...")
+        else:
+            print(f"No additional_code.py found in {args.working_dir}")
+    else:
+        print("No --working-dir provided, skipping additional_code")
 
     # Load environment
     load_dotenv()
@@ -122,8 +121,6 @@ Input tensors shape: batch size: 32, sequence length: 2048, hidden dimension: 40
         print("\nRunning the generated test...")
 
         # Read the generated test code
-        import os
-
         test_file = os.path.join(result["session_dir"], "test.py")
         with open(test_file, "r") as f:
             test_code = f.read()
@@ -160,8 +157,6 @@ Input tensors shape: batch size: 32, sequence length: 2048, hidden dimension: 40
 
         # Still show what was attempted
         if result.get("session_dir"):
-            import os
-
             problem_file = os.path.join(result["session_dir"], "problem.txt")
             if os.path.exists(problem_file):
                 with open(problem_file, "r") as f:
