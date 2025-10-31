@@ -15,19 +15,25 @@
 
 """Gradio UI for Triton Kernel Agent."""
 
-import argparse
+import logging
 import os
 import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+import hydra
+from omegaconf import DictConfig
+
 import gradio as gr
 from dotenv import load_dotenv
 
-
 from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.providers.models import AVAILABLE_MODELS
+
+# Turn off noisy HTTPX logging
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.WARNING)
 
 
 KERNELBENCH_BASE_PATH = (
@@ -550,14 +556,15 @@ def _create_app() -> gr.Blocks:
     return app
 
 
-def main():
+@hydra.main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/ui"),
+    config_name="basic_config",
+)
+def main(cfg: DictConfig):
     """Create and launch the Gradio interface"""
-    parser = argparse.ArgumentParser(description="Triton Kernel Agent UI")
-    parser.add_argument("--port", type=int, default=8085, help="Port to run the UI on")
-    parser.add_argument("--host", type=str, default="localhost", help="Host to bind to")
-    args = parser.parse_args()
-
     app = _create_app()
+    port = cfg.port
 
     # Check if running on Meta devserver (has Meta SSL certs)
     meta_keyfile = "/var/facebook/x509_identities/server.pem"
@@ -569,14 +576,14 @@ def main():
     if is_meta_devserver:
         # Meta devserver configuration
         server_name = os.uname()[1]  # Get devserver hostname
-        print(f"🌐 Opening on Meta devserver: https://{server_name}:{args.port}/")
+        print(f"🌐 Opening on Meta devserver: https://{server_name}:{port}/")
         print("💡 Make sure you're connected to Meta VPN to access the demo")
 
         app.launch(
             share=False,
             show_error=True,
             server_name=server_name,
-            server_port=args.port,
+            server_port=port,
             ssl_keyfile=meta_keyfile,
             ssl_certfile=meta_keyfile,
             ssl_verify=False,
@@ -585,16 +592,18 @@ def main():
         )
     else:
         # Local development configuration
-        print(f"🌐 Opening locally: http://{args.host}:{args.port}/")
+        host = cfg.host
+
+        print(f"🌐 Opening locally: http://{host}:{port}/")
         print(
-            f"🚨 IMPORTANT: If Chrome shows blank page, try Safari: open -a Safari http://{args.host}:{args.port}/ 🚨"
+            f"🚨 IMPORTANT: If Chrome shows blank page, try Safari: open -a Safari http://{host}:{port}/ 🚨"
         )
 
         app.launch(
             share=False,
             show_error=True,
-            server_name=args.host,
-            server_port=args.port,
+            server_name=host,
+            server_port=port,
             show_api=False,
             inbrowser=True,  # Auto-open browser for local development
         )

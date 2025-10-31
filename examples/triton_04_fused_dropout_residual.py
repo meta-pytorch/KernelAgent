@@ -15,39 +15,37 @@
 
 """Fused dropout-residual operation example for KernelAgent."""
 
-import argparse
 import sys
 import time
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import hydra
+from pathlib import Path
+
 from dotenv import load_dotenv
+from omegaconf import DictConfig
 from triton_kernel_agent import TritonKernelAgent
 
 
-def main():
+@hydra.main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/kernel_agent"),
+    config_name="additional_code_config",
+)
+def main(cfg: DictConfig):
     """Generate and test a fused dropout-residual kernel."""
-
-    # Load additional code if working directory provided
-    parser = argparse.ArgumentParser(
-        description="Generate fused dropout-residual kernel with optional additional code."
-    )
-    parser.add_argument(
-        "--additional-code", type=str, help="Path to additional reference code file"
-    )
-    args = parser.parse_args()
-
     additional_code = None
-    if args.additional_code:
-        if not os.path.exists(args.additional_code):
-            print(f"Error: File {args.additional_code} does not exist")
+    if additional_code_path := cfg.additional_code:
+        if not os.path.exists(additional_code_path):
+            print(f"Error: File {additional_code_path} does not exist")
             sys.exit(1)
 
         try:
-            with open(args.additional_code, "r") as f:
+            with open(additional_code_path, "r") as f:
                 additional_code = f.read()
-            print(f"Loaded additional code from: {args.additional_code}")
+            print(f"Loaded additional code from: {additional_code_path}")
         except Exception as e:
             print(f"Error: Failed to read additional code: {e}")
             sys.exit(1)

@@ -28,6 +28,8 @@ classifiers = [
 ]
 
 dependencies = [
+    "hydra-core",
+    "omegaconf",
     "openai",
     "jinja2",
     "python-dotenv",
