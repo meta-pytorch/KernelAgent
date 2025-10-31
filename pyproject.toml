@@ -34,6 +34,9 @@ dependencies = [
     "gradio",
     "requests",
     "pathlib2>=2.3.0; python_version < '3.4'",
+    "langchain_community==0.3.27",
+    "langchain_openai==0.3.28",
+    "numpy==2.2.6",
 ]
 
 [project.optional-dependencies]
