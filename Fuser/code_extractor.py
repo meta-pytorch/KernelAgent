@@ -3,7 +3,6 @@ import ast
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 _CODE_BLOCK_RE = re.compile(
     r"^```[ \t]*(\w+)?[ \t]*\n([\s\S]*?)^```[ \t]*$",

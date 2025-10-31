@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Extract unique fusable subgraphs and their exact shape signatures from a fused
 model produced by Fuser. Produces a JSON array written to the run directory.
@@ -19,13 +17,15 @@ Usage:
 This script loads .env in CWD (same behavior as Fuser CLI) for OPENAI_API_KEY.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
 import sys
 import tarfile
 from pathlib import Path
-from typing import Any, Optional, Tuple, List, Dict
+from typing import Any, Optional, Tuple, Dict
 
 from .cli import _load_dotenv_if_present  # reuse env loader
 from .config import OrchestratorConfig, new_run_id

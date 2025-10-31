@@ -288,7 +288,7 @@ def run_pipeline_ui(
                 details_md = "\n".join(details_lines)
 
                 run_info_lines = ["## 📁 Run Information"]
-                run_info_lines.append(f"- Route: Fuser")
+                run_info_lines.append("- Route: Fuser")
                 run_info_lines.append(f"- Run directory: `{run_dir}`")
                 run_info_lines.append(f"- Compose rounds: {comp.get('rounds', 1)}")
                 if verify:
@@ -377,7 +377,7 @@ def run_pipeline_ui(
             run_info_md=run_info_md,
             zip_path=zip_path,
         )
-    except Exception as exc:
+    except Exception:
         elapsed = time.time() - start_time
         tb = traceback.format_exc()
         status = "❌ **Error during pipeline run**"

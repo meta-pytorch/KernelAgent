@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Dispatch subgraphs (from subgraphs.json) to KernelAgent to generate Triton kernels.
 
@@ -21,6 +19,8 @@ Requirements:
 - jinja2 installed (used by KernelAgent prompt manager)
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 try:
     from triton_kernel_agent import TritonKernelAgent
-except Exception as exc:  # pragma: no cover - import-time dependency
+except Exception:  # pragma: no cover - import-time dependency
     TritonKernelAgent = None  # type: ignore
 
 
@@ -249,7 +249,6 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
     inputs_multi = item.get("inputs")
     weights_fused = item.get("weights_fused")
     weights_orig = item.get("weights_original")
-    where = item.get("where")
     source = item.get("source") or {}
 
     ref_code, _ = _build_reference_code(item)

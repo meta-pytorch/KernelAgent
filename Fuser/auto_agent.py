@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Auto-routing agent that decides whether to:
   - Solve a KernelBench-style problem directly with KernelAgent
@@ -30,11 +28,12 @@ CLI:
 Returns a JSON summary to stdout and writes the generated kernel path (if available).
 """
 
+from __future__ import annotations
+
 import argparse
 import ast
 import json
 import sys
-import os
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path

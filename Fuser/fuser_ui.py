@@ -379,7 +379,7 @@ class FuserAgentUI:
                 if isinstance(wf, dict):
                     for k, v in wf.items():
                         parts.append(f"{k} {v}")
-                lines.append(f"  - weights_fused: " + ", ".join(parts))
+                lines.append("  - weights_fused: " + ", ".join(parts))
         return "\n".join(lines) if lines else "*No subgraphs.*"
 
     def _compute_fuser_subgraphs(
@@ -419,7 +419,9 @@ class FuserAgentUI:
         For now, handle common patterns (conv/conv_transpose + activation) + GroupNorm.
         """
         try:
-            import importlib.util, json, torch, torch.nn.functional as F  # noqa: F401
+            import importlib.util
+            import torch
+            import torch.nn.functional as F  # noqa: F401
             import torch._dynamo as dynamo
             from torch.profiler import profile, ProfilerActivity
 

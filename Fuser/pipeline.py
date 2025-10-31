@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 One-shot pipeline runner: extract → dispatch → compose.
 
@@ -19,6 +17,8 @@ Usage:
 Writes all artifacts into the run directory created by the extractor. The final
 composed kernel and composition summary live under <run_dir>/compose_out.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -180,7 +180,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return int(e.code) if e.code is not None else 1
         except Exception:
             try:
-                print(str(e), file=sys.stderr)
+                import sys as _sys
+                print(str(e), file=_sys.stderr)
             except Exception:
                 pass
             return 1

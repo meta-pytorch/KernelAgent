@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Compose an end-to-end Triton kernel for the original KernelBench problem by
 leveraging:
@@ -23,8 +21,10 @@ Notes:
 - Requires an available LLM provider configured via KernelAgent providers
   (e.g., OPENAI_API_KEY for OpenAI models).
 - Writes composed Python file to <out-dir>/composed_kernel.py and a
-  composition summary JSON.
+composition summary JSON.
 """
+
+from __future__ import annotations
 
 import argparse
 import json

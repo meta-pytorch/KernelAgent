@@ -4,7 +4,6 @@ import multiprocessing as mp
 import signal
 import threading
 import tarfile
-import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -13,7 +12,7 @@ from typing import Any, Dict
 
 from .config import OrchestratorConfig, WorkerConfig, ResultSummary
 from .logging_utils import setup_file_logger, redact
-from .worker import Worker
+# Note: Worker is imported inside the child process entry to avoid heavy imports here.
 
 
 # Spawn-safe worker entrypoint (top-level function; pass plain payload)
