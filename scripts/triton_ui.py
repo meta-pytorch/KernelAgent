@@ -294,10 +294,8 @@ cd my_kernel_session && python test.py
         return download_info
 
 
-def main():
-    """Create and launch the Gradio interface"""
-
-    # Create UI instance
+def _create_app() -> gr.Blocks:
+    """Create and return the Gradio interface (without launching)"""
     ui = TritonKernelUI()
     kernelbench_problem_map = load_kernelbench_problem_map()
     kernelbench_problem_choices = list(kernelbench_problem_map.keys())
@@ -552,13 +550,14 @@ def main():
     return app
 
 
-if __name__ == "__main__":
+def main():
+    """Create and launch the Gradio interface"""
     parser = argparse.ArgumentParser(description="Triton Kernel Agent UI")
     parser.add_argument("--port", type=int, default=8085, help="Port to run the UI on")
     parser.add_argument("--host", type=str, default="localhost", help="Host to bind to")
     args = parser.parse_args()
 
-    app = main()
+    app = _create_app()
 
     # Check if running on Meta devserver (has Meta SSL certs)
     meta_keyfile = "/var/facebook/x509_identities/server.pem"
@@ -599,3 +598,7 @@ if __name__ == "__main__":
             show_api=False,
             inbrowser=True,  # Auto-open browser for local development
         )
+
+
+if __name__ == "__main__":
+    main()
