@@ -141,9 +141,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="End-to-end pipeline: extract → dispatch → compose"
     )
-    p.add_argument(
-        "--problem", required=True, help="Absolute path to the problem file"
-    )
+    p.add_argument("--problem", required=True, help="Absolute path to the problem file")
     p.add_argument("--extract-model", default="gpt-5")
     p.add_argument(
         "--dispatch-model",
@@ -194,6 +192,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         except Exception:
             try:
                 import sys as _sys
+
                 print(str(e), file=_sys.stderr)
             except Exception:
                 pass

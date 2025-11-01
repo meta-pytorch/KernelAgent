@@ -70,7 +70,9 @@ class TritonKernelUI:
         self.agent = None
         self.last_result = None
         # Build a mapping from model name -> provider class for quick lookup
-        self._model_to_provider = {cfg.name: cfg.provider_class for cfg in AVAILABLE_MODELS}
+        self._model_to_provider = {
+            cfg.name: cfg.provider_class for cfg in AVAILABLE_MODELS
+        }
 
     def _provider_env_var_for_model(self, model_name: str) -> str:
         """Return the correct API key env var name for the selected model."""
@@ -122,9 +124,7 @@ class TritonKernelUI:
             provider_label = (
                 "OpenAI" if key_env_var == "OPENAI_API_KEY" else "Anthropic"
             )
-            status = (
-                f"❌ Please provide a {provider_label} API key or set {key_env_var} in your environment/.env."
-            )
+            status = f"❌ Please provide a {provider_label} API key or set {key_env_var} in your environment/.env."
             return status, "", "", "", "", ""
 
         try:
@@ -144,8 +144,10 @@ class TritonKernelUI:
             # If provider failed to initialize, return a clear error immediately
             if not getattr(agent, "provider", None):
                 provider_label = (
-                    "OpenAI" if key_env_var == "OPENAI_API_KEY" else "Anthropic"
-                ) if key_env_var else "Relay"
+                    ("OpenAI" if key_env_var == "OPENAI_API_KEY" else "Anthropic")
+                    if key_env_var
+                    else "Relay"
+                )
                 details = getattr(agent, "_provider_error", "Provider unavailable")
                 status = (
                     f"❌ Provider initialization failed for {provider_label}: {details}"
@@ -335,7 +337,9 @@ def _create_app() -> gr.Blocks:
     # Add external problems (manual entries)
     extra_problem_map: Dict[str, Path] = {}
     try:
-        external_cf = Path("/home/leyuan/workplace/kernel_fuser/external/control_flow.py")
+        external_cf = Path(
+            "/home/leyuan/workplace/kernel_fuser/external/control_flow.py"
+        )
         if external_cf.exists():
             extra_problem_map["External · control_flow"] = external_cf
         else:
@@ -350,7 +354,10 @@ def _create_app() -> gr.Blocks:
         pass
 
     # Combine: external first, then KernelBench
-    combined_problem_map: Dict[str, Path] = {**extra_problem_map, **kernelbench_problem_map}
+    combined_problem_map: Dict[str, Path] = {
+        **extra_problem_map,
+        **kernelbench_problem_map,
+    }
     problem_choices = list(combined_problem_map.keys())
     default_problem_choice = problem_choices[0] if problem_choices else None
     problem_cache: Dict[str, str] = {}
@@ -524,9 +531,7 @@ def _create_app() -> gr.Blocks:
 
             if selection not in problem_cache:
                 try:
-                    problem_cache[selection] = path.read_text(
-                        encoding="utf-8"
-                    )
+                    problem_cache[selection] = path.read_text(encoding="utf-8")
                 except OSError as exc:
                     return gr.update(value=f"# Error loading {selection}\n\n{exc}")
 

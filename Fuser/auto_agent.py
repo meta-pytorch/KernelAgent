@@ -461,16 +461,23 @@ class AutoKernelRouter:
         route_cfg: Dict[str, Any] = {}
 
         if isinstance(cached, dict):
-            strategy = str(cached.get("route_strategy") or cached.get("route") or "") or None
+            strategy = (
+                str(cached.get("route_strategy") or cached.get("route") or "") or None
+            )
             route_conf = cached.get("confidence")
             route_cfg = cached.get("config") or {}
 
         if strategy is None:
             # Try LLM-driven decision
             try:
-                strategy, route_conf, info = self._llm_decide_route(problem_path, code, cx)
+                strategy, route_conf, info = self._llm_decide_route(
+                    problem_path, code, cx
+                )
                 # Persist in cache for future runs
-                cache[code_hash] = info.get("parsed") or {"route_strategy": strategy, "confidence": route_conf}
+                cache[code_hash] = info.get("parsed") or {
+                    "route_strategy": strategy,
+                    "confidence": route_conf,
+                }
                 _save_router_cache(cache)
             except Exception:
                 # No provider or failure; fall back later
@@ -491,7 +498,9 @@ class AutoKernelRouter:
         if isinstance(route_cfg, dict):
             # KernelAgent tuning
             self.ka_max_rounds = int(route_cfg.get("ka_max_rounds", self.ka_max_rounds))
-            self.ka_num_workers = int(route_cfg.get("ka_num_workers", self.ka_num_workers))
+            self.ka_num_workers = int(
+                route_cfg.get("ka_num_workers", self.ka_num_workers)
+            )
             if route_cfg.get("ka_model"):
                 self.ka_model = str(route_cfg.get("ka_model"))
             # Fuser tuning
@@ -639,7 +648,9 @@ class AutoKernelRouter:
             data = json.loads(cand)
             # Back-compat: accept 'route' or 'route_strategy'
             route = (
-                str(data.get("route_strategy") or data.get("route") or "").strip().lower()
+                str(data.get("route_strategy") or data.get("route") or "")
+                .strip()
+                .lower()
                 or None
             )
             c = data.get("confidence")
@@ -660,9 +671,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
     )
-    p.add_argument(
-        "--problem", required=True, help="Absolute path to the problem file"
-    )
+    p.add_argument("--problem", required=True, help="Absolute path to the problem file")
     p.add_argument(
         "--ka-model",
         default=None,
