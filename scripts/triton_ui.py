@@ -30,7 +30,6 @@ from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.providers.models import AVAILABLE_MODELS
 from triton_kernel_agent.providers.openai_provider import OpenAIProvider
 from triton_kernel_agent.providers.anthropic_provider import AnthropicProvider
-from triton_kernel_agent.providers.relay_provider import RelayProvider
 
 
 KERNELBENCH_BASE_PATH = (
