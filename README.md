@@ -5,7 +5,7 @@ KernelAgent turns PyTorch programs into verified Triton kernels. It was designed
 - Static problem analysis to decide whether to run a lightweight path or a full pipeline
 - LLM‑assisted refactoring that isolates fusable subgraphs
 - Parallel Triton kernel generation with strict runtime verification
-- End‑to‑end composition that rebuilds the original forward pass using the synthesized kernels only
+- End‑to‑end composition that rebuilds the original forward pass using only the synthesized kernels
 
 Blog post: [TBD] • Additional docs: coming soon
 
@@ -15,9 +15,9 @@ Blog post: [TBD] • Additional docs: coming soon
 KernelBench problem / PyTorch module
         │
         ▼
-┌─ AutoRouter ─────────────────────────────────────────┐
-│ Analyze AST + heuristics, choose direct run or Fuser │
-└──────────────────────────────────────────────────────┘
+┌─ AutoRouter ─────────────────────────────────────────────────────┐
+│ Analyze AST + heuristics, choose direct run or Fuser (complex)   │
+└──────────────────────────────────────────────────────────────────┘
         │ (direct)                             │ (complex)
         │                                      ▼
         │                           ┌─ Fuser Orchestrator ──┐
@@ -31,9 +31,9 @@ KernelBench problem / PyTorch module
         │                           └──────────────────────────┘
         │                                      │
         ▼                                      ▼
-┌───────────────┐                    ┌─ Dispatcher ─────────────────────┐
-│ KernelAgent   │◄── problem spec ───│ Spawn TritonKernelAgent workers  │
-│ multi-worker  │                    │ Generate + verify kernels        │
+┌───────────────┐                    ┌─ Dispatcher ──────────────────────┐
+│ KernelAgent   │◄── problem spec ───│ Spawn TritonKernelAgent workers   │
+│ multi-worker  │                    │ Generate + verify kernels         │
 └─────┬─────────┘                    └────────────┬──────────────────────┘
       │                                           ▼
       │                                ┌─ Composer ───────────────────────┐
@@ -63,6 +63,9 @@ cd KernelAgent
 python -m venv .venv && source .venv/bin/activate  # choose your own env manager
 pip install -e .[dev]    # project + tooling deps
 pip install triton       # not part of extras; install the version you need
+
+# (optional) Install KernelBench for problem examples
+git clone https://github.com/ScalingIntelligence/KernelBench.git
 ```
 
 ### Configure credentials
@@ -99,7 +102,8 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
     --dispatch-model o4-mini \
     --dispatch-jobs auto \
     --compose-model o4-mini \
-    --workers 4 --max-iters 5 \
+    --workers 4 \
+    --max-iters 5 \
     --verify
   ```
   `dispatch-jobs auto` matches the number of discovered subgraphs; artifacts are placed under `.fuse/<run_id>/`.
@@ -121,7 +125,7 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
   ```
 
 - **UIs** — interactive runs with Gradio frontends:
-  - Triton KernelAgent UI: `python triton_ui.py`
+  - Triton KernelAgent UI: `kernel-agent` or `python scripts/triton_ui.py`
   - Fuser orchestration UI: `python -m Fuser.fuser_ui`
   - Full pipeline UI: `python -m Fuser.pipeline_ui`
 
