@@ -44,19 +44,13 @@ import torch.nn as nn
 class Model(nn.Module):
 def __init__(self, in_features, out_features):
         super(Model, self).__init__()
-        self.weight = nn.Parameter(torch.randn(in_features, out_features))
+        self.weight = nn.Parameter(torch.randn(in_features, out_features, dtype=torch.bfloat16))
 
     def forward(self, x):
         # Perform matmul and apply sigmoid activation
-        # Convert to BF16 for computation
-        x_bf16 = x.to(torch.bfloat16)
-        weight_bf16 = self.weight.to(torch.bfloat16)
-
-        # Matmul + fused sigmoid
-        output = torch.matmul(x_bf16, weight_bf16)
+        output = torch.matmul(x, self.weight)
         output = torch.sigmoid(output)
-
-        return output.to(x.dtype)  # Convert back to original dtype
+        return output
 
 # Define input dimensions and parameters
 batch_size = 1024
@@ -64,7 +58,7 @@ in_features = 4096
 out_features = 2058
 
 def get_inputs():
-    return [torch.randn(batch_size, in_features)]
+    return [torch.randn(batch_size, in_features, dtype=torch.bfloat16)]
 
 def get_init_inputs():
     return [in_features, out_features]
