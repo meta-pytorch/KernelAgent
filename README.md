@@ -11,36 +11,7 @@ Blog post: [TBD] • Additional docs: coming soon
 
 ## Pipeline Overview
 
-```
-KernelBench problem / PyTorch module
-        │
-        ▼
-┌─ AutoRouter ─────────────────────────────────────────────────────┐
-│ Analyze AST + heuristics, choose direct run or Fuser (complex)   │
-└──────────────────────────────────────────────────────────────────┘
-        │ (direct)                             │ (complex)
-        │                                      ▼
-        │                           ┌─ Fuser Orchestrator ──┐
-        │                           │ refactor & execute    │
-        │                           │ fused PyTorch module  │
-        │                           └───────────────────────┘
-        │                                      │
-        │                           ┌─ Subgraph Extractor ─────┐
-        │                           │ LLM emits shapes + ops   │
-        │                           │ → `subgraphs.json`       │
-        │                           └──────────────────────────┘
-        │                                      │
-        ▼                                      ▼
-┌───────────────┐                    ┌─ Dispatcher ──────────────────────┐
-│ KernelAgent   │◄── problem spec ───│ Spawn TritonKernelAgent workers   │
-│ multi-worker  │                    │ Generate + verify kernels         │
-└─────┬─────────┘                    └────────────┬──────────────────────┘
-      │                                           ▼
-      │                                ┌─ Composer ───────────────────────┐
-      │                                │ Merge kernels into final Triton  │
-      ▼                                │ program + self-test (`PASS`)     │
- Verified Triton kernel(s)             └──────────────────────────────────┘
-```
+![](./assets/kernelagent2.excalidraw.svg)
 
 Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, including the fused PyTorch code, `subgraphs.json`, individual KernelAgent sessions, and the final `compose_out/composed_kernel.py`.
 
@@ -55,6 +26,7 @@ Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, includi
   - Anthropic (`ANTHROPIC_API_KEY`; default fallback model is `claude-sonnet-4-20250514` when `OPENAI_MODEL` is unset)
   - Any OpenAI‑compatible relay endpoint (`LLM_RELAY_URL`, optional `LLM_RELAY_API_KEY`; see `triton_kernel_agent/providers/relay_provider.py`)
 - Gradio (UI dependencies; installed as part of the core package)
+- PyTorch (https://pytorch.org/get-started/locally/)
 
 ### Installation
 ```bash
@@ -77,6 +49,7 @@ OPENAI_MODEL=gpt-5            # override default fallback (claude-sonnet-4-20250
 NUM_KERNEL_SEEDS=4            # parallel workers per kernel
 MAX_REFINEMENT_ROUNDS=10      # retry budget per worker
 LOG_LEVEL=INFO
+
 # Optional relay configuration for self-hosted gateways
 # LLM_RELAY_URL=http://127.0.0.1:11434
 # LLM_RELAY_API_KEY=your-relay-token
