@@ -232,7 +232,14 @@ def analyze_problem_code(code: str) -> Complexity:
             self.generic_visit(node)
 
         def visit_Call(self, node: ast.Call) -> Any:
-            nonlocal has_attention_like, has_conv_transpose, has_group_norm, has_conv, pool_ops, act_ops, chain_len_estimate
+            nonlocal \
+                has_attention_like, \
+                has_conv_transpose, \
+                has_group_norm, \
+                has_conv, \
+                pool_ops, \
+                act_ops, \
+                chain_len_estimate
             try:
                 name = _dotted_name(node.func).lower()
             except Exception:
