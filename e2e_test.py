@@ -17,6 +17,7 @@
 
 import sys
 import time
+
 from dotenv import load_dotenv
 from triton_kernel_agent import TritonKernelAgent
 
@@ -42,29 +43,32 @@ import torch
 import torch.nn as nn
 
 class Model(nn.Module):
-
-
-    def __init__(self, dim):
-
+    def __init__(self, in_features, out_features):
         super(Model, self).__init__()
-        self.dim = dim
+        self.weight = nn.Parameter(torch.randn(in_features, out_features))
 
     def forward(self, x):
+        # Perform matmul and apply sigmoid activation
+        # Convert to BF16 for computation
+        x_bf16 = x.to(torch.bfloat16)
+        weight_bf16 = self.weight.to(torch.bfloat16)
 
-        return torch.cumsum(x, dim=self.dim)
+        # Matmul + fused sigmoid
+        output = torch.matmul(x_bf16, weight_bf16)
+        output = torch.sigmoid(output)
+
+        return output.to(x.dtype)  # Convert back to original dtype
 
 # Define input dimensions and parameters
 batch_size = 128
-input_shape = (4000,)  # Example shape (arbitrary)
-dim = 1
+in_features = 4000
+out_features = 2048
 
 def get_inputs():
-
-    return [torch.randn(batch_size, *input_shape)]
+    return [torch.randn(batch_size, in_features)]
 
 def get_init_inputs():
-
-    return [dim]
+    return [in_features, out_features]
     """
 
     # Let the agent generate the test code
