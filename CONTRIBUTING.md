@@ -115,7 +115,7 @@ By contributing to KernelAgent, you agree that your contributions will be
 licensed under the `LICENSE` file in the root of this repository.
 
 ## Notes for Kernel/Template Contributions
-- Changes to Jinja2 templates in `triton_kernel_agent/templates/` should be validated with an
+- Changes to Jinja2 templates in [`triton_kernel_agent/templates/`](https://github.com/meta-pytorch/KernelAgent/tree/main/triton_kernel_agent/templates) should be validated with an
   end‑to‑end run (see e2e section) since they affect generation behavior.
 - For GPU kernels or performance‑sensitive code, include a short note about
   observed correctness and performance if available.
