@@ -45,18 +45,19 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import sys
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from dotenv import load_dotenv
+from Fuser.pipeline import run_pipeline
 
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.providers.models import get_model_provider
-from Fuser.pipeline import run_pipeline
 
 
 # ------------------------
@@ -231,14 +232,7 @@ def analyze_problem_code(code: str) -> Complexity:
             self.generic_visit(node)
 
         def visit_Call(self, node: ast.Call) -> Any:
-            nonlocal \
-                has_attention_like, \
-                has_conv_transpose, \
-                has_group_norm, \
-                has_conv, \
-                pool_ops, \
-                act_ops, \
-                chain_len_estimate
+            nonlocal has_attention_like, has_conv_transpose, has_group_norm, has_conv, pool_ops, act_ops, chain_len_estimate
             try:
                 name = _dotted_name(node.func).lower()
             except Exception:
@@ -668,6 +662,9 @@ class AutoKernelRouter:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    # Load environment variables from .env file
+    load_dotenv()
+
     p = argparse.ArgumentParser(
         description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
     )
