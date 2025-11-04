@@ -411,9 +411,6 @@ def run_pipeline_ui(
 class PipelineUI:
     def __init__(self) -> None:
         load_dotenv()
-        # self.problem_choices = _list_kernelbench_problems(
-        #     Path.cwd() / "external" / "KernelBench" / "KernelBench",
-        # )
         candidate_roots = [
             Path.cwd() / "external" / "KernelBench" / "KernelBench",
             Path.cwd() / "KernelBench" / "KernelBench",

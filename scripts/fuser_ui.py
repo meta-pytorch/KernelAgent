@@ -330,7 +330,6 @@ class FuserAgentUI:
         seen: set[str] = set()
         collected: list[tuple[str, str]] = []
         for base in candidate_roots:
-            print(base, file=sys.stderr)
             for label, abspath in _list_kernelbench_problems(base):
                 if abspath not in seen:
                     collected.append((label, abspath))
