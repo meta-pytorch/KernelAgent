@@ -38,19 +38,17 @@ try:
 except Exception:  # pragma: no cover
     extract_subgraphs_to_json = None  # type: ignore
 
+# TODO: Validate whether this is needed
 # Support both package and script execution contexts
 if __package__ is None or __package__ == "":
     PACKAGE_ROOT = Path(__file__).resolve().parent
     REPO_ROOT = PACKAGE_ROOT.parent
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from Fuser.config import OrchestratorConfig, new_run_id
-    from Fuser.orchestrator import Orchestrator
-    from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
-else:
-    from .config import OrchestratorConfig, new_run_id
-    from .orchestrator import Orchestrator
-    from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
+
+from Fuser.config import OrchestratorConfig, new_run_id
+from Fuser.orchestrator import Orchestrator
+from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 
 
 @dataclass
@@ -327,10 +325,12 @@ class FuserAgentUI:
             repo_root / "external" / "KernelBench" / "KernelBench",
             Path.cwd() / "external" / "KernelBench" / "KernelBench",
             Path.cwd() / "KernelBench" / "KernelBench",
+            Path.cwd().parent / "KernelBench" / "KernelBench",
         ]
         seen: set[str] = set()
         collected: list[tuple[str, str]] = []
         for base in candidate_roots:
+            print(base, file=sys.stderr)
             for label, abspath in _list_kernelbench_problems(base):
                 if abspath not in seen:
                     collected.append((label, abspath))

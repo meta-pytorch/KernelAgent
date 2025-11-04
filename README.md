@@ -122,8 +122,8 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 
 - **UIs** — interactive runs with Gradio frontends:
   - Triton KernelAgent UI: `python triton_ui.py`
-  - Fuser orchestration UI: `python -m Fuser.fuser_ui`
-  - Full pipeline UI: `python -m Fuser.pipeline_ui`
+  - Fuser orchestration UI: `fuser-ui` or `python scripts/fuser_ui`
+  - Full pipeline UI: `pipeline-ui` or `python scripts/pipeline_ui`
 
 ## Component Details
 

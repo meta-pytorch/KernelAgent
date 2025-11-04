@@ -29,22 +29,17 @@ from typing import List, Optional, Tuple
 import gradio as gr
 from dotenv import load_dotenv
 
-try:
-    # Support both package and script execution contexts (match Fuser/fuser_ui.py pattern)
-    if __package__ is None or __package__ == "":
-        PACKAGE_ROOT = Path(__file__).resolve().parent
-        REPO_ROOT = PACKAGE_ROOT.parent
-        if str(REPO_ROOT) not in sys.path:
-            sys.path.insert(0, str(REPO_ROOT))
-        from Fuser.pipeline import run_pipeline
-        from Fuser.auto_agent import AutoKernelRouter
-        from Fuser.code_extractor import extract_single_python_file
-    else:
-        from .pipeline import run_pipeline
-        from .auto_agent import AutoKernelRouter
-        from .code_extractor import extract_single_python_file
-except Exception:
-    raise
+# TODO: Validate whether this is needed
+# Support both package and script execution contexts (match Fuser/fuser_ui.py pattern)
+if __package__ is None or __package__ == "":
+    PACKAGE_ROOT = Path(__file__).resolve().parent
+    REPO_ROOT = PACKAGE_ROOT.parent
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+from Fuser.pipeline import run_pipeline
+from Fuser.auto_agent import AutoKernelRouter
+from Fuser.code_extractor import extract_single_python_file
 from triton_kernel_agent.providers.models import (
     get_model_provider,
     MODEL_NAME_TO_CONFIG,
@@ -416,9 +411,24 @@ def run_pipeline_ui(
 class PipelineUI:
     def __init__(self) -> None:
         load_dotenv()
-        self.problem_choices = _list_kernelbench_problems(
-            Path.cwd() / "external" / "KernelBench" / "KernelBench"
-        )
+        # self.problem_choices = _list_kernelbench_problems(
+        #     Path.cwd() / "external" / "KernelBench" / "KernelBench",
+        # )
+        candidate_roots = [
+            Path.cwd() / "external" / "KernelBench" / "KernelBench",
+            Path.cwd() / "KernelBench" / "KernelBench",
+            Path.cwd().parent / "KernelBench" / "KernelBench",
+        ]
+        seen: set[str] = set()
+        collected: list[tuple[str, str]] = []
+        for base in candidate_roots:
+            print(base, file=sys.stderr)
+            for label, abspath in _list_kernelbench_problems(base):
+                if abspath not in seen:
+                    collected.append((label, abspath))
+                    seen.add(abspath)
+        self.problem_choices = collected
+
         control_flow_path = (
             Path(__file__).resolve().parent.parent.parent
             / "external"

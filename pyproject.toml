@@ -43,8 +43,10 @@ dev = [
 ]
 
 [project.scripts]
+fuser-ui = "scripts.fuser_ui:main"
 kernel-agent = "scripts.triton_ui:main"
 list-models = "scripts.list_models:main"
+pipeline-ui = "scripts.pipeline_ui:main"
 
 [project.urls]
 "Homepage" = "https://github.com/pytorch-labs/KernelAgent"
