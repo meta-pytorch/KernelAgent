@@ -29,14 +29,6 @@ from typing import List, Optional, Tuple
 import gradio as gr
 from dotenv import load_dotenv
 
-# TODO: Validate whether this is needed
-# Support both package and script execution contexts (match Fuser/fuser_ui.py pattern)
-if __package__ is None or __package__ == "":
-    PACKAGE_ROOT = Path(__file__).resolve().parent
-    REPO_ROOT = PACKAGE_ROOT.parent
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-
 from Fuser.pipeline import run_pipeline
 from Fuser.auto_agent import AutoKernelRouter
 from Fuser.code_extractor import extract_single_python_file

@@ -38,14 +38,6 @@ try:
 except Exception:  # pragma: no cover
     extract_subgraphs_to_json = None  # type: ignore
 
-# TODO: Validate whether this is needed
-# Support both package and script execution contexts
-if __package__ is None or __package__ == "":
-    PACKAGE_ROOT = Path(__file__).resolve().parent
-    REPO_ROOT = PACKAGE_ROOT.parent
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-
 from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
