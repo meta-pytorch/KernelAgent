@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import ast
 import os
-import sys
 import tarfile
 import time
 import traceback
