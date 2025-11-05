@@ -42,29 +42,26 @@ import torch
 import torch.nn as nn
 
 class Model(nn.Module):
-
-
-    def __init__(self, dim):
-
+def __init__(self, in_features, out_features):
         super(Model, self).__init__()
-        self.dim = dim
+        self.weight = nn.Parameter(torch.randn(in_features, out_features, dtype=torch.bfloat16))
 
     def forward(self, x):
-
-        return torch.cumsum(x, dim=self.dim)
+        # Perform matmul and apply sigmoid activation
+        output = torch.matmul(x, self.weight)
+        output = torch.sigmoid(output)
+        return output
 
 # Define input dimensions and parameters
-batch_size = 128
-input_shape = (4000,)  # Example shape (arbitrary)
-dim = 1
+batch_size = 1024
+in_features = 4096
+out_features = 2058
 
 def get_inputs():
-
-    return [torch.randn(batch_size, *input_shape)]
+    return [torch.randn(batch_size, in_features, dtype=torch.bfloat16)]
 
 def get_init_inputs():
-
-    return [dim]
+    return [in_features, out_features]
     """
 
     # Let the agent generate the test code

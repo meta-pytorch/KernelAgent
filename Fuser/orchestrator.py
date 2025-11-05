@@ -13,19 +13,23 @@
 # limitations under the License.
 
 from __future__ import annotations
+
 import json
 import multiprocessing as mp
 import signal
-import threading
 import tarfile
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from queue import Empty
 from typing import Any, Dict
 
-from .config import OrchestratorConfig, WorkerConfig, ResultSummary
-from .logging_utils import setup_file_logger, redact
+from dotenv import load_dotenv
+
+from .config import OrchestratorConfig, ResultSummary, WorkerConfig
+from .logging_utils import redact, setup_file_logger
+
 # Note: Worker is imported inside the child process entry to avoid heavy imports here.
 
 
@@ -38,8 +42,12 @@ def _worker_process_main(
     console_q: Any,
 ) -> None:
     from pathlib import Path as _P
+
     from .config import WorkerConfig as _WC
     from .worker import Worker as _Worker
+
+    # Load environment variables in worker process
+    load_dotenv()
 
     # Rehydrate dataclass (Path fields from str)
     wcfg = _WC(

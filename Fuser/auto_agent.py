@@ -45,18 +45,19 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import sys
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from dotenv import load_dotenv
+from Fuser.pipeline import run_pipeline
 
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.providers.models import get_model_provider
-from Fuser.pipeline import run_pipeline
 
 
 # ------------------------
@@ -696,6 +697,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
     args = p.parse_args(argv)
+
+    # Load environment variables from .env file
+    load_dotenv()
 
     problem_path = Path(args.problem).resolve()
     if not problem_path.is_file():
