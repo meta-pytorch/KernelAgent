@@ -7,7 +7,9 @@ KernelAgent turns PyTorch programs into verified Triton kernels. It was designed
 - Parallel Triton kernel generation with strict runtime verification
 - End‑to‑end composition that rebuilds the original forward pass using only the synthesized kernels
 
-Blog post: [TBD] • Additional docs: coming soon
+Blog post: [PyTorch KernelFalcon](https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/)
+
+Additional docs: coming soon
 
 ## Pipeline Overview
 
@@ -157,9 +159,9 @@ These artifacts are designed for reproducibility: you can re-run a single kernel
 
 ## Documentation & Community
 
-- Architecture and deep-dive docs: `docs/kernelfalcon_overview.html`, `docs/kernelfalcon_agents2_overview.html`, `docs/FuserAgent_sketch.html`, `docs/fuser_agent_compare.html`
+- Architecture and deep-dive docs: `Coming Soon`
 - Issues: https://github.com/pytorch-labs/KernelAgent/issues
-- Discussions & blog posts: [TBD]
+- Blog post: https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/
 
 ## License
 
