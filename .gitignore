@@ -117,6 +117,7 @@ triton_kernel_logs/
 *.log
 session_*/
 worker_*/
+.fuse/
 
 # Generated kernels
 kernel.py
@@ -139,6 +140,6 @@ CLAUDE.md
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
 # Local batch runner
 scripts/run_kernelbench_batch.py

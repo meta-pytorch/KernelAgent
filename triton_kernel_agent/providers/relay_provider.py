@@ -18,6 +18,7 @@ from typing import Dict, List
 
 import requests
 import logging
+import os
 
 from .base import BaseProvider, LLMResponse
 
@@ -34,7 +35,7 @@ class RelayProvider(BaseProvider):
     """
 
     def __init__(self):
-        self.server_url = "http://127.0.0.1:11434"
+        self.server_url = os.environ.get("LLM_RELAY_URL", "http://127.0.0.1:11434")
         self.is_available_flag = False
         super().__init__()
 
@@ -68,7 +69,7 @@ class RelayProvider(BaseProvider):
             self.server_url,
             json=request_data,
             headers={"Content-Type": "application/json"},
-            timeout=120.0,
+            timeout=int(os.environ.get("LLM_RELAY_TIMEOUT_S", 120)),
         )
 
         if response.status_code != 200:

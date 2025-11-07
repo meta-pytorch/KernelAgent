@@ -7,7 +7,9 @@ KernelAgent turns PyTorch programs into verified Triton kernels. It was designed
 - Parallel Triton kernel generation with strict runtime verification
 - End‑to‑end composition that rebuilds the original forward pass using only the synthesized kernels
 
-Blog post: [TBD] • Additional docs: coming soon
+Blog post: [PyTorch KernelFalcon](https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/)
+
+Additional docs: coming soon
 
 ## Pipeline Overview
 
@@ -18,42 +20,46 @@ Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, includi
 ## Quickstart
 
 ### Requirements
+- Python 3.8 – 3.12
 - Linux or macOS; CUDA‑capable GPU for Triton execution
-- Python 3.8–3.12
-- Triton (install separately: `pip install triton` or nightly from source)
-- At least one LLM provider:
-  - OpenAI (`OPENAI_API_KEY`, models like `o4-mini`, `gpt-5`)
-  - Anthropic (`ANTHROPIC_API_KEY`; default fallback model is `claude-sonnet-4-20250514` when `OPENAI_MODEL` is unset)
-  - Any OpenAI‑compatible relay endpoint (`LLM_RELAY_URL`, optional `LLM_RELAY_API_KEY`; see `triton_kernel_agent/providers/relay_provider.py`)
-- Gradio (UI dependencies; installed as part of the core package)
+- Triton (installed separately: `pip install triton` or nightly from source)
 - PyTorch (https://pytorch.org/get-started/locally/)
+- LLM provider ([OpenAI](https://openai.com/api/), [Anthropic](https://www.anthropic.com/), or a self-hosted relay)
 
-### Installation
+### Install
 ```bash
-git clone https://github.com/pytorch-labs/KernelAgent.git
-cd KernelAgent
-python -m venv .venv && source .venv/bin/activate  # choose your own env manager
-pip install -e .[dev]    # project + tooling deps
-pip install triton       # not part of extras; install the version you need
-
-# (optional) Install KernelBench for problem examples
-git clone https://github.com/ScalingIntelligence/KernelBench.git
+pip install -e .
 ```
 
-### Configure credentials
-You can export keys directly or use an `.env` file that the CLIs load automatically:
+#### (Optional) Install KernelBench for problem examples
+```bash
+git clone https://github.com/ScalingIntelligence/KernelBench.git
+```
+Note: By default, KernelAgent UI searches for KernelBench at the same level as `KernelAgent`. (i.e. `../KernelBench`)
+
+### Configure
+You can export keys directly or use an `.env` file that the CLIs load automatically.
 
 ```bash
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5            # override default fallback (claude-sonnet-4-20250514)
+OPENAI_MODEL=gpt-5            # default model for extraction
 NUM_KERNEL_SEEDS=4            # parallel workers per kernel
 MAX_REFINEMENT_ROUNDS=10      # retry budget per worker
-LOG_LEVEL=INFO
+LOG_LEVEL=INFO                # logging level
+```
 
-# Optional relay configuration for self-hosted gateways
-# LLM_RELAY_URL=http://127.0.0.1:11434
-# LLM_RELAY_API_KEY=your-relay-token
-# LLM_RELAY_TIMEOUT_S=120
+#### LLM Providers
+KernelAgent currently supports OpenAI and Anthropic out-of-the-box. You can also use a custom OpenAI endpoint.
+These can be configured in `.env` or via environment variables.
+```bash
+# OpenAI (models like `o4-mini`, `gpt-5`)
+OPENAI_API_KEY=sk-...
+
+# Anthropic (default; `claude-sonnet-4-20250514` is used when `OPENAI_MODEL` is unset)
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Relay configuration for self-hosted gateways
+LLM_RELAY_URL=http://127.0.0.1:11434
+LLM_RELAY_TIMEOUT_S=120
 ```
 
 More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
@@ -153,9 +159,9 @@ These artifacts are designed for reproducibility: you can re-run a single kernel
 
 ## Documentation & Community
 
-- Architecture and deep-dive docs: `docs/kernelfalcon_overview.html`, `docs/kernelfalcon_agents2_overview.html`, `docs/FuserAgent_sketch.html`, `docs/fuser_agent_compare.html`
+- Architecture and deep-dive docs: `Coming Soon`
 - Issues: https://github.com/pytorch-labs/KernelAgent/issues
-- Discussions & blog posts: [TBD]
+- Blog post: https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/
 
 ## License
 
