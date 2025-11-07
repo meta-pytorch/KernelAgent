@@ -110,9 +110,7 @@ def generate_kernels(
         try:
             # Create problem description for the operator
             folder_name = op_name_to_folder_name(op_name)
-            problem_description = _create_problem_description_from_op(
-                op, op_name, folder_name
-            )
+            problem_description = _create_problem_description_from_op(op, op_name)
 
             # Create test code from BackendBench tests if provided
             test_code = None
@@ -132,6 +130,18 @@ def generate_kernels(
 
             if result["success"]:
                 kernel_code = result["kernel_code"]
+
+                # Automatically fix function name to match BackendBench's expectations
+                # Replace generic function names with the required name
+                import re
+
+                expected_func_name = f"{folder_name}_kernel_impl"
+                kernel_code = re.sub(
+                    r"\bdef\s+(kernel_function)\s*\(",
+                    f"def {expected_func_name}(",
+                    kernel_code,
+                )
+                logger.debug(f"    Ensured function name is: {expected_func_name}")
 
                 # Create operator directory (e.g., generated_kernels/abs__default/)
                 folder_name = op_name_to_folder_name(op_name)
@@ -217,27 +227,19 @@ def evaluate_kernels(
     return result.returncode
 
 
-def _create_problem_description_from_op(op, op_name: str, folder_name: str) -> str:
+def _create_problem_description_from_op(op, op_name: str) -> str:
     """
     Create a problem description for KernelAgent based on the PyTorch operation.
 
     Args:
         op: PyTorch operation
         op_name: Operation name extracted from op
-        folder_name: Folder name for the operator (e.g., abs__default)
 
     Returns:
         Problem description string for KernelAgent
     """
     # Create a comprehensive problem description that KernelAgent can understand
     problem_description = f"""
-CRITICAL REQUIREMENT - FUNCTION NAMING:
-The main wrapper function MUST be named EXACTLY: {folder_name}_kernel_impl
-This is MANDATORY. Do NOT use 'kernel_function' or any other name.
-Example for this operator:
-def {folder_name}_kernel_impl(*args, **kwargs):
-    # Your triton kernel implementation
-
 Task: Implement a high-performance Triton kernel for the PyTorch operation: {op_name}
 
 Requirements:
