@@ -110,7 +110,9 @@ def generate_kernels(
         try:
             # Create problem description for the operator
             folder_name = op_name_to_folder_name(op_name)
-            problem_description = _create_problem_description_from_op(op, op_name)
+            problem_description = _create_problem_description_from_op(
+                op, op_name, folder_name
+            )
 
             # Create test code from BackendBench tests if provided
             test_code = None
@@ -215,25 +217,28 @@ def evaluate_kernels(
     return result.returncode
 
 
-def _create_problem_description_from_op(op, op_name: str) -> str:
+def _create_problem_description_from_op(op, op_name: str, folder_name: str) -> str:
     """
     Create a problem description for KernelAgent based on the PyTorch operation.
 
     Args:
         op: PyTorch operation
         op_name: Operation name extracted from op
+        folder_name: Folder name for the operator (e.g., abs__default)
 
     Returns:
         Problem description string for KernelAgent
     """
     # Create a comprehensive problem description that KernelAgent can understand
     problem_description = f"""
-Implement a high-performance Triton kernel for the PyTorch operation: {op_name}
+CRITICAL REQUIREMENT - FUNCTION NAMING:
+The main wrapper function MUST be named EXACTLY: {folder_name}_kernel_impl
+This is MANDATORY. Do NOT use 'kernel_function' or any other name.
+Example for this operator:
+def {folder_name}_kernel_impl(*args, **kwargs):
+    # Your triton kernel implementation
 
-Operation details:
-- PyTorch operation: {op}
-- Operation name: {op_name}
-- Framework target: OpenAI Triton
+Task: Implement a high-performance Triton kernel for the PyTorch operation: {op_name}
 
 Requirements:
 1. The kernel must be functionally equivalent to the PyTorch operation
@@ -242,12 +247,7 @@ Requirements:
 4. Optimize for GPU performance with proper memory coalescing
 5. Include proper boundary condition handling
 6. Follow Triton best practices for kernel design
-7. The main wrapper function MUST be named exactly: <operator_folder_name>_kernel_impl
-This is REQUIRED for the evaluation framework to load your kernel. Do NOT use generic names like 'kernel_function'.
-Function signature template:
-def <operator_folder_name>_kernel_impl(*args, **kwargs):
-    # Your implementation here
-    pass
+
 
 
 The generated kernel should:
