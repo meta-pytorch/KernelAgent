@@ -684,7 +684,7 @@ class AutoKernelRouter:
 
 
 @hydra.main(
-    version_base="1.3",
+    version_base=None,
     config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
     config_name="auto_agent",
 )
@@ -698,7 +698,7 @@ def main(cfg: DictConfig) -> int:
         return 2
 
     router = AutoKernelRouter(
-        ka_model=cfg.ka.model,
+        ka_model=cfg.ka.model_name,
         ka_num_workers=cfg.ka.num_workers,
         ka_max_rounds=cfg.ka.max_rounds,
         ka_high_reasoning=cfg.ka.high_reasoning,

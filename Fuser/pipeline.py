@@ -143,7 +143,7 @@ def run_pipeline(
 
 
 @hydra_main(
-    version_base="1.3",
+    version_base=None,
     config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
     config_name="pipeline",
 )

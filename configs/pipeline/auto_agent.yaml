@@ -8,7 +8,7 @@ problem: ???  # Required: absolute path to the problem file
 
 # KernelAgent settings
 ka:
-  model: null  # Optional; uses env default if omitted
+  model_name: null  # Optional; uses env default if omitted
   num_workers: 4
   max_rounds: 10
   high_reasoning: true
@@ -22,7 +22,8 @@ router:
 
 # Fuser pipeline settings are loaded from fuser_defaults via defaults
 # Override any specific settings here if needed:
-fuser: {}
+fuser:
+  dispatch_model: o4-mini
 
 # Fallback and routing settings
 routing:

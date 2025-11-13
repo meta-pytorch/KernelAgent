@@ -1,11 +1,16 @@
 # Configuration for e2e_test.py
 # End-to-end test harness for BF16 matmul+sigmoid kernel generation
+#
+# Note that the current config is meant to be a pass-through for .env
 
 # Number of parallel workers for verification
 num_workers: null
 
 # Maximum refinement rounds per worker
 max_rounds: null
+
+# Directory to write logs
+log_dir: null
 
 # OpenAI model to use for generation
 model_name: null

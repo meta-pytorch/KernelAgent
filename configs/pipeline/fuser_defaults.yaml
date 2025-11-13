@@ -5,7 +5,7 @@
 extract_model: gpt-5
 
 # Dispatch step settings (KernelAgent for subgraph kernelization)
-dispatch_model: null  # Optional; auto-selects gpt-5 for level2/3, else o4-mini
+dispatch_model: null
 dispatch_jobs: 2  # Max concurrent KernelAgent tasks; use 'auto' to match subgraph count
 
 # Composition step settings

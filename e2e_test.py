@@ -33,6 +33,7 @@ def main(cfg: DictConfig) -> None:
     agent = TritonKernelAgent(
         num_workers=cfg.num_workers,
         max_rounds=cfg.max_rounds,
+        log_dir=cfg.log_dir,
         model_name=cfg.model_name,
         high_reasoning_effort=cfg.high_reasoning_effort,
     )
