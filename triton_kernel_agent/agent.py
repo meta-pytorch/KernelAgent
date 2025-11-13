@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-from .providers import get_model_provider
+from .providers import get_model_provider, get_model_architecture
 
 
 class TritonKernelAgent:
@@ -177,7 +177,9 @@ class TritonKernelAgent:
         if self.high_reasoning_effort:
             kwargs["high_reasoning_effort"] = True
 
-        response = self.provider.get_response(self.model_name, messages, **kwargs)
+        # Get the actual model name to send to the provider API
+        actual_model = get_model_architecture(self.model_name)
+        response = self.provider.get_response(actual_model, messages, **kwargs)
         return response.content
 
     def _generate_test(

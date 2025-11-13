@@ -51,7 +51,10 @@ from dotenv import load_dotenv
 
 # Reuse KernelAgent provider stack for LLM calls
 try:
-    from triton_kernel_agent.providers.models import get_model_provider
+    from triton_kernel_agent.providers.models import (
+        get_model_provider,
+        get_model_architecture,
+    )
 except Exception:
     get_model_provider = None  # type: ignore
 
@@ -347,8 +350,9 @@ def compose(
             )
 
         (attempts_dir / f"attempt_{i}.prompt.txt").write_text(prompt, encoding="utf-8")
+        actual_model = get_model_architecture(model_name)
         response = provider.get_response(
-            model_name, [{"role": "user", "content": prompt}], max_tokens=24000
+            actual_model, [{"role": "user", "content": prompt}], max_tokens=24000
         )
         last_usage = response.usage
         raw_text = response.content or ""

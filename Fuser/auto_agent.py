@@ -57,7 +57,10 @@ from Fuser.pipeline import run_pipeline
 
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
-from triton_kernel_agent.providers.models import get_model_provider
+from triton_kernel_agent.providers.models import (
+    get_model_provider,
+    get_model_architecture,
+)
 
 
 # ------------------------
@@ -627,8 +630,9 @@ class AutoKernelRouter:
         }
         if self.router_high_reasoning:
             kwargs["high_reasoning_effort"] = True
+        actual_model = get_model_architecture(self.router_model)
         resp = provider.get_response(
-            self.router_model,
+            actual_model,
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             **kwargs,
         )

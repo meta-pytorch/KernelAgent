@@ -14,6 +14,7 @@
 
 """Model registry and configuration for KernelAgent."""
 
+from typing import Optional
 from dataclasses import dataclass
 from typing import Dict, Type
 
@@ -30,6 +31,9 @@ class ModelConfig:
     name: str
     provider_class: Type[BaseProvider]
     description: str = ""
+    # Model Identifier sent to the provider
+    # If not set, default to the `name` field
+    model_architecture: Optional[str] = None
 
 
 # Registry of all available models
@@ -39,11 +43,11 @@ AVAILABLE_MODELS = [
         provider_class=OpenAIProvider,
         description="OpenAI o4-mini - fast reasoning model",
     ),
-    # OpenAI GPT-5 Model (Only GPT-5)
+    # OpenAI GPT-5 Model
     ModelConfig(
         name="gpt-5",
         provider_class=OpenAIProvider,
-        description="GPT-5 flagship model (Released Aug 2025)",
+        description="[OpenAI] GPT-5 flagship model (Released Aug 2025)",
     ),
     # Anthropic Claude 4 Models (Latest)
     ModelConfig(
@@ -65,6 +69,13 @@ AVAILABLE_MODELS = [
         name="gcp-claude-4-sonnet",
         provider_class=RelayProvider,
         description="[Relay] Claude 4 Sonnet",
+    ),
+    # Relay GPT-5 Model
+    ModelConfig(
+        name="relay-gpt-5",
+        provider_class=RelayProvider,
+        description="[Relay] GPT-5 flagship model (Released Aug 2025)",
+        model_architecture="gpt-5",
     ),
 ]
 
@@ -122,3 +133,21 @@ def is_model_available(model_name: str) -> bool:
         return provider.is_available()
     except (ValueError, Exception):
         return False
+
+
+def get_model_architecture(model_name: str) -> str:
+    """
+    Get the model architecture to send to the provider API.
+
+    Args:
+        model_name: Display name of the model
+
+    Returns:
+        The actual model name to use in API calls
+    """
+    if model_name not in MODEL_NAME_TO_CONFIG:
+        raise ValueError(f"Matching model config for '{model_name}' not found.")
+
+    model_config = MODEL_NAME_TO_CONFIG[model_name]
+    # Return actual_model_name if set, otherwise use the display name
+    return model_config.model_architecture or model_config.name

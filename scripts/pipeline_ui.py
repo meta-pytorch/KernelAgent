@@ -34,6 +34,7 @@ from Fuser.auto_agent import AutoKernelRouter
 from Fuser.code_extractor import extract_single_python_file
 from triton_kernel_agent.providers.models import (
     get_model_provider,
+    get_model_architecture,
     MODEL_NAME_TO_CONFIG,
 )
 
@@ -133,8 +134,9 @@ def _maybe_synthesize_problem(desc: str, model_name: str) -> Path:
         f"Problem description:\n{txt}\n\n"
         "Return only the single Python file in a code fence."
     )
+    actual_model = get_model_architecture(model_name)
     resp = provider.get_response(
-        model_name, [{"role": "user", "content": prompt}], max_tokens=6000
+        actual_model, [{"role": "user", "content": prompt}], max_tokens=6000
     )
     code = extract_single_python_file(resp.content or "").code
     return _write_temp_problem(code)

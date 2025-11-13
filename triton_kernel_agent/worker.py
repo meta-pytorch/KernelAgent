@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from .prompt_manager import PromptManager
-from .providers import get_model_provider
+from .providers import get_model_provider, get_model_architecture
 
 
 DISALLOWED_TORCH_PATTERNS = [
@@ -268,7 +268,9 @@ class VerificationWorker:
         if self.high_reasoning_effort:
             kwargs["high_reasoning_effort"] = True
 
-        response = self.provider.get_response(self.openai_model, messages, **kwargs)
+        # Get the actual model to send to the provider API
+        actual_model = get_model_architecture(self.openai_model)
+        response = self.provider.get_response(actual_model, messages, **kwargs)
         return response.content
 
     def _refine_kernel(

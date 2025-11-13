@@ -17,7 +17,12 @@
 from .base import BaseProvider, LLMResponse
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
-from .models import get_model_provider, AVAILABLE_MODELS, is_model_available
+from .models import (
+    get_model_provider,
+    AVAILABLE_MODELS,
+    is_model_available,
+    get_model_architecture,
+)
 
 __all__ = [
     "BaseProvider",
@@ -27,4 +32,5 @@ __all__ = [
     "get_model_provider",
     "AVAILABLE_MODELS",
     "is_model_available",
+    "get_model_architecture",
 ]
