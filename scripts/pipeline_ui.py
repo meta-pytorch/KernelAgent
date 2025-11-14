@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-import argparse
+import logging
 import os
 import sys
 import time
@@ -25,6 +25,9 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+import hydra
+from omegaconf import DictConfig
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -36,6 +39,10 @@ from triton_kernel_agent.providers.models import (
     get_model_provider,
     MODEL_NAME_TO_CONFIG,
 )
+
+# Turn off noisy HTTPX logging
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.WARNING)
 
 
 def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
@@ -685,14 +692,17 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
     return app
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Pipeline UI")
-    parser.add_argument("--port", type=int, default=8087)
-    parser.add_argument("--host", type=str, default="localhost")
-    args = parser.parse_args()
-
+@hydra.main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/ui"),
+    config_name="pipeline_ui",
+)
+def main(cfg: DictConfig) -> None:
     load_dotenv()
     app = build_interface()
+
+    port = cfg.port
+    host = cfg.host
 
     print("🚀 Starting Pipeline UI...")
 
@@ -702,13 +712,13 @@ def main() -> None:
 
     if is_meta_devserver:
         server_name = os.uname()[1]
-        print(f"🌐 Meta devserver detected. Visit https://{server_name}:{args.port}/")
+        print(f"🌐 Meta devserver detected. Visit https://{server_name}:{port}/")
         print("💡 Ensure you're on the Meta VPN.")
         app.launch(
             share=False,
             show_error=True,
             server_name=server_name,
-            server_port=args.port,
+            server_port=port,
             ssl_keyfile=str(meta_keyfile),
             ssl_certfile=str(meta_keyfile),
             ssl_verify=False,
@@ -716,12 +726,12 @@ def main() -> None:
             inbrowser=False,
         )
     else:
-        print(f"🌐 Visit http://{args.host}:{args.port}/")
+        print(f"🌐 Visit http://{host}:{port}/")
         app.launch(
             share=False,
             show_error=True,
-            server_name=args.host,
-            server_port=args.port,
+            server_name=host,
+            server_port=port,
             show_api=False,
             inbrowser=True,
         )
