@@ -43,10 +43,13 @@ from typing import Any, Optional, Tuple, Dict
 from .cli import _load_dotenv_if_present  # reuse env loader
 from .config import OrchestratorConfig, new_run_id
 from .orchestrator import Orchestrator
-from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
+from .paths import (
+    ensure_abs_regular_file,
+    make_run_dirs,
+    PathSafetyError,
+)
 
-# from .event_adapter import EventAdapter
-from Fuser.dispatch_kernel_agent import TritonKernelAgent
+from triton_kernel_agent.providers import get_model_provider
 
 
 def _load_code_from_tar(artifact_path: Path) -> str:
@@ -254,28 +257,16 @@ def extract_subgraphs_to_json(
     # Ask LLM for shapes JSON
     system, user = _build_llm_prompt_for_shapes(fused_code, problem_code)
 
-    # Replace with just the code from _call_llm and init
-    agent = TritonKernelAgent(model_name=model_name)
-    messages = [
+    # Call LLM directly using provider
+    provider = get_model_provider(model_name)
+    messages: list[dict[str, str]] = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
-    output_text = agent._call_llm(messages, max_tokens=16000)
-
-    # TODO: Re-factor EventAdapter to go through Providers + add streaming support to Providers
-    # jsonl_path = dirs["orchestrator"] / "subgraphs.stream.jsonl"
-    # adapter = EventAdapter(
-    #     model=model_name,
-    #     store_responses=False,
-    #     timeout_s=llm_timeout_s,
-    #     jsonl_path=jsonl_path,
-    # )
-    # result = adapter.stream(
-    #     system_prompt=system,
-    #     user_prompt=user,
-    #     extras={"text": {"format": {"type": "text"}}},
-    # )
-    # output_text = result.get("output_text", "")
+    response = provider.get_response(
+        model_name, messages, max_tokens=16000, text={"format": {"type": "text"}}
+    )
+    output_text = response.content
 
     raw_json = _extract_json_block(output_text)
     try:

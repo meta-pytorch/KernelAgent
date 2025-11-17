@@ -26,6 +26,8 @@ from .runner import run_candidate
 from .logging_utils import setup_file_logger
 from .dedup import register_digest
 
+from triton_kernel_agent.providers.models import get_model_provider
+
 
 @dataclass
 class WorkerState:
@@ -105,6 +107,7 @@ class Worker:
             state.iter_index = k
             _write_json(self.cfg.workspace_dir / "state.json", asdict(state))
 
+            model_name = self.cfg.model
             # Render prompt
             rp = render_prompt(
                 problem_path=self.problem_path,
@@ -112,12 +115,28 @@ class Worker:
                 attempt_index=k,
                 error_context=state.last_error,
                 enable_reasoning_extras=self.cfg.enable_reasoning_extras,
-                model_name=self.cfg.model,
+                model_name=model_name,
             )
             prompt_path = self.dirs["prompts"] / f"iteration_{k}.txt"
             prompt_path.write_text(rp.user, encoding="utf-8")
 
+            # # Call LLM directly using provider
+            # provider = get_model_provider(model_name)
+            # messages: list[dict[str, str]] = [
+            #     {"role": "system", "content": SYSTEM_PROMPT},
+            #     {"role": "user", "content": rp.user},
+            # ]
+            # response = provider.get_response(model_name, messages, **rp.extras)
+            # output_text = response.content
+
             # Stream via EventAdapter
+            """
+            TODO: Refactor EventAdapter to go through Providers OR streaming
+            support to Providers
+
+            Currently, EventAdapter doesn't allow usage of non OpenAI models
+            but does have better steaming and cancellation support.
+            """
             jsonl_path = self.dirs["responses"] / f"iteration_{k}.stream.jsonl"
             adapter = EventAdapter(
                 model=self.cfg.model,

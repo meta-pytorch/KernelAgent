@@ -61,6 +61,12 @@ class RelayProvider(BaseProvider):
             "top_p": 0.95,
         }
 
+        # Add known kwargs
+        nargs = ["text", "seed", "reasoning"]
+        for arg in nargs:
+            if arg in kwargs:
+                request_data[arg] = kwargs[arg]
+
         logging.debug("\n=== DEBUG: PROMPT SENT TO LLM RELAY ===")
         logging.debug(request_data)
         logging.debug("=== END PROMPT ===\n")

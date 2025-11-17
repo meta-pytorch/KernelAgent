@@ -42,7 +42,7 @@ AVAILABLE_MODELS = [
     # OpenAI GPT-5 Model (Only GPT-5)
     ModelConfig(
         name="gpt-5",
-        provider_class=OpenAIProvider,
+        provider_class=RelayProvider,
         description="GPT-5 flagship model (Released Aug 2025)",
     ),
     # Anthropic Claude 4 Models (Latest)
