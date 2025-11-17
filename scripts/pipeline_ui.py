@@ -29,6 +29,11 @@ from typing import List, Optional, Tuple
 import gradio as gr
 from dotenv import load_dotenv
 
+# Ensure project root is importable when run as a script.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from Fuser.pipeline import run_pipeline
 from Fuser.auto_agent import AutoKernelRouter
 from Fuser.code_extractor import extract_single_python_file
