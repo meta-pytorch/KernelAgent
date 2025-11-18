@@ -140,6 +140,18 @@ A successful pipeline run yields a structure similar to:
 
 These artifacts are designed for reproducibility: you can re-run a single kernel session, inspect prompts/responses, or feed `composed_kernel.py` directly into downstream tooling.
 
+## Example Artifacts
+
+Looking for ready-to-browse outputs? See the curated artifacts repo:
+
+- https://github.com/Laurawly/kernelagent-artifacts
+
+It includes selected L1/L2/L3 problems with:
+- Original problems (PyTorch)
+- Fused subgraphs (`subgraphs.json`) and per‑subgraph Triton kernels
+- Composed end‑to‑end Triton programs and verification logs
+- Minimal examples for quick scanning
+
 ## Repository Layout
 
 - `triton_kernel_agent/` — KernelAgent core (agent, worker manager, provider adapters, prompt templates)
