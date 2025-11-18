@@ -1,0 +1,15 @@
+# Configuration for subgraph_extractor.py
+# Extract unique fusable subgraphs with shape signatures from fused models
+
+problem: ???  # Required: absolute path to KernelBench problem file
+
+# LLM configuration
+model: gpt-5  # OpenAI model name (Responses API)
+
+# Orchestrator settings
+workers: 4  # Number of concurrent workers
+max_iters: 5  # Maximum iterations per worker
+
+# Timeout settings (in seconds)
+llm_timeout_s: 2400  # LLM API timeout
+run_timeout_s: 2400  # Overall run timeout

@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+#!/usr/bin/env python3
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,15 +12,50 @@ from __future__ import annotations
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import argparse
+"""
+Orchestrates parallel LLM workers to generate and verify
+fused code.
+
+Runs multiple workers concurrently against a KernelBench problem file, each
+worker attempting to generate a valid solution. The first worker to produce a
+passing candidate wins.
+
+CLI (Hydra-based):
+  python -m Fuser.cli problem=/abs/path/to/problem.py
+
+  # Override config values:
+  python -m Fuser.cli problem=/abs/path/to/problem.py \
+      model=gpt-5 \
+      workers=4 \
+      max_iters=10 \
+      stream=winner
+
+  # Or use a custom config:
+  python -m Fuser.cli --config-name custom_fuser \
+      problem=/abs/path/to/problem.py
+
+Config file: configs/pipeline/orchestrator.yaml
+
+Requirements:
+- OPENAI_API_KEY (.env in CWD or environment)
+
+Outputs:
+- Run directory path printed to stdout
+- Artifacts in .fuse/<run_id>/
+"""
+
+from __future__ import annotations
 import json
 import sys
 import os
 import multiprocessing as mp
 from pathlib import Path
 
+from hydra import main as hydra_main
+from omegaconf import DictConfig
+
+from .config import new_run_id, OrchestratorConfig
 from .constants import ExitCode
-from .config import OrchestratorConfig, new_run_id
 from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 from .logging_utils import setup_file_logger
 from .orchestrator import Orchestrator
@@ -53,48 +87,32 @@ def _load_dotenv_if_present() -> None:
         pass
 
 
-def cmd_run(argv: list[str]) -> int:
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
+    config_name="orchestrator",
+)
+def main(cfg: DictConfig) -> int:
     _load_dotenv_if_present()
-    p = argparse.ArgumentParser(
-        prog="fuse run", description="Fuse Orchestrator — first-wins runner"
-    )
-    p.add_argument(
-        "--problem", required=True, help="Absolute path to the Python problem file"
-    )
-    p.add_argument(
-        "--model",
-        default="gpt-5",
-        help="OpenAI model name (Responses API, default: gpt-5)",
-    )
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--max-iters", type=int, default=10)
-    p.add_argument("--llm-timeout-s", type=int, default=120)
-    p.add_argument("--run-timeout-s", type=int, default=180)
-    p.add_argument("--stream", choices=["all", "winner", "none"], default="all")
-    p.add_argument("--store-responses", action="store_true", default=False)
-    p.add_argument("--isolated", action="store_true", default=False)
-    p.add_argument("--deny-network", action="store_true", default=False)
-    p.add_argument("--enable-reasoning-extras", action="store_true", default=True)
-    args = p.parse_args(argv)
 
     try:
-        problem_path = ensure_abs_regular_file(args.problem)
+        problem_path = ensure_abs_regular_file(cfg.problem)
     except PathSafetyError as e:
         print(str(e), file=sys.stderr)
         return int(ExitCode.INVALID_ARGS)
 
-    cfg = OrchestratorConfig(
+    orch_cfg = OrchestratorConfig(
         problem_path=problem_path,
-        model=args.model,
-        workers=args.workers,
-        max_iters=args.max_iters,
-        llm_timeout_s=args.llm_timeout_s,
-        run_timeout_s=args.run_timeout_s,
-        stream_mode=args.stream,
-        store_responses=args.store_responses,
-        isolated=args.isolated,
-        deny_network=args.deny_network,
-        enable_reasoning_extras=args.enable_reasoning_extras,
+        model=cfg.model,
+        workers=cfg.workers,
+        max_iters=cfg.max_iters,
+        llm_timeout_s=cfg.llm_timeout_s,
+        run_timeout_s=cfg.run_timeout_s,
+        stream_mode=cfg.stream,
+        store_responses=cfg.store_responses,
+        isolated=cfg.isolated,
+        deny_network=cfg.deny_network,
+        enable_reasoning_extras=cfg.enable_reasoning_extras,
     )
 
     run_id = new_run_id()
@@ -102,7 +120,10 @@ def cmd_run(argv: list[str]) -> int:
     try:
         d = make_run_dirs(FUSE_BASE_DIR, run_id)
     except FileExistsError:
-        print("Run directory already exists unexpectedly; retry.", file=sys.stderr)
+        print(
+            "Run directory already exists unexpectedly; retry.",
+            file=sys.stderr,
+        )
         return int(ExitCode.GENERIC_FAILURE)
 
     orch_dir = d["orchestrator"]
@@ -113,7 +134,7 @@ def cmd_run(argv: list[str]) -> int:
         json.dumps(
             {
                 "run_id": run_id,
-                "config": json.loads(cfg.to_json()),
+                "config": json.loads(orch_cfg.to_json()),
             },
             indent=2,
         )
@@ -128,7 +149,10 @@ def cmd_run(argv: list[str]) -> int:
     # Spawn orchestrator and execute first-wins
     mp.set_start_method("spawn", force=True)
     orch = Orchestrator(
-        cfg, run_dir=run_dir, workers_dir=d["workers"], orchestrator_dir=orch_dir
+        orch_cfg,
+        run_dir=run_dir,
+        workers_dir=d["workers"],
+        orchestrator_dir=orch_dir,
     )
     summary = orch.run()
 
@@ -140,22 +164,6 @@ def cmd_run(argv: list[str]) -> int:
             return int(ExitCode.CANCELED_BY_SIGNAL)
         return int(ExitCode.NO_PASSING_SOLUTION)
     return int(ExitCode.SUCCESS)
-
-
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv:
-        print(
-            "usage: fuse run --problem /abs/path.py [--model <name>] [flags]",
-            file=sys.stderr,
-        )
-        return int(ExitCode.INVALID_ARGS)
-    cmd = argv[0]
-    if cmd == "run":
-        return cmd_run(argv[1:])
-    else:
-        print(f"unknown subcommand: {cmd}", file=sys.stderr)
-        return int(ExitCode.INVALID_ARGS)
 
 
 if __name__ == "__main__":

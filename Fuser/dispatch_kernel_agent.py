@@ -23,9 +23,20 @@ Outputs:
 - A per-subgraph directory containing the agent session artifacts
 - A summary JSON mapping subgraph ids to generation results
 
-Usage:
-  python -m Fuser.dispatch_kernel_agent --subgraphs /abs/path/to/subgraphs.json \
-      [--agent-model gpt-5] [--out-dir ./kernels_out] [--jobs 1]
+CLI (Hydra-based):
+  python -m Fuser.dispatch_kernel_agent subgraphs=/abs/path/to/subgraphs.json
+
+  # Override config values:
+  python -m Fuser.dispatch_kernel_agent subgraphs=/abs/path/to/subgraphs.json \
+      agent_model=gpt-5 \
+      out_dir=./kernels_out \
+      jobs=2
+
+  # Or use a custom config:
+  python -m Fuser.dispatch_kernel_agent --config-name custom_dispatch \
+      subgraphs=/abs/path/to/subgraphs.json
+
+Config file: configs/pipeline/dispatch_kernel_agent.yaml
 
 Requirements:
 - OPENAI_API_KEY (.env in CWD or environment)
@@ -34,7 +45,6 @@ Requirements:
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import textwrap
@@ -43,6 +53,8 @@ from typing import Any, Dict, List, Tuple
 import concurrent.futures as _futures
 
 from dotenv import load_dotenv
+from hydra import main as hydra_main
+from omegaconf import DictConfig
 
 try:
     from triton_kernel_agent import TritonKernelAgent
@@ -406,39 +418,23 @@ def run(
     return out_summary
 
 
-def main(argv: List[str] | None = None) -> int:
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
+    config_name="dispatch_kernel_agent",
+)
+def main(cfg: DictConfig) -> int:
     load_dotenv()
-    p = argparse.ArgumentParser(
-        description="Generate Triton kernels for subgraphs via KernelAgent"
-    )
-    p.add_argument(
-        "--subgraphs", required=True, help="Path to subgraphs.json produced by Fuser"
-    )
-    p.add_argument(
-        "--out-dir",
-        default="kernels_out",
-        help="Output directory for per-subgraph artifacts",
-    )
-    p.add_argument(
-        "--agent-model", default=None, help="Override KernelAgent model name (optional)"
-    )
-    p.add_argument(
-        "--jobs",
-        type=str,
-        default="2",
-        help="Max concurrent subgraphs to dispatch (default: 2); use 'auto' to match subgraph count",
-    )
-    args = p.parse_args(argv)
-
-    subgraphs_path = Path(args.subgraphs).resolve()
+    subgraphs_path = Path(cfg.subgraphs).resolve()
     if not subgraphs_path.is_file():
         print(f"subgraphs file not found: {subgraphs_path}", file=os.sys.stderr)
         return 2
-    out_dir = Path(args.out_dir).resolve()
+
+    out_dir = Path(cfg.out_dir).resolve()
 
     # Resolve jobs (support "auto")
     try:
-        if isinstance(args.jobs, str) and args.jobs.strip().lower() == "auto":
+        if isinstance(cfg.jobs, str) and cfg.jobs.strip().lower() == "auto":
             try:
                 with subgraphs_path.open("r", encoding="utf-8") as f:
                     _items = json.load(f)
@@ -446,12 +442,15 @@ def main(argv: List[str] | None = None) -> int:
             except Exception:
                 jobs_val = 1
         else:
-            jobs_val = max(1, int(args.jobs))
+            jobs_val = max(1, int(cfg.jobs))
     except Exception:
         jobs_val = 1
 
     summary_path = run(
-        subgraphs_path, out_dir, agent_model=args.agent_model, jobs=jobs_val
+        subgraphs_path,
+        out_dir,
+        agent_model=cfg.agent_model,
+        jobs=jobs_val,
     )
     print(str(summary_path))
     return 0

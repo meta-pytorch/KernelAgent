@@ -17,22 +17,35 @@ Extract unique fusable subgraphs and their exact shape signatures from a fused
 model produced by Fuser. Produces a JSON array written to the run directory.
 
 Flow:
-1) Run Fuser orchestrator against a KernelBench problem to produce code.py.
-2) Ask the LLM to analyze the fused code and emit a JSON array of subgraphs with
-   exact input/output/weight shapes. Differences in shapes => different subgraph.
+1) Run Fuser orchestrator against a KernelBench problem to produce
+   code.py.
+2) Ask the LLM to analyze the fused code and emit a JSON array of
+   subgraphs with exact input/output/weight shapes. Differences in shapes
+   => different subgraph.
 3) Parse the JSON from the LLM output, deduplicate by shape signature, and save
    to <run_dir>/subgraphs.json.
 
-Usage:
-  python -m Fuser.subgraph_extractor --problem /abs/path.py [--model gpt-5]
-      [--workers 4] [--max-iters 5] [--llm-timeout-s 2400] [--run-timeout-s 2400]
+CLI (Hydra-based):
+  python -m Fuser.subgraph_extractor problem=/abs/path/to/problem.py
 
-This script loads .env in CWD (same behavior as Fuser CLI) for OPENAI_API_KEY.
+  # Override config values:
+  python -m Fuser.subgraph_extractor problem=/abs/path/to/problem.py \
+      model=gpt-5 \
+      workers=4 \
+      max_iters=5
+
+  # Or use a custom config:
+  python -m Fuser.subgraph_extractor --config-name custom_subgraph_extractor \
+      problem=/abs/path/to/problem.py
+
+Config file: configs/pipeline/subgraph_extractor.yaml
+
+Requirements:
+- OPENAI_API_KEY (.env in CWD or environment)
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
@@ -45,6 +58,9 @@ from .config import OrchestratorConfig, new_run_id
 from .orchestrator import Orchestrator
 from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 from .event_adapter import EventAdapter
+
+from hydra import main as hydra_main
+from omegaconf import DictConfig
 
 
 def _load_code_from_tar(artifact_path: Path) -> str:
@@ -345,34 +361,26 @@ def extract_subgraphs_to_json(
     return dirs["run_dir"], out_path
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
+    config_name="subgraph_extractor",
+)
+def main(cfg: DictConfig) -> int:
     _load_dotenv_if_present()
-    p = argparse.ArgumentParser(
-        description="Extract unique subgraphs with shapes (JSON)"
-    )
-    p.add_argument(
-        "--problem", required=True, help="Absolute path to KernelBench problem file"
-    )
-    p.add_argument("--model", default="gpt-5", help="OpenAI model name (Responses API)")
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--max-iters", type=int, default=5)
-    p.add_argument("--llm-timeout-s", type=int, default=2400)
-    p.add_argument("--run-timeout-s", type=int, default=2400)
-    args = p.parse_args(argv)
-
     try:
-        problem_path = ensure_abs_regular_file(args.problem)
+        problem_path = ensure_abs_regular_file(cfg.problem)
     except PathSafetyError as e:
         print(str(e), file=sys.stderr)
         return 2
 
     run_dir, json_path = extract_subgraphs_to_json(
         problem_path=problem_path,
-        model_name=args.model,
-        workers=args.workers,
-        max_iters=args.max_iters,
-        llm_timeout_s=args.llm_timeout_s,
-        run_timeout_s=args.run_timeout_s,
+        model_name=cfg.model,
+        workers=cfg.workers,
+        max_iters=cfg.max_iters,
+        llm_timeout_s=cfg.llm_timeout_s,
+        run_timeout_s=cfg.run_timeout_s,
     )
     print(str(json_path))
     return 0

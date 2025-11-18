@@ -33,26 +33,41 @@ Routing policy (conservative):
 
 If the chosen path fails, the agent can optionally fall back to the other path.
 
-CLI:
-  python -m Fuser.auto_agent --problem /abs/path/to/problem.py \
-      [--ka-model gpt-5] [--extract-model gpt-5] [--dispatch-model o4-mini] [--compose-model o4-mini] \
-      [--verify] [--no-fallback]
+CLI (Hydra-based):
+  python -m Fuser.auto_agent problem=/abs/path/to/problem.py
 
+  # Override config values:
+  python -m Fuser.auto_agent problem=/abs/path/to/problem.py \
+      ka.model=gpt-5 \
+      router.model=gpt-5 \
+      fuser.extracter.model=gpt-5 \
+      fuser.dispatcher.model=o4-mini \
+      fuser.composer.model=o4-mini \
+      fuser.composer.verify=true \
+      routing.allow_fallback=false
+
+  # Or use a custom config:
+  python -m Fuser.auto_agent --config-name custom_auto_agent problem=/abs/path/to/problem.py
+
+Config file: configs/pipeline/auto_agent.yaml
 Returns a JSON summary to stdout and writes the generated kernel path (if available).
 """
 
 from __future__ import annotations
 
-import argparse
 import ast
 import hashlib
 import json
 import sys
+
+from hydra import main as hydra_main
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
+from omegaconf import DictConfig
 from Fuser.pipeline import run_pipeline
 
 # Local imports (available inside repo)
@@ -668,64 +683,40 @@ class AutoKernelRouter:
 # ------------------------
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    p = argparse.ArgumentParser(
-        description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
-    )
-    p.add_argument("--problem", required=True, help="Absolute path to the problem file")
-    p.add_argument(
-        "--ka-model",
-        default=None,
-        help="Model for KernelAgent (optional; uses env default if omitted)",
-    )
-    p.add_argument("--ka-workers", type=int, default=4)
-    p.add_argument("--ka-rounds", type=int, default=10)
-    p.add_argument("--no-ka-high-reasoning", action="store_true")
-    p.add_argument("--router-model", default="gpt-5")
-    p.add_argument("--no-router-high-reasoning", action="store_true")
-    p.add_argument("--router-temp", type=float, default=0.2)
-    p.add_argument("--router-max-tokens", type=int, default=700)
-    p.add_argument("--extract-model", default="gpt-5")
-    p.add_argument("--dispatch-model", default="o4-mini")
-    p.add_argument("--compose-model", default="o4-mini")
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--max-iters", type=int, default=5)
-    p.add_argument("--llm-timeout-s", type=int, default=1200)
-    p.add_argument("--run-timeout-s", type=int, default=1200)
-    p.add_argument("--compose-max-iters", type=int, default=5)
-    p.add_argument("--verify", action="store_true")
-    p.add_argument("--dispatch-jobs", type=int, default=2)
-    p.add_argument("--no-fallback", action="store_true")
-    args = p.parse_args(argv)
-
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
+    config_name="auto_agent",
+)
+def main(cfg: DictConfig) -> int:
     # Load environment variables from .env file
     load_dotenv()
 
-    problem_path = Path(args.problem).resolve()
+    problem_path = Path(cfg.problem).resolve()
     if not problem_path.is_file():
         print(f"problem not found: {problem_path}", file=sys.stderr)
         return 2
 
     router = AutoKernelRouter(
-        ka_model=args.ka_model,
-        ka_num_workers=args.ka_workers,
-        ka_max_rounds=args.ka_rounds,
-        ka_high_reasoning=(not args.no_ka_high_reasoning),
-        router_model=args.router_model,
-        router_high_reasoning=(not args.no_router_high_reasoning),
-        router_temperature=args.router_temp,
-        router_max_tokens=args.router_max_tokens,
-        extract_model=args.extract_model,
-        dispatch_model=args.dispatch_model,
-        compose_model=args.compose_model,
-        workers=args.workers,
-        max_iters=args.max_iters,
-        llm_timeout_s=args.llm_timeout_s,
-        run_timeout_s=args.run_timeout_s,
-        compose_max_iters=args.compose_max_iters,
-        verify=args.verify,
-        dispatch_jobs=args.dispatch_jobs,
-        allow_fallback=(not args.no_fallback),
+        ka_model=cfg.ka.model_name,
+        ka_num_workers=cfg.ka.num_workers,
+        ka_max_rounds=cfg.ka.max_rounds,
+        ka_high_reasoning=cfg.ka.high_reasoning,
+        router_model=cfg.router.model,
+        router_high_reasoning=cfg.router.high_reasoning,
+        router_temperature=cfg.router.temperature,
+        router_max_tokens=cfg.router.max_tokens,
+        extract_model=cfg.fuser.extractor.model,
+        dispatch_model=cfg.fuser.dispatcher.model,
+        compose_model=cfg.fuser.composer.model,
+        workers=cfg.fuser.extractor.workers,
+        max_iters=cfg.fuser.extractor.max_iters,
+        llm_timeout_s=cfg.fuser.extractor.llm_timeout_s,
+        run_timeout_s=cfg.fuser.extractor.run_timeout_s,
+        compose_max_iters=cfg.fuser.composer.max_iters,
+        verify=cfg.fuser.composer.verify,
+        dispatch_jobs=cfg.fuser.dispatcher.jobs,
+        allow_fallback=cfg.routing.allow_fallback,
     )
 
     try:

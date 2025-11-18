@@ -15,17 +15,27 @@
 """
 One-shot pipeline runner: extract → dispatch → compose.
 
-Usage:
-  python -m Fuser.pipeline \
-    --problem /abs/path/to/kernelbench_problem.py \
-    --extract-model gpt-5 \
-    --dispatch-model o4-mini \
-    [--dispatch-jobs 1] \
-    --compose-model o4-mini \
-    --workers 4 --max-iters 5 \
-    --llm-timeout-s 1200 --run-timeout-s 1200 \
-    --out-root ./.fuse \
-    [--verify] [--compose-max-iters 5]
+CLI (Hydra-based):
+  python -m Fuser.pipeline problem=/abs/path/to/kernelbench_problem.py
+
+  # Override config values:
+  python -m Fuser.pipeline problem=/abs/path/to/kernelbench_problem.py \
+      extractor.model=gpt-5 \
+      dispatcher.model=o4-mini \
+      composer.model=o4-mini \
+      extractor.workers=4 \
+      extractor.max_iters=5 \
+      extractor.llm_timeout_s=1200 \
+      extractor.run_timeout_s=1200 \
+      composer.verify=true \
+      composer.max_iters=5 \
+      dispatcher.jobs=2
+
+  # Or use a custom config:
+  python -m Fuser.pipeline --config-name custom_pipeline \
+      problem=/abs/path/to/kernelbench_problem.py
+
+Config file: configs/pipeline/pipeline.yaml
 
 Writes all artifacts into the run directory created by the extractor. The final
 composed kernel and composition summary live under <run_dir>/compose_out.
@@ -33,10 +43,12 @@ composed kernel and composition summary live under <run_dir>/compose_out.
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 from typing import Optional
+
+from hydra import main as hydra_main
+from omegaconf import DictConfig
 
 from .subgraph_extractor import extract_subgraphs_to_json
 from .dispatch_kernel_agent import run as dispatch_run
@@ -130,7 +142,12 @@ def run_pipeline(
     }
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
+    config_name="pipeline",
+)
+def main(cfg: DictConfig) -> int:
     # Load .env if present for OPENAI_API_KEY, proxies, etc.
     try:
         from dotenv import load_dotenv  # type: ignore
@@ -138,33 +155,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         load_dotenv()
     except Exception:
         pass
-    p = argparse.ArgumentParser(
-        description="End-to-end pipeline: extract → dispatch → compose"
-    )
-    p.add_argument("--problem", required=True, help="Absolute path to the problem file")
-    p.add_argument("--extract-model", default="gpt-5")
-    p.add_argument(
-        "--dispatch-model",
-        default=None,
-        help="KernelAgent model (default: gpt-5 for level2 problems, else o4-mini)",
-    )
-    p.add_argument(
-        "--dispatch-jobs",
-        type=str,
-        default="2",
-        help="Max concurrent KernelAgent subgraph tasks (default: 2); use 'auto' to match subgraph count",
-    )
-    p.add_argument("--compose-model", default="o4-mini")
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--max-iters", type=int, default=5, help="Extractor iter budget")
-    p.add_argument("--llm-timeout-s", type=int, default=1200)
-    p.add_argument("--run-timeout-s", type=int, default=1200)
-    p.add_argument("--out-root", default=None)
-    p.add_argument("--verify", action="store_true")
-    p.add_argument("--compose-max-iters", type=int, default=5)
-    args = p.parse_args(argv)
 
-    problem_path = Path(args.problem).resolve()
+    problem_path = Path(cfg.problem).resolve()
     if not problem_path.is_file():
         print(f"problem not found: {problem_path}")
         return 2
@@ -172,17 +164,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         res = run_pipeline(
             problem_path=problem_path,
-            extract_model=args.extract_model,
-            dispatch_model=args.dispatch_model,
-            compose_model=args.compose_model,
-            dispatch_jobs=args.dispatch_jobs,
-            workers=args.workers,
-            max_iters=args.max_iters,
-            llm_timeout_s=args.llm_timeout_s,
-            run_timeout_s=args.run_timeout_s,
-            out_root=Path(args.out_root) if args.out_root else None,
-            verify=args.verify,
-            compose_max_iters=args.compose_max_iters,
+            extract_model=cfg.extractor.model,
+            dispatch_model=cfg.dispatcher.model,
+            compose_model=cfg.composer.model,
+            dispatch_jobs=cfg.dispatcher.jobs,
+            workers=cfg.extractor.workers,
+            max_iters=cfg.extractor.max_iters,
+            llm_timeout_s=cfg.extractor.llm_timeout_s,
+            run_timeout_s=cfg.extractor.run_timeout_s,
+            out_root=Path(cfg.out_root) if cfg.out_root else None,
+            verify=cfg.composer.verify,
+            compose_max_iters=cfg.composer.max_iters,
         )
         print(json.dumps(res, indent=2))
         return 0

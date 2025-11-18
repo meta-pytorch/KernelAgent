@@ -23,31 +23,49 @@ problem semantics, returning one complete Python file that exposes
 `kernel_function(...)` and includes a minimal self-test that checks numerical
 equivalence against a PyTorch reference derived from the original problem.
 
-Usage:
+CLI (Hydra-based):
   python -m Fuser.compose_end_to_end \
-      --problem /abs/path/to/kernelbench_problem.py \
-      --subgraphs /abs/path/to/subgraphs.json \
-      --kernels-summary /abs/path/to/kernels_out/summary.json \
-      [--model gpt-5] [--out-dir ./compose_out] [--verify]
+      problem=/abs/path/to/kernelbench_problem.py \
+      subgraphs=/abs/path/to/subgraphs.json \
+      kernels_summary=/abs/path/to/kernels_out/summary.json
 
-Notes:
-- Requires an available LLM provider configured via KernelAgent providers
-  (e.g., OPENAI_API_KEY for OpenAI models).
-- Writes composed Python file to <out-dir>/composed_kernel.py and a
-composition summary JSON.
+  # Override config values:
+  python -m Fuser.compose_end_to_end \
+      problem=/abs/path/to/problem.py \
+      subgraphs=/abs/path/to/subgraphs.json \
+      kernels_summary=/abs/path/to/summary.json \
+      model=gpt-5 \
+      out_dir=./compose_out \
+      verify=true
+
+  # Or use a custom config:
+  python -m Fuser.compose_end_to_end --config-name custom_compose \
+      problem=/abs/path/to/problem.py \
+      subgraphs=/abs/path/to/subgraphs.json \
+      kernels_summary=/abs/path/to/summary.json
+
+Config file: configs/pipeline/compose_end_to_end.yaml
+
+Requirements:
+- KernelAgent providers configured via environment
+
+Outputs:
+- Composed Python file to <out-dir>/composed_kernel.py
+- Composition summary JSON
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
+from hydra import main as hydra_main
+from omegaconf import DictConfig
 
 # Reuse KernelAgent provider stack for LLM calls
 try:
@@ -404,42 +422,19 @@ def compose(
     return result
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/pipeline"),
+    config_name="compose_end_to_end",
+)
+def main(cfg: DictConfig) -> int:
     load_dotenv()
-    p = argparse.ArgumentParser(
-        description="Compose end-to-end Triton kernel from subgraphs + generated kernels"
-    )
-    p.add_argument(
-        "--problem", required=True, help="Absolute path to KernelBench problem file"
-    )
-    p.add_argument(
-        "--subgraphs", required=True, help="Path to subgraphs.json from Fuser"
-    )
-    p.add_argument(
-        "--kernels-summary",
-        required=True,
-        help="Path to summary.json from dispatch step",
-    )
-    p.add_argument(
-        "--out-dir",
-        default="compose_out",
-        help="Output directory for composed artifacts",
-    )
-    p.add_argument(
-        "--model", default=os.getenv("OPENAI_MODEL") or "gpt-5", help="LLM model name"
-    )
-    p.add_argument(
-        "--verify",
-        action="store_true",
-        help="Execute generated file and check PASS sentinel",
-    )
-    p.add_argument("--max-iters", type=int, default=5, help="Max LLM refinement rounds")
-    args = p.parse_args(argv)
 
-    problem_path = Path(args.problem).resolve()
-    subgraphs_path = Path(args.subgraphs).resolve()
-    kernels_summary_path = Path(args.kernels_summary).resolve()
-    out_dir = Path(args.out_dir).resolve()
+    model = cfg.model or os.getenv("OPENAI_MODEL") or "gpt-5"
+    problem_path = Path(cfg.problem).resolve()
+    subgraphs_path = Path(cfg.subgraphs).resolve()
+    kernels_summary_path = Path(cfg.kernels_summary).resolve()
+    out_dir = Path(cfg.out_dir).resolve()
 
     if not problem_path.is_file():
         print(f"problem file not found: {problem_path}")
@@ -457,9 +452,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             subgraphs_path=subgraphs_path,
             kernels_summary_path=kernels_summary_path,
             out_dir=out_dir,
-            model_name=args.model,
-            verify=args.verify,
-            max_iters=args.max_iters,
+            model_name=model,
+            verify=cfg.verify,
+            max_iters=cfg.max_iters,
         )
         print(json.dumps(res, indent=2))
         return 0
