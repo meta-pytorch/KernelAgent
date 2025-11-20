@@ -57,7 +57,7 @@ from Fuser.pipeline import run_pipeline
 
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
-from triton_kernel_agent.providers.models import get_model_provider
+from utils.providers.models import get_model_provider
 
 
 # ------------------------

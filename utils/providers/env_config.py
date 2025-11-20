@@ -20,7 +20,7 @@ import logging
 from typing import Dict, Optional
 
 
-def get_meta_proxy_config() -> Optional[Dict[str, str]]:
+def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
     """
     Get Meta's proxy configuration if available.
 
@@ -68,7 +68,7 @@ def configure_proxy_environment() -> Optional[Dict[str, Optional[str]]]:
         Dictionary of original environment variable values for restoration,
         or None if no proxy configuration is needed.
     """
-    proxy_config = get_meta_proxy_config()
+    proxy_config = _get_meta_proxy_config()
     if not proxy_config:
         return None
 

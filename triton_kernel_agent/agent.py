@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-from .providers import get_model_provider
+from utils.providers import get_model_provider
 
 
 class TritonKernelAgent:

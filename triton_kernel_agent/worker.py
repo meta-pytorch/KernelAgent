@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from .prompt_manager import PromptManager
-from .providers import get_model_provider
+from utils.providers import get_model_provider
 
 
 DISALLOWED_TORCH_PATTERNS = [

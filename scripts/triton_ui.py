@@ -27,9 +27,9 @@ from dotenv import load_dotenv
 
 
 from triton_kernel_agent import TritonKernelAgent
-from triton_kernel_agent.providers.models import AVAILABLE_MODELS
-from triton_kernel_agent.providers.openai_provider import OpenAIProvider
-from triton_kernel_agent.providers.anthropic_provider import AnthropicProvider
+from utils.providers.models import AVAILABLE_MODELS
+from utils.providers.openai_provider import OpenAIProvider
+from utils.providers.anthropic_provider import AnthropicProvider
 
 
 KERNELBENCH_BASE_PATH = (

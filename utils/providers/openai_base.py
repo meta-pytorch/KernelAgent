@@ -17,7 +17,7 @@
 from typing import List, Dict, Any, Optional
 import logging
 from .base import BaseProvider, LLMResponse
-from ..utils import configure_proxy_environment
+from .env_config import configure_proxy_environment
 
 try:
     from openai import OpenAI

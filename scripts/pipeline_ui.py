@@ -101,7 +101,7 @@ def _maybe_synthesize_problem(desc: str, model_name: str) -> Path:
     - Else, call LLM to synthesize a KernelBench-compatible problem file.
     """
     from Fuser.code_extractor import extract_single_python_file
-    from triton_kernel_agent.providers.models import get_model_provider
+    from utils.providers.models import get_model_provider
 
     txt = desc.strip()
     if not txt:
@@ -482,7 +482,7 @@ class PipelineUI:
 
 
 def build_interface() -> gr.Blocks:
-    from triton_kernel_agent.providers.models import MODEL_NAME_TO_CONFIG
+    from utils.providers.models import MODEL_NAME_TO_CONFIG
 
     ui = PipelineUI()
     default_problem = ui.problem_choices[0][0] if ui.problem_choices else ""

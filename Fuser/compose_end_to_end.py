@@ -51,7 +51,7 @@ from dotenv import load_dotenv
 
 # Reuse KernelAgent provider stack for LLM calls
 try:
-    from triton_kernel_agent.providers.models import get_model_provider
+    from utils.providers.models import get_model_provider
 except Exception:
     get_model_provider = None  # type: ignore
 

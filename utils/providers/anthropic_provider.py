@@ -16,7 +16,7 @@
 
 from typing import List, Dict
 from .base import BaseProvider, LLMResponse
-from ..utils import configure_proxy_environment
+from .env_config import configure_proxy_environment
 
 try:
     from anthropic import Anthropic
