@@ -118,6 +118,7 @@ triton_kernel_logs/
 session_*/
 worker_*/
 .fuse/
+outputs/
 
 # Generated kernels
 kernel.py

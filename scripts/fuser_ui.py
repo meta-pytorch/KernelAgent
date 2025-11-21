@@ -16,8 +16,8 @@
 
 from __future__ import annotations
 
-import argparse
 import ast
+import logging
 import os
 import tarfile
 import time
@@ -26,6 +26,9 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from hydra import main as hydra_main
+from omegaconf import DictConfig
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -40,6 +43,10 @@ except Exception:  # pragma: no cover
 from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
+
+# Turn off noisy HTTPX logging
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.WARNING)
 
 
 @dataclass
@@ -865,13 +872,16 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
     return app
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="FuserAgent UI")
-    parser.add_argument("--port", type=int, default=8086)
-    parser.add_argument("--host", type=str, default="localhost")
-    args = parser.parse_args()
-
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent.parent / "configs/ui"),
+    config_name="fuser_ui",
+)
+def main(cfg: DictConfig) -> None:
     app = build_interface()
+
+    port = cfg.port
+    host = cfg.host
 
     print("🚀 Starting FuserAgent UI...")
 
@@ -880,13 +890,13 @@ def main() -> None:
 
     if is_meta_devserver:
         server_name = os.uname()[1]
-        print(f"🌐 Meta devserver detected. Visit https://{server_name}:{args.port}/")
+        print(f"🌐 Meta devserver detected. Visit https://{server_name}:{port}/")
         print("💡 Ensure you're on the Meta VPN.")
         app.launch(
             share=False,
             show_error=True,
             server_name=server_name,
-            server_port=args.port,
+            server_port=port,
             ssl_keyfile=str(meta_keyfile),
             ssl_certfile=str(meta_keyfile),
             ssl_verify=False,
@@ -894,12 +904,12 @@ def main() -> None:
             inbrowser=False,
         )
     else:
-        print(f"🌐 Visit http://{args.host}:{args.port}/")
+        print(f"🌐 Visit http://{host}:{port}/")
         app.launch(
             share=False,
             show_error=True,
-            server_name=args.host,
-            server_port=args.port,
+            server_name=host,
+            server_port=port,
             show_api=False,
             inbrowser=True,
         )
