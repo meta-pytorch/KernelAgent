@@ -17,9 +17,8 @@
 import json
 import logging
 import multiprocessing as mp
+import os
 import re
-import subprocess
-import sys
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -218,37 +217,110 @@ class VerificationWorker:
                 return message
         return None
 
+    def _run_test_process(
+        self, test_file: Path, workdir: Path, result_queue: mp.Queue
+    ) -> None:
+        """
+        Helper function to run test in a separate process.
+        Captures stdout/stderr and sends results via queue.
+
+        Args:
+            test_file: Path to the test file
+            workdir: Working directory
+            result_queue: Queue to send results back
+        """
+        import sys
+        import traceback
+        from io import StringIO
+
+        # Save original stdout/stderr
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        stdout_buffer = StringIO()
+        stderr_buffer = StringIO()
+
+        try:
+            # Redirect stdout/stderr
+            sys.stdout = stdout_buffer
+            sys.stderr = stderr_buffer
+
+            # Add workdir to sys.path so imports from the same directory work
+            os.chdir(str(workdir))
+            if str(workdir) not in sys.path:
+                sys.path.insert(0, str(workdir))
+
+            with open(test_file) as f:
+                code = f.read()
+
+            exec_globals = {
+                "__name__": "__main__",
+                "__file__": str(test_file),
+            }
+            exec(code, exec_globals)
+
+            # Template enforces testsfiles to call sys.exit(0)
+            # This should NOT be reached
+            result_queue.put((False, stdout_buffer.getvalue(), "Test misformatted; did not call sys.exit(#) " + stderr_buffer.getvalue()))
+
+        except SystemExit as e:
+            # Test code template calls sys.exit()
+            if e.code == 0 or e.code is None:
+                result_queue.put((True, stdout_buffer.getvalue(), stderr_buffer.getvalue()))
+            else:
+                # Non-zero exit code means failure
+                result_queue.put((False, stdout_buffer.getvalue(), f"Test exited with code {e.code} " + stderr_buffer.getvalue()))
+
+        except BaseException:
+            result_queue.put(
+                (False, stdout_buffer.getvalue(), stderr_buffer.getvalue() + traceback.format_exc())
+            )
+
+        finally:
+            # Restore original stdout/stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+
     def _run_test(self) -> Tuple[bool, str, str]:
         """
-        Run the test script and capture results.
+        Run the test script and capture results using multiprocessing.
 
         Returns:
             Tuple of (success, stdout, stderr)
         """
-        cmd = [sys.executable, str(self.test_file)]
+        # Create process to run the test
+        result_queue = mp.Queue()
+        process = mp.Process(
+            target=self._run_test_process,
+            args=(self.test_file, self.workdir, result_queue),
+        )
+        process.start()
+        process.join(timeout=30)
 
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.workdir),
-                capture_output=True,
-                text=True,
-                timeout=30,  # 30 second timeout
-            )
+        # Check if process is still alive (timeout)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
 
-            success = result.returncode == 0
-            self.logger.info(
-                f"Test {'passed' if success else 'failed'} with code {result.returncode}"
-            )
-
-            return success, result.stdout, result.stderr
-
-        except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
             return False, "", "Test execution timed out after 30 seconds"
-        except Exception as e:
-            self.logger.error(f"Test execution error: {e}")
-            return False, "", str(e)
+
+        # Get result from queue
+        if not result_queue.empty():
+            success, stdout, stderr = result_queue.get()
+            self.logger.info(
+                f"Test {'passed' if success else 'failed'} with code {process.exitcode}"
+            )
+            return success, stdout, stderr
+        else:
+            error_msg = (
+                f"Test process ended without result. Exit code: {process.exitcode}. "
+            )
+            self.logger.error(error_msg)
+            return False, "", error_msg
 
     def _call_llm(self, messages: list, **kwargs) -> str:
         """
