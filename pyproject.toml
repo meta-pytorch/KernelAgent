@@ -34,6 +34,7 @@ dependencies = [
     "python-dotenv",
     "gradio",
     "requests",
+    "datasets",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,7 @@ fuser-ui = "scripts.fuser_ui:main"
 kernel-agent = "scripts.triton_ui:main"
 list-models = "scripts.list_models:main"
 pipeline-ui = "scripts.pipeline_ui:main"
+generate-kernel = "generate_kernel:main"
 
 [project.urls]
 "Homepage" = "https://github.com/pytorch-labs/KernelAgent"

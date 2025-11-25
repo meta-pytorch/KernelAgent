@@ -1,0 +1,5 @@
+2025-11-26 03:02:47,538 - worker_1 - INFO - Starting verification for worker 1
+2025-11-26 03:02:47,538 - worker_1 - INFO - Round 1/5
+2025-11-26 03:02:47,538 - worker_1 - INFO - Wrote kernel and test files
+2025-11-26 03:02:56,667 - worker_1 - INFO - Test passed with code 0
+2025-11-26 03:02:56,668 - worker_1 - INFO - Success! Kernel passed test in round 1

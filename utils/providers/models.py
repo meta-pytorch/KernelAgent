@@ -20,6 +20,7 @@ from typing import Dict, Type
 from .base import BaseProvider
 from .openai_provider import OpenAIProvider
 from .anthropic_provider import AnthropicProvider
+from .deepseek_provider import DeepSeekProvider
 from .relay_provider import RelayProvider
 
 
@@ -65,6 +66,22 @@ AVAILABLE_MODELS = [
         name="gcp-claude-4-sonnet",
         provider_class=RelayProvider,
         description="[Relay] Claude 4 Sonnet",
+    ),
+    # DeepSeek Models (最新API规范)
+    ModelConfig(
+        name="deepseek-chat",
+        provider_class=DeepSeekProvider,
+        description="DeepSeek-V3.2-Exp (非思考模式) - 最新对话模型",
+    ),
+    ModelConfig(
+        name="deepseek-reasoner",
+        provider_class=DeepSeekProvider,
+        description="DeepSeek-V3.2-Exp (思考模式) - 推理增强模型",
+    ),
+    ModelConfig(
+        name="deepseek-coder",
+        provider_class=DeepSeekProvider,
+        description="DeepSeek Coder - 代码生成专用模型",
     ),
 ]
 

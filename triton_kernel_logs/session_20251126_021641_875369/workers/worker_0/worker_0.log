@@ -1,0 +1,5 @@
+2025-11-26 02:18:16,104 - worker_0 - INFO - Starting verification for worker 0
+2025-11-26 02:18:16,104 - worker_0 - INFO - Round 1/5
+2025-11-26 02:18:16,105 - worker_0 - INFO - Wrote kernel and test files
+2025-11-26 02:18:20,713 - worker_0 - INFO - Test failed with code 1
+2025-11-26 02:18:20,714 - worker_0 - INFO - Refining kernel using deepseek-chat

@@ -25,6 +25,12 @@ try:
 except Exception:  # pragma: no cover - optional at runtime
     OpenAI = None  # type: ignore
 
+# Import our provider system
+try:
+    from utils.providers import get_model_provider
+except ImportError:
+    get_model_provider = None
+
 
 @dataclass
 class StreamDelta:
@@ -67,6 +73,18 @@ class EventAdapter:
     def _ensure_client(self) -> Any:
         if self._client is not None:
             return self._client
+        
+        # Try to use our provider system first
+        if get_model_provider is not None:
+            try:
+                provider = get_model_provider(self.model)
+                if provider and provider.is_available():
+                    self._client = provider
+                    return self._client
+            except Exception:
+                pass
+        
+        # Fallback to OpenAI SDK
         if OpenAI is None:
             raise RuntimeError(
                 "OpenAI SDK not available. Install openai>=1.40 and set OPENAI_API_KEY."
@@ -140,79 +158,112 @@ class EventAdapter:
             StreamDelta(start_ts, "stream_started", {"model": self.model})
         )
 
-        params: dict[str, Any] = {
-            "model": self.model,
-            "input": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "timeout": self.timeout_s,
-        }
-        if extras:
-            params.update(extras)
-        # store_responses is typically a client-side behavior in our design; include as hint
-        if self.store_responses:
-            params["store"] = True
-
         try:
-            with client.responses.stream(**params) as stream:  # type: ignore[attr-defined]
-                for event in stream:
-                    if self.stop_event.is_set():
-                        # cooperative cancel
-                        self._append_event(StreamDelta(time.time(), "canceled", {}))
-                        break
-                    # Determine event kind/type
-                    kind = (
-                        getattr(event, "type", None)
-                        or getattr(event, "event", None)
-                        or "unknown"
-                    )
-                    data: dict[str, Any] = {}
+            # Check if client is our provider system
+            if hasattr(client, 'get_response') and hasattr(client, 'name'):
+                # Use our provider system
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                
+                # Get response using our provider
+                response = client.get_response(self.model, messages, max_tokens=8000)
+                output_text = response.content or ""
+                output_text_parts.append(output_text)
+                
+                # Simulate streaming events for compatibility
+                self._append_event(
+                    StreamDelta(time.time(), "response.output_text.delta", {"delta": output_text})
+                )
+                self._append_event(
+                    StreamDelta(time.time(), "response.completed", {"response_id": "provider_response"})
+                )
+                
+                response_id = "provider_response"
+                
+                # Call delta callback if provided
+                if self.on_delta and output_text:
+                    try:
+                        self.on_delta(output_text)
+                    except Exception:
+                        pass
+                        
+            else:
+                # Use OpenAI Responses API
+                params: dict[str, Any] = {
+                    "model": self.model,
+                    "input": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "timeout": self.timeout_s,
+                }
+                if extras:
+                    params.update(extras)
+                # store_responses is typically a client-side behavior in our design; include as hint
+                if self.store_responses:
+                    params["store"] = True
 
-                    # Handle textual deltas per Responses API
-                    if kind == "response.output_text.delta":
-                        delta = getattr(event, "delta", None)
-                        if isinstance(delta, str) and delta:
-                            output_text_parts.append(delta)
-                            if self.on_delta:
-                                try:
-                                    self.on_delta(delta)
-                                except Exception:
-                                    pass
-                            data["delta"] = delta
+                with client.responses.stream(**params) as stream:  # type: ignore[attr-defined]
+                    for event in stream:
+                        if self.stop_event.is_set():
+                            # cooperative cancel
+                            self._append_event(StreamDelta(time.time(), "canceled", {}))
+                            break
+                        # Determine event kind/type
+                        kind = (
+                            getattr(event, "type", None)
+                            or getattr(event, "event", None)
+                            or "unknown"
+                        )
+                        data: dict[str, Any] = {}
 
-                    # Handle completed and IDs
-                    if kind == "response.completed" and hasattr(event, "response"):
-                        try:
-                            response_id = getattr(
-                                getattr(event, "response"), "id", None
-                            )
-                            if response_id:
-                                data["response_id"] = response_id
-                        except Exception:
-                            pass
+                        # Handle textual deltas per Responses API
+                        if kind == "response.output_text.delta":
+                            delta = getattr(event, "delta", None)
+                            if isinstance(delta, str) and delta:
+                                output_text_parts.append(delta)
+                                if self.on_delta:
+                                    try:
+                                        self.on_delta(delta)
+                                    except Exception:
+                                        pass
+                                data["delta"] = delta
 
-                    # Handle error events
-                    if kind == "response.error" and hasattr(event, "error"):
-                        try:
-                            err_obj = getattr(event, "error")
-                            msg = getattr(err_obj, "message", None)
-                            data["error"] = (
-                                msg if isinstance(msg, str) else str(err_obj)
-                            )
-                        except Exception:
-                            data["error"] = "unknown"
+                        # Handle completed and IDs
+                        if kind == "response.completed" and hasattr(event, "response"):
+                            try:
+                                response_id = getattr(
+                                    getattr(event, "response"), "id", None
+                                )
+                                if response_id:
+                                    data["response_id"] = response_id
+                            except Exception:
+                                pass
 
-                    # Fallback: best-effort ID extraction on any event
-                    if not data.get("response_id") and hasattr(event, "response"):
-                        try:
-                            rid = getattr(getattr(event, "response"), "id", None)
-                            if rid:
-                                data["response_id"] = rid
-                        except Exception:
-                            pass
+                        # Handle error events
+                        if kind == "response.error" and hasattr(event, "error"):
+                            try:
+                                err_obj = getattr(event, "error")
+                                msg = getattr(err_obj, "message", None)
+                                data["error"] = (
+                                    msg if isinstance(msg, str) else str(err_obj)
+                                )
+                            except Exception:
+                                data["error"] = "unknown"
 
-                    self._append_event(StreamDelta(time.time(), kind, data))
+                        # Fallback: best-effort ID extraction on any event
+                        if not data.get("response_id") and hasattr(event, "response"):
+                            try:
+                                rid = getattr(getattr(event, "response"), "id", None)
+                                if rid:
+                                    data["response_id"] = rid
+                            except Exception:
+                                pass
+
+                        self._append_event(StreamDelta(time.time(), kind, data))
+                        
         except Exception as e:
             error_msg = f"stream_error: {e.__class__.__name__}: {e}"
             self._append_event(

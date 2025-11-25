@@ -5,141 +5,141 @@
 
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-uv.lock
+# *.py[cod]
+# *$py.class
+# *.so
+# .Python
+# build/
+# develop-eggs/
+# dist/
+# downloads/
+# eggs/
+# .eggs/
+# lib/
+# lib64/
+# parts/
+# sdist/
+# var/
+# wheels/
+# share/python-wheels/
+# *.egg-info/
+# .installed.cfg
+# *.egg
+# MANIFEST
+# uv.lock
 
-# PyInstaller
-*.manifest
-*.spec
+# # PyInstaller
+# *.manifest
+# *.spec
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# # Installer logs
+# pip-log.txt
+# pip-delete-this-directory.txt
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
+# # Unit test / coverage reports
+# htmlcov/
+# .tox/
+# .nox/
+# .coverage
+# .coverage.*
+# .cache
+# nosetests.xml
+# coverage.xml
+# *.cover
+# *.py,cover
+# .hypothesis/
+# .pytest_cache/
+# cover/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# # Jupyter Notebook
+# .ipynb_checkpoints
 
-# IPython
-profile_default/
-ipython_config.py
+# # IPython
+# profile_default/
+# ipython_config.py
 
-# pyenv
-.python-version
+# # pyenv
+# .python-version
 
-# pipenv
-Pipfile.lock
+# # pipenv
+# Pipfile.lock
 
-# poetry
-poetry.lock
+# # poetry
+# poetry.lock
 
-# pdm
-.pdm.toml
+# # pdm
+# .pdm.toml
 
-# PEP 582
-__pypackages__/
+# # PEP 582
+# __pypackages__/
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+# # Celery stuff
+# celerybeat-schedule
+# celerybeat.pid
 
-# SageMath parsed files
-*.sage.py
+# # SageMath parsed files
+# *.sage.py
 
-# Environments
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+# # Environments
+# .venv
+# env/
+# venv/
+# ENV/
+# env.bak/
+# venv.bak/
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# # Spyder project settings
+# .spyderproject
+# .spyproject
 
-# Rope project settings
-.ropeproject
+# # Rope project settings
+# .ropeproject
 
-# mkdocs documentation
-/site
+# # mkdocs documentation
+# /site
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# # mypy
+# .mypy_cache/
+# .dmypy.json
+# dmypy.json
 
-# Pyre type checker
-.pyre/
+# # Pyre type checker
+# .pyre/
 
-# pytype static type analyzer
-.pytype/
+# # pytype static type analyzer
+# .pytype/
 
-# Cython debug symbols
-cython_debug/
+# # Cython debug symbols
+# cython_debug/
 
-# KernelFalcon specific
-triton_kernel_logs/
-*.log
-session_*/
-worker_*/
-.fuse/
+# # KernelFalcon specific
+# triton_kernel_logs/
+# *.log
+# session_*/
+# worker_*/
+# .fuse/
 
-# Generated kernels
-kernel.py
-test_kernel.py
-final_test.py
-*_kernel.py
+# # Generated kernels
+# kernel.py
+# test_kernel.py
+# final_test.py
+# *_kernel.py
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-CLAUDE.md
+# # IDE
+# .vscode/
+# .idea/
+# *.swp
+# *.swo
+# *~
+# CLAUDE.md
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-# Local batch runner
-scripts/run_kernelbench_batch.py
+# # OS
+# .DS_Store
+# .DS_Store?
+# ._*
+# .Spotlight-V100
+# .Trashes
+# ehthumbs.db
+# Thumbs.db
+# # Local batch runner
+# scripts/run_kernelbench_batch.py

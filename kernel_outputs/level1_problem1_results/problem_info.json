@@ -1,0 +1,30 @@
+{
+  "id": 12,
+  "level": 1,
+  "problem_id": 1,
+  "operation_name": "1_Square_matrix_multiplication_",
+  "pytorch_code": "import torch\nimport torch.nn as nn\n\nclass Model(nn.Module):\n    \"\"\"\n    Simple model that performs a single square matrix multiplication (C = A * B)\n    \"\"\"\n    def __init__(self):\n        super(Model, self).__init__()\n    \n    def forward(self, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:\n        \"\"\"\n        Performs the matrix multiplication.\n\n        Args:\n            A (torch.Tensor): Input matrix A of shape (N, N).\n            B (torch.Tensor): Input matrix B of shape (N, N).\n\n        Returns:\n            torch.Tensor: Output matrix C of shape (N, N).\n        \"\"\"\n        return torch.matmul(A, B)\n\nN = 2048 * 2\n\ndef get_inputs():\n    A = torch.rand(N, N)\n    B = torch.rand(N, N)\n    return [A, B]\n\ndef get_init_inputs():\n    return []  # No special initialization inputs needed",
+  "input_shapes": [
+    [
+      2048,
+      2048
+    ],
+    [
+      2048,
+      2048
+    ]
+  ],
+  "output_shapes": [
+    [
+      2048,
+      2048
+    ]
+  ],
+  "data_types": [
+    "torch.float32"
+  ],
+  "description": "1_Square_matrix_multiplication_ operation",
+  "difficulty": "easy",
+  "category": "elementwise",
+  "created_at": "2025-11-25 01:16:55"
+}

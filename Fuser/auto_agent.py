@@ -310,13 +310,13 @@ class AutoKernelRouter:
         ka_max_rounds: int = 10,
         ka_high_reasoning: bool = True,
         # Router LLM
-        router_model: Optional[str] = "gpt-5",
+        router_model: Optional[str] = None,
         router_high_reasoning: bool = True,
         router_temperature: float = 0.2,
         router_max_tokens: int = 700,
-        extract_model: str = "gpt-5",
-        dispatch_model: str = "o4-mini",
-        compose_model: str = "o4-mini",
+        extract_model: Optional[str] = None,
+        dispatch_model: Optional[str] = None,
+        compose_model: Optional[str] = None,
         workers: int = 4,
         max_iters: int = 5,
         llm_timeout_s: int = 1200,
@@ -326,18 +326,23 @@ class AutoKernelRouter:
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
     ) -> None:
-        self.ka_model = ka_model
+        import os
+        
+        # Load default models from environment variables
+        default_model = os.getenv("OPENAI_MODEL", "deepseek-chat")
+        
+        self.ka_model = ka_model or default_model
         self.ka_num_workers = ka_num_workers
         self.ka_max_rounds = ka_max_rounds
         self.ka_high_reasoning = ka_high_reasoning
         # Router
-        self.router_model = router_model
+        self.router_model = router_model or default_model
         self.router_high_reasoning = router_high_reasoning
         self.router_temperature = router_temperature
         self.router_max_tokens = router_max_tokens
-        self.extract_model = extract_model
-        self.dispatch_model = dispatch_model
-        self.compose_model = compose_model
+        self.extract_model = extract_model or os.getenv("FUSER_EXTRACT_MODEL", default_model)
+        self.dispatch_model = dispatch_model or os.getenv("FUSER_DISPATCH_MODEL", default_model)
+        self.compose_model = compose_model or os.getenv("FUSER_COMPOSE_MODEL", default_model)
         self.workers = workers
         self.max_iters = max_iters
         self.llm_timeout_s = llm_timeout_s

@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
 from utils.providers import get_model_provider
+from utils.performance_benchmark import benchmark_successful_kernel
 
 
 class TritonKernelAgent:
@@ -490,17 +491,38 @@ def kernel_function(*args, **kwargs):
             with open(session_dir / "final_kernel.py", "w") as f:
                 f.write(result["kernel_code"])
 
-            # Save full result
-            with open(session_dir / "result.json", "w") as f:
-                json.dump(result, f, indent=2)
+            # Run performance benchmark on successful kernel
+            performance_results = benchmark_successful_kernel(str(session_dir))
+            
+            # Log performance results
+            if performance_results and performance_results["success"]:
+                self.logger.info("=" * 60)
+                self.logger.info("🏆 性能基准测试结果")
+                self.logger.info("=" * 60)
+                self.logger.info(f"PyTorch时间: {performance_results['pytorch_time_ms']:.3f}ms")
+                self.logger.info(f"Triton时间: {performance_results['triton_time_ms']:.3f}ms")
+                self.logger.info(f"加速比: {performance_results['speedup']:.2f}x")
+                self.logger.info("=" * 60)
+            elif performance_results:
+                self.logger.warning(f"性能测试失败: {performance_results.get('error', 'Unknown error')}")
+            else:
+                self.logger.warning("无法运行性能测试")
 
-            return {
+            # Save full result with performance data
+            full_result = {
                 "success": True,
                 "kernel_code": result["kernel_code"],
                 "worker_id": result["worker_id"],
                 "rounds": result["rounds"],
                 "session_dir": str(session_dir),
+                "performance": performance_results
             }
+
+            # Save full result
+            with open(session_dir / "result.json", "w") as f:
+                json.dump(full_result, f, indent=2)
+
+            return full_result
         else:
             self.logger.warning("No worker found a successful solution")
             return {

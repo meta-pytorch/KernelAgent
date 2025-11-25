@@ -1,0 +1,8 @@
+{
+  "success": true,
+  "error": null,
+  "pytorch_time_ms": 0.013343337923288345,
+  "triton_time_ms": 0.03149881958961487,
+  "speedup": 0.4236139035409324,
+  "memory_usage_mb": 0.001953125
+}

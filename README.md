@@ -31,11 +31,15 @@ Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, includi
 pip install -e .
 ```
 
+The `datasets` package for KernelBench integration is included in dependencies.
+
 #### (Optional) Install KernelBench for problem examples
 ```bash
 git clone https://github.com/ScalingIntelligence/KernelBench.git
 ```
 Note: By default, KernelAgent UI searches for KernelBench at the same level as `KernelAgent`. (i.e. `../KernelBench`)
+
+**New**: KernelBench problems are now automatically loaded from Hugging Face datasets. No manual installation required!
 
 ### Configure
 You can export keys directly or use an `.env` file that the CLIs load automatically.
@@ -65,6 +69,22 @@ LLM_RELAY_TIMEOUT_S=120
 More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 
 ## End-to-End Workflows
+
+### New: KernelBench Integration (Recommended)
+
+- **Generate kernels from KernelBench dataset** — automatically loads problems from Hugging Face and generates Triton kernels:
+  ```bash
+  # Generate Level 1 Problem 19 (ReLU) using direct KernelAgent
+  python generate_kernel.py --level 1 --problem_id 19 --method direct
+  
+  # Generate Level 2 Problem 1 (MatMul) using AutoRouter with verification
+  python generate_kernel.py --level 2 --problem_id 1 --method auto --verify
+  
+  # Quick start with examples
+  python example_usage.py
+  ```
+
+### Original Workflows
 
 - **Auto-route a KernelBench problem** — static analysis picks between the direct KernelAgent path and the full Fuser pipeline, with automatic fallback if the first attempt fails:
   ```bash
