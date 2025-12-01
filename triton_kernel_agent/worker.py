@@ -260,26 +260,44 @@ class VerificationWorker:
 
             # Template enforces testsfiles to call sys.exit(0)
             # This should NOT be reached
-            result_queue.put((False, stdout_buffer.getvalue(), "Test misformatted; did not call sys.exit(#) " + stderr_buffer.getvalue()))
+            result_queue.put(
+                (
+                    False,
+                    stdout_buffer.getvalue(),
+                    "Test misformatted; did not call sys.exit(#) "
+                    + stderr_buffer.getvalue(),
+                )
+            )
 
         except SystemExit as e:
             # Test code template calls sys.exit()
             if e.code == 0 or e.code is None:
-                result_queue.put((True, stdout_buffer.getvalue(), stderr_buffer.getvalue()))
+                result_queue.put(
+                    (True, stdout_buffer.getvalue(), stderr_buffer.getvalue())
+                )
             else:
                 # Non-zero exit code means failure
-                result_queue.put((False, stdout_buffer.getvalue(), f"Test exited with code {e.code} " + stderr_buffer.getvalue()))
+                result_queue.put(
+                    (
+                        False,
+                        stdout_buffer.getvalue(),
+                        f"Test exited with code {e.code} " + stderr_buffer.getvalue(),
+                    )
+                )
 
         except BaseException:
             result_queue.put(
-                (False, stdout_buffer.getvalue(), stderr_buffer.getvalue() + traceback.format_exc())
+                (
+                    False,
+                    stdout_buffer.getvalue(),
+                    stderr_buffer.getvalue() + traceback.format_exc(),
+                )
             )
 
         finally:
             # Restore original stdout/stderr
             sys.stdout = original_stdout
             sys.stderr = original_stderr
-
 
     def _run_test(self) -> Tuple[bool, str, str]:
         """
