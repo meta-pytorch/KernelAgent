@@ -15,13 +15,12 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import signal
-import subprocess
 import sys
 import time
 import stat
 import random
 import threading
+import multiprocessing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -109,6 +108,31 @@ def _write_sitecustomize_block_network(dst_dir: Path) -> None:
     (dst_dir / "sitecustomize.py").write_text(code, encoding="utf-8")
 
 
+def _run_candidate_process(
+    exec_filename: str,
+    run_dir: Path,
+    argv: list[str],
+    env: dict[str, str],
+    stdout_path: Path,
+    stderr_path: Path,
+) -> None:
+    """Target function for multiprocessing.Process that executes the candidate."""
+    with stdout_path.open("wb") as f_out, stderr_path.open("wb") as f_err:
+        os.chdir(str(run_dir))
+        # Replace environment
+        os.environ.clear()
+        os.environ.update(env)
+        # Redirect stdout/stderr
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(f_out.fileno(), sys.stdout.fileno())
+        os.dup2(f_err.fileno(), sys.stderr.fileno())
+        # Execute the target script
+        with open(exec_filename, "r") as f:
+            code = compile(f.read(), exec_filename, "exec")
+            exec(code, {"__name__": "__main__"})
+
+
 def run_candidate(
     artifacts_code_path: Path,
     run_root: Path,
@@ -157,75 +181,52 @@ def run_candidate(
 
     t_started = time.time()
     (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
-    f_out = stdout_path.open("wb")
-    f_err = stderr_path.open("wb")
-    try:
-        p = subprocess.Popen(
-            argv,
-            cwd=str(run_dir),
-            stdin=subprocess.DEVNULL,
-            stdout=f_out,
-            stderr=f_err,
-            start_new_session=True,
-            env=env,
-        )
-    except Exception:
-        f_out.close()
-        f_err.close()
-        raise
+    
+    # Create process using multiprocessing
+    p = multiprocessing.Process(
+        target=_run_candidate_process,
+        args=(exec_filename, run_dir, argv, env, stdout_path, stderr_path),
+    )
+    p.start()
 
     rc: int
     try:
         while True:
-            try:
-                rc = p.wait(timeout=0.1)
+            p.join(timeout=0.1)
+            if not p.is_alive():
+                rc = p.exitcode if p.exitcode is not None else 0
                 break
-            except subprocess.TimeoutExpired:
-                if cancel_event is not None and cancel_event.is_set():
-                    # Kill process group
-                    try:
-                        os.killpg(p.pid, signal.SIGTERM)
-                    except Exception:
-                        pass
-                    try:
-                        p.wait(timeout=1.0)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(p.pid, signal.SIGKILL)
-                        except Exception:
-                            pass
-                        p.wait(timeout=1.0)
-                    rc = p.returncode if p.returncode is not None else -9
-                    break
-                # Check wall-clock timeout
-                if time.time() - t_started > timeout_s:
-                    try:
-                        os.killpg(p.pid, signal.SIGTERM)
-                    except Exception:
-                        pass
-                    try:
-                        p.wait(timeout=1.0)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(p.pid, signal.SIGKILL)
-                        except Exception:
-                            pass
-                        p.wait(timeout=1.0)
-                    rc = p.returncode if p.returncode is not None else -9
-                    break
+            
+            if cancel_event is not None and cancel_event.is_set():
+                # Terminate process
+                p.terminate()
+                try:
+                    p.join(timeout=1.0)
+                except Exception:
+                    pass
+                if p.is_alive():
+                    p.kill()
+                    p.join(timeout=1.0)
+                rc = p.exitcode if p.exitcode is not None else -9
+                break
+            
+            # Check wall-clock timeout
+            if time.time() - t_started > timeout_s:
+                p.terminate()
+                try:
+                    p.join(timeout=1.0)
+                except Exception:
+                    pass
+                if p.is_alive():
+                    p.kill()
+                    p.join(timeout=1.0)
+                rc = p.exitcode if p.exitcode is not None else -9
+                break
         # End while
     finally:
         t_finished = time.time()
         try:
             (run_dir / "EXEC_FINISHED").write_text(str(t_finished), encoding="utf-8")
-        except Exception:
-            pass
-        try:
-            f_out.close()
-        except Exception:
-            pass
-        try:
-            f_err.close()
         except Exception:
             pass
 
