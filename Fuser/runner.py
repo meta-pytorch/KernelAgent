@@ -181,7 +181,7 @@ def run_candidate(
 
     t_started = time.time()
     (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
-    
+
     # Create process using multiprocessing
     p = multiprocessing.Process(
         target=_run_candidate_process,
@@ -196,7 +196,7 @@ def run_candidate(
             if not p.is_alive():
                 rc = p.exitcode if p.exitcode is not None else 0
                 break
-            
+
             if cancel_event is not None and cancel_event.is_set():
                 # Terminate process
                 p.terminate()
@@ -209,7 +209,7 @@ def run_candidate(
                     p.join(timeout=1.0)
                 rc = p.exitcode if p.exitcode is not None else -9
                 break
-            
+
             # Check wall-clock timeout
             if time.time() - t_started > timeout_s:
                 p.terminate()
