@@ -50,7 +50,7 @@ class WorkerManager:
             openai_api_key: OpenAI API key for LLM refinement
             openai_model: OpenAI model name
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
-            target_platform: Target platform ('cuda' or 'intel_xpu')
+            target_platform: Target platform ('cuda' or 'xpu')
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds

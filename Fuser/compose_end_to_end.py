@@ -143,11 +143,9 @@ def _build_composition_prompt(
         )
     kernels_section = "\n".join(kernels_section_parts)
     # Platform-specific guidance
-    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
     platform_guidance = ""
 
-    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
-    if target_platform == "intel_xpu":
+    if target_platform == "xpu":
         platform_guidance = textwrap.dedent(
             """
             **CRITICAL PLATFORM REQUIREMENTS FOR INTEL XPU:**
@@ -181,7 +179,7 @@ def _build_composition_prompt(
         - Working Triton kernels generated for some subgraphs.
 
         TARGET PLATFORM: {target_platform}
-        DEVICE STRING: {device_str}
+        DEVICE STRING: {target_platform}
         {platform_guidance}
 
         Task:
@@ -192,7 +190,7 @@ def _build_composition_prompt(
 
         Hard requirements:
         - Return ONE complete Python file only, fenced as a single ```python block.
-        - Use device='{device_str}' for ALL tensor allocations in the code.
+        - Use device='{target_platform}' for ALL tensor allocations in the code.
         - Provide at least one @triton.jit kernel and a top-level Python wrapper
           named kernel_function(...). This wrapper must accept the same primary
           input tensor(s) as the model and any required weights/biases with shapes
@@ -261,9 +259,6 @@ def _build_refinement_prompt(
     err_tail = error_info.get("stderr_tail", "")
     out_tail = error_info.get("stdout_tail", "")
 
-    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
-
-    # TODO: Fix device string parameter
     guidance = textwrap.dedent(
         """
         You previously produced a composed Triton implementation, but it failed
@@ -271,7 +266,7 @@ def _build_refinement_prompt(
         corrected single-file implementation as one ```python block.
 
         TARGET PLATFORM: {target_platform}
-        DEVICE STRING: {device_str}
+        DEVICE STRING: {target_platform}
 
         Requirements remain the same. Additionally:
         - Fix any Triton compilation/runtime errors. For scalar constants in
@@ -326,7 +321,7 @@ def _auto_patch_common_triton_issues(code: str, target_platform: str = "cuda") -
             patched = patched.replace(old, new)
             changed = True
     # Remove cuda paterns
-    if target_platform == "intel_xpu":
+    if target_platform == "xpu":
         cuda_hacks = [
             'torch.cuda.is_available = lambda: True',
             '_orig_torch_device = torch.device',
@@ -517,7 +512,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument(
         "--platform",
         default="cuda",
-        choices=["cuda", "intel_xpu"],
+        choices=["cuda", "xpu"],
         help="Target platform (default: cuda)"
     )
     p.add_argument("--max-iters", type=int, default=5, help="Max LLM refinement rounds")

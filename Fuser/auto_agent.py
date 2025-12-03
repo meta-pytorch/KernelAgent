@@ -700,7 +700,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--verify", action="store_true")
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
-    p.add_argument("--platform", default="cuda", choices=["cuda", "intel_xpu"], help="Target platform (default: cuda)")
+    p.add_argument("--platform", default="cuda", choices=["cuda", "xpu"], help="Target platform (default: cuda)")
     args = p.parse_args(argv)
 
     # Load environment variables from .env file

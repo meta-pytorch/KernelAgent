@@ -42,7 +42,7 @@ class PromptManager:
 
         Args:
             templates_dir: Path to the templates directory. If None, uses default.
-            platform: Target platform ('cuda' or 'intel_xpu')
+            platform: Target platform ('cuda' or 'xpu')
         """
         if not JINJA2_AVAILABLE:
             raise ImportError(

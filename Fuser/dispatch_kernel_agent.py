@@ -267,7 +267,6 @@ def _synthesize_problem_description(item: Dict[str, Any], target_platform: str =
     ref_code, _ = _build_reference_code(item)
 
     # Get device string for the platform
-    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
     header = textwrap.dedent(
         f"""
         Implement a Triton kernel that computes the following subgraph end-to-end.
@@ -277,7 +276,7 @@ def _synthesize_problem_description(item: Dict[str, Any], target_platform: str =
         Data layout: {layout}
         DType: {dtype}
         Target Platform: {target_platform}
-        Device String: {device_str}
+        Device String: {target_platform}
 
         Shapes:
         - input: {_fmt_shape(inputs_multi[0]) if isinstance(inputs_multi, list) else _fmt_shape(input_shape)}
@@ -295,7 +294,7 @@ def _synthesize_problem_description(item: Dict[str, Any], target_platform: str =
         - kernel_function must accept input tensor(s) and any required weights/bias parameters (match shapes above).
         - Implement the exact semantics of the listed ops in the given order for the provided shapes.
         - Use {layout} layout and {dtype} dtype semantics.
-        - Use device='{device_str}' for all tensor allocations in the wrapper function.
+        - Use device='{target_platform}' for all tensor allocations in the wrapper function.
         - The test will import kernel_function and compare to the reference implementation below.
 
         Test tolerance policy (enforced in generated tests):
@@ -436,7 +435,7 @@ def main(argv: List[str] | None = None) -> int:
     p.add_argument(
         "--platform",
         default="cuda",
-        choices=["cuda", "intel_xpu"],
+        choices=["cuda", "xpu"],
         help="Target platform (default: cuda)"
     )
     args = p.parse_args(argv)

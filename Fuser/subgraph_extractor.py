@@ -360,7 +360,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--max-iters", type=int, default=5)
     p.add_argument("--llm-timeout-s", type=int, default=2400)
     p.add_argument("--run-timeout-s", type=int, default=2400)
-    p.add_argument("--platform", default="cuda", choices=["cuda", "intel_xpu"], help="Target platform")
+    p.add_argument("--platform", default="cuda", choices=["cuda", "xpu"], help="Target platform")
     args = p.parse_args(argv)
 
     try:

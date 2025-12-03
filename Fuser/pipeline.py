@@ -166,7 +166,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--out-root", default=None)
     p.add_argument("--verify", action="store_true")
     p.add_argument("--compose-max-iters", type=int, default=5)
-    p.add_argument("--platform", default="cuda", choices=["cuda", "intel_xpu"], help="Target platform")
+    p.add_argument("--platform", default="cuda", choices=["cuda", "xpu"], help="Target platform")
     args = p.parse_args(argv)
 
     problem_path = Path(args.problem).resolve()

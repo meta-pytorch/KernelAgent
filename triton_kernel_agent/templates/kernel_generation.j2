@@ -67,7 +67,7 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
 9. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch operators in the execution path
 
-{% if target_platform == "intel_xpu" %}
+{% if target_platform == "xpu" %}
 
 ## Intel XPU-Specific Optimizations
 

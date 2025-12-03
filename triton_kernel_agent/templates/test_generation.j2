@@ -101,7 +101,7 @@ def test_kernel():
             print("kernel_function is not callable")
             return False
 
-        {% if target_platform == "intel_xpu" %}
+        {% if target_platform == "xpu" %}
         device = "xpu"
         if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
             raise RuntimeError("Intel XPU not available. Install PyTorch with Intel GPU support.")

@@ -49,7 +49,7 @@ class TritonKernelAgent:
             log_dir: Directory for logs (creates temp if None)
             model_name: OpenAI model to use (loaded from .env if None)
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
-            target_platform: Target platform ('cuda' or 'intel_xpu')
+            target_platform: Target platform ('cuda' or 'xpu')
         """
         # Load environment variables
         load_dotenv()
