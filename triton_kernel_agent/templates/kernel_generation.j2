@@ -47,8 +47,8 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
    - This wrapper is what the test will import and call
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
-- DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation
-- DO NOT use PyTorch operations to perform the actual computation and just return the result
+- DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, torch.matmul, torch.mm, torch.bmm, torch.einsum, etc.) inside the kernel computation
+- DO NOT use PyTorch operations to perform the actual computation and just return the result (this includes tensor-tensor ops such as x.matmul(y), x.bmm(y), x.mm(y), or x.einsum(...))
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
