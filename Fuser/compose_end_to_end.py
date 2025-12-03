@@ -128,6 +128,7 @@ def _build_composition_prompt(
     problem_code: str,
     subgraphs: List[Dict[str, Any]],
     kernel_items: List[KernelItem],
+    target_platform: str = "cuda",
 ) -> str:
     """Create a single user message to instruct composition by the LLM."""
     # Provide a succinct summary of subgraphs up front
@@ -141,13 +142,47 @@ def _build_composition_prompt(
             f"### Subgraph {ki.subgraph_id}\n```python\n" + ki.code + "\n```\n"
         )
     kernels_section = "\n".join(kernels_section_parts)
+    # Platform-specific guidance
+    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
+    platform_guidance = ""
+
+    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
+    if target_platform == "intel_xpu":
+        platform_guidance = textwrap.dedent(
+            """
+            **CRITICAL PLATFORM REQUIREMENTS FOR INTEL XPU:**
+            - Use device='xpu' for ALL tensor allocations (never 'cuda')
+            - Check availability with: hasattr(torch, 'xpu') and torch.xpu.is_available()
+            - Do NOT monkey-patch torch.cuda or torch.device
+            - Do NOT set TRITON_BACKENDS environment variable
+            - Do NOT import or disable XPUDriver
+            - Use torch.xpu.synchronize() if synchronization is needed
+            - Intel XPU subgroup size is typically 16 (not 32 like CUDA warps)
+            - Preferred block sizes: 64, 128, 256, or 512
+            """
+        ).strip()
+    else:
+        platform_guidance = textwrap.dedent(
+            """
+            **PLATFORM REQUIREMENTS FOR CUDA:**
+            - Use device='cuda' for ALL tensor allocations
+            - Check availability with: torch.cuda.is_available()
+            - Use torch.cuda.synchronize() if synchronization is needed
+            - CUDA warp size is 32
+            - Preferred block sizes: 64, 128, 256, 512, or 1024
+            """
+        ).strip()
 
     guidance = textwrap.dedent(
-        """
+        f"""
         You are given:
         - The original problem file (PyTorch module and helpers).
         - A decomposition of the model into fusable subgraphs with exact shapes.
         - Working Triton kernels generated for some subgraphs.
+
+        TARGET PLATFORM: {target_platform}
+        DEVICE STRING: {device_str}
+        {platform_guidance}
 
         Task:
         - Compose an end-to-end Triton implementation that matches the original
@@ -157,6 +192,7 @@ def _build_composition_prompt(
 
         Hard requirements:
         - Return ONE complete Python file only, fenced as a single ```python block.
+        - Use device='{device_str}' for ALL tensor allocations in the code.
         - Provide at least one @triton.jit kernel and a top-level Python wrapper
           named kernel_function(...). This wrapper must accept the same primary
           input tensor(s) as the model and any required weights/biases with shapes
@@ -177,6 +213,9 @@ def _build_composition_prompt(
           'PASS' on success and exit with code 0. Use allclose with rtol<=1e-3,
           atol<=1e-3 for fp32; for fp16/bf16 allow up to 2e-2.
         - No imports beyond torch, triton, triton.language as tl, and stdlib. No I/O.
+        - Do NOT monkey-patch PyTorch device functions or torch.cuda.is_available()
+        - Do NOT manipulate TRITON_BACKENDS environment variable
+        - Do NOT disable or mock XPU/CUDA drivers
 
         Implementation tips:
         - If merging multiple subgraphs, ensure intermediate tensor shapes match.
@@ -216,15 +255,23 @@ def _build_refinement_prompt(
     kernel_items: List[KernelItem],
     previous_code: str,
     error_info: Dict[str, str],
+    target_platform: str = "cuda",
 ) -> str:
     """Prompt the LLM to refine the previously produced code based on errors."""
     err_tail = error_info.get("stderr_tail", "")
     out_tail = error_info.get("stdout_tail", "")
+
+    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
+
+    # TODO: Fix device string parameter
     guidance = textwrap.dedent(
         """
         You previously produced a composed Triton implementation, but it failed
         to run/compile. Analyze the ERROR_CONTEXT below and re-emit the entire
         corrected single-file implementation as one ```python block.
+
+        TARGET PLATFORM: {target_platform}
+        DEVICE STRING: {device_str}
 
         Requirements remain the same. Additionally:
         - Fix any Triton compilation/runtime errors. For scalar constants in
@@ -259,7 +306,7 @@ def _build_refinement_prompt(
     return "\n".join(lines)
 
 
-def _auto_patch_common_triton_issues(code: str) -> Tuple[str, bool]:
+def _auto_patch_common_triton_issues(code: str, target_platform: str = "cuda") -> Tuple[str, bool]:
     """Apply tiny safe textual patches for known Triton pitfalls.
 
     - Replace tl.broadcast(0.0, ...) or tl.broadcast(1.0, ...) with scalar constants.
@@ -278,6 +325,37 @@ def _auto_patch_common_triton_issues(code: str) -> Tuple[str, bool]:
         if old in patched:
             patched = patched.replace(old, new)
             changed = True
+    # Remove cuda paterns
+    if target_platform == "intel_xpu":
+        cuda_hacks = [
+            'torch.cuda.is_available = lambda: True',
+            '_orig_torch_device = torch.device',
+            '_real_torch_device = torch.device',
+            'def _fake_torch_device',
+            'torch.device = _fake_torch_device',
+            'os.environ["TRITON_BACKENDS"] = "cuda"',
+            'from triton.backends.intel.driver import XPUDriver',
+            'XPUDriver.is_available = classmethod(lambda cls: False)',
+        ]
+        for hack in cuda_hacks:
+            if hack in patched:
+                # Remove lines containing these patterns
+                lines = patched.split('\n')
+                filtered_lines = []
+                skip_until_blank = False
+                for line in lines:
+                    if any(h in line for h in cuda_hacks):
+                        changed = True
+                        if 'def _fake_torch_device' in line:
+                            skip_until_blank = True
+                        continue
+                    if skip_until_blank:
+                        if line.strip() == '':
+                            skip_until_blank = False
+                        continue
+                    filtered_lines.append(line)
+                    patched = '\n'.join(filtered_lines)
+
     return patched, changed
 
 
@@ -289,6 +367,7 @@ def compose(
     model_name: str,
     verify: bool = False,
     max_iters: int = 5,
+    target_platform: str = "cuda",
 ) -> Dict[str, Any]:
     if get_model_provider is None:
         raise SystemExit(
@@ -314,7 +393,7 @@ def compose(
 
     for i in range(1, max_iters + 1):
         if i == 1 or last_code is None:
-            prompt = _build_composition_prompt(problem_code, subgraphs, kernels)
+            prompt = _build_composition_prompt(problem_code, subgraphs, kernels, target_platform=target_platform)
         else:
             # Build refinement using previous error info
             stderr_tail = ""
@@ -344,6 +423,7 @@ def compose(
                 kernels,
                 previous_code=last_code,
                 error_info={"stderr_tail": stderr_tail, "stdout_tail": stdout_tail},
+                target_platform=target_platform,
             )
 
         (attempts_dir / f"attempt_{i}.prompt.txt").write_text(prompt, encoding="utf-8")
@@ -394,6 +474,7 @@ def compose(
         "model": model_name,
         "usage": last_usage,
         "rounds": i,
+        "target_platform": target_platform,
     }
     result.update(verify_info)
 
@@ -433,6 +514,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Execute generated file and check PASS sentinel",
     )
+    p.add_argument(
+        "--platform",
+        default="cuda",
+        choices=["cuda", "intel_xpu"],
+        help="Target platform (default: cuda)"
+    )
     p.add_argument("--max-iters", type=int, default=5, help="Max LLM refinement rounds")
     args = p.parse_args(argv)
 
@@ -460,6 +547,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             model_name=args.model,
             verify=args.verify,
             max_iters=args.max_iters,
+            target_platform=args.platform,
         )
         print(json.dumps(res, indent=2))
         return 0

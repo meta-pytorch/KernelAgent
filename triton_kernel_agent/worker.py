@@ -82,6 +82,7 @@ class VerificationWorker:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
+        target_platform: str = "cuda",
     ):
         """
         Initialize a verification worker.
@@ -95,6 +96,7 @@ class VerificationWorker:
             openai_api_key: OpenAI API key for refinement
             openai_model: Model name for refinement
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            target_platform: Target platform default: cuda
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -103,6 +105,7 @@ class VerificationWorker:
         self.history_size = history_size
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        self.target_platform = target_platform
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -123,7 +126,7 @@ class VerificationWorker:
             self.logger.warning(f"Provider not available: {e}")
 
         # Initialize prompt manager
-        self.prompt_manager = PromptManager()
+        self.prompt_manager = PromptManager(platform=target_platform)
 
     def _setup_logging(self):
         """Setup worker-specific logging."""

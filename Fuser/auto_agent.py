@@ -325,6 +325,7 @@ class AutoKernelRouter:
         verify: bool = True,
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
+        target_platform: str = "cuda",
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -346,6 +347,7 @@ class AutoKernelRouter:
         self.verify = verify
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
+        self.target_platform = target_platform
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -353,6 +355,7 @@ class AutoKernelRouter:
             max_rounds=self.ka_max_rounds,
             model_name=self.ka_model,
             high_reasoning_effort=self.ka_high_reasoning,
+            target_platform=self.target_platform,
         )
         try:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
@@ -416,6 +419,7 @@ class AutoKernelRouter:
                 run_timeout_s=self.run_timeout_s,
                 verify=self.verify,
                 compose_max_iters=self.compose_max_iters,
+                target_platform=self.target_platform,
             )
         except BaseException as exc:  # catch SystemExit and others
             # Return a structured failure so caller can decide on fallback
@@ -696,6 +700,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--verify", action="store_true")
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
+    p.add_argument("--platform", default="cuda", choices=["cuda", "intel_xpu"], help="Target platform (default: cuda)")
     args = p.parse_args(argv)
 
     # Load environment variables from .env file

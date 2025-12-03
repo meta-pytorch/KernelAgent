@@ -101,6 +101,16 @@ def test_kernel():
             print("kernel_function is not callable")
             return False
 
+        {% if target_platform == "intel_xpu" %}
+        device = "xpu"
+        if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
+            raise RuntimeError("Intel XPU not available. Install PyTorch with Intel GPU support.")
+        {% else %}
+        device = "cuda"
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available")
+        {% endif %}
+
         # Create test data using EXACT specifications from problem description
         # If problem specifies shape/dtype, use those exact values
         # input_tensor = torch.randn(EXACT_SHAPE, dtype=EXACT_DTYPE, device='cuda')

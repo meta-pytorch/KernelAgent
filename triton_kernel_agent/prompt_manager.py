@@ -36,18 +36,20 @@ class PromptManager:
     for test generation, kernel generation, and kernel refinement.
     """
 
-    def __init__(self, templates_dir: Optional[str] = None):
+    def __init__(self, templates_dir: Optional[str] = None, platform: str = "cuda"):
         """
         Initialize the prompt manager.
 
         Args:
             templates_dir: Path to the templates directory. If None, uses default.
+            platform: Target platform ('cuda' or 'intel_xpu')
         """
         if not JINJA2_AVAILABLE:
             raise ImportError(
                 "Jinja2 is not available. Please install it with: pip install jinja2"
             )
 
+        self.platform = platform
         # Set up templates directory
         if templates_dir:
             self.templates_dir = Path(templates_dir)
@@ -136,6 +138,7 @@ class PromptManager:
             problem_description=problem_description,
             test_code=test_code,
             triton_guidelines=triton_guidelines,
+            target_platform=self.platform,
         )
 
     def render_kernel_refinement_prompt(

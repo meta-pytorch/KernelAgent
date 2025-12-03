@@ -67,6 +67,23 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
 9. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch operators in the execution path
 
+{% if target_platform == "intel_xpu" %}
+
+## Intel XPU-Specific Optimizations
+
+You are generating a Triton kernel for Intel XPU (Xe GPUs). Follow these guidelines:
+
+1. **Device Context**: Use 'xpu' as the device instead of 'cuda'
+2. **Memory Hierarchy**: Intel Xe has different cache sizes - optimize accordingly
+3. **Thread Configuration**:
+   - Subgroup size is typically 8, 16, or 32 (flexible)
+   - num_warps: typically 4, 8, or 16 for Intel GPUs
+   - BLOCK_SIZE: prefer 64, 128, 256, or 512
+4. **Optimal Block Sizes**: Start with 128-256 for most kernels
+5. **Data Types**: Intel supports fp32, fp16, bf16 (fp8 varies by generation)
+
+{% endif %}
+
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python
 import triton

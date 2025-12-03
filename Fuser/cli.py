@@ -75,6 +75,7 @@ def cmd_run(argv: list[str]) -> int:
     p.add_argument("--isolated", action="store_true", default=False)
     p.add_argument("--deny-network", action="store_true", default=False)
     p.add_argument("--enable-reasoning-extras", action="store_true", default=True)
+    p.add_argument("--platform", default="cuda", choices=["cuda", "intel_xpu"], help="Target platform")
     args = p.parse_args(argv)
 
     try:

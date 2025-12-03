@@ -252,7 +252,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     return "\n".join(lines) + "\n", params
 
 
-def _synthesize_problem_description(item: Dict[str, Any]) -> str:
+def _synthesize_problem_description(item: Dict[str, Any], target_platform: str = "cuda") -> str:
     id_ = str(item.get("id", "unknown"))
     type_ = str(item.get("type", ""))
     layout = item.get("data_layout") or "NCHW"
@@ -266,6 +266,8 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
 
     ref_code, _ = _build_reference_code(item)
 
+    # Get device string for the platform
+    device_str = "xpu" if target_platform == "intel_xpu" else "cuda"
     header = textwrap.dedent(
         f"""
         Implement a Triton kernel that computes the following subgraph end-to-end.
@@ -274,6 +276,8 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         Type: {type_}
         Data layout: {layout}
         DType: {dtype}
+        Target Platform: {target_platform}
+        Device String: {device_str}
 
         Shapes:
         - input: {_fmt_shape(inputs_multi[0]) if isinstance(inputs_multi, list) else _fmt_shape(input_shape)}
@@ -291,6 +295,7 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         - kernel_function must accept input tensor(s) and any required weights/bias parameters (match shapes above).
         - Implement the exact semantics of the listed ops in the given order for the provided shapes.
         - Use {layout} layout and {dtype} dtype semantics.
+        - Use device='{device_str}' for all tensor allocations in the wrapper function.
         - The test will import kernel_function and compare to the reference implementation below.
 
         Test tolerance policy (enforced in generated tests):
@@ -314,7 +319,7 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
 
 
 def run(
-    subgraphs_path: Path, out_dir: Path, agent_model: str | None = None, jobs: int = 1
+    subgraphs_path: Path, out_dir: Path, agent_model: str | None = None, jobs: int = 1, target_platform: str = "cuda",
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -338,14 +343,14 @@ def run(
     def _handle_one(idx_item: Tuple[int, Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
         idx, item = idx_item
         sid = str(item.get("id", f"subgraph_{idx}"))
-        pdesc = _synthesize_problem_description(item)
+        pdesc = _synthesize_problem_description(item, target_platform=target_platform)
         sg_dir = out_dir / sid
         sg_dir.mkdir(parents=True, exist_ok=True)
         (sg_dir / "problem.txt").write_text(pdesc, encoding="utf-8")
 
         # Pin KernelAgent concurrency defaults: 4 workers, 10 rounds
         local_agent = TritonKernelAgent(
-            num_workers=4, max_rounds=10, model_name=agent_model
+            num_workers=4, max_rounds=10, model_name=agent_model, target_platform=target_platform,
         )
         try:
             result = local_agent.generate_kernel(
@@ -428,6 +433,12 @@ def main(argv: List[str] | None = None) -> int:
         default="2",
         help="Max concurrent subgraphs to dispatch (default: 2); use 'auto' to match subgraph count",
     )
+    p.add_argument(
+        "--platform",
+        default="cuda",
+        choices=["cuda", "intel_xpu"],
+        help="Target platform (default: cuda)"
+    )
     args = p.parse_args(argv)
 
     subgraphs_path = Path(args.subgraphs).resolve()
@@ -451,7 +462,7 @@ def main(argv: List[str] | None = None) -> int:
         jobs_val = 1
 
     summary_path = run(
-        subgraphs_path, out_dir, agent_model=args.agent_model, jobs=jobs_val
+        subgraphs_path, out_dir, agent_model=args.agent_model, jobs=jobs_val, target_platform=args.platform,
     )
     print(str(summary_path))
     return 0

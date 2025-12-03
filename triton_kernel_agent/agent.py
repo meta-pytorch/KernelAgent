@@ -38,6 +38,7 @@ class TritonKernelAgent:
         log_dir: Optional[str] = None,
         model_name: Optional[str] = None,
         high_reasoning_effort: bool = True,
+        target_platform: str = "cuda",
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -48,6 +49,7 @@ class TritonKernelAgent:
             log_dir: Directory for logs (creates temp if None)
             model_name: OpenAI model to use (loaded from .env if None)
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            target_platform: Target platform ('cuda' or 'intel_xpu')
         """
         # Load environment variables
         load_dotenv()
@@ -59,6 +61,7 @@ class TritonKernelAgent:
             "OPENAI_MODEL", "claude-sonnet-4-20250514"
         )
         self.high_reasoning_effort = high_reasoning_effort
+        self.target_platform = target_platform
 
         # Initialize provider
         self.provider = None
@@ -83,7 +86,7 @@ class TritonKernelAgent:
         self._setup_logging()
 
         # Initialize prompt manager
-        self.prompt_manager = PromptManager()
+        self.prompt_manager = PromptManager(platform=target_platform)
 
         # Initialize worker manager
         self.manager = WorkerManager(
@@ -93,6 +96,7 @@ class TritonKernelAgent:
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_model=self.model_name,
             high_reasoning_effort=self.high_reasoning_effort,
+            target_platform=self.target_platform,
         )
 
     def _setup_logging(self):
