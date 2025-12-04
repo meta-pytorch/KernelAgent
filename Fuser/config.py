@@ -33,6 +33,7 @@ class OrchestratorConfig:
     isolated: bool = False
     deny_network: bool = False
     enable_reasoning_extras: bool = True
+    target_platform: str = "cuda"
 
     def to_json(self) -> str:
         d = asdict(self)
@@ -63,6 +64,7 @@ class WorkerConfig:
     stream_dir: Path
     workspace_dir: Path
     shared_digests_dir: Path
+    target_platform: str = "cuda"
 
 
 @dataclass

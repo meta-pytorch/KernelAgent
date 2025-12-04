@@ -91,6 +91,7 @@ class TritonKernelUI:
         model_name: str = "o3-2025-04-16",
         high_reasoning_effort: bool = True,
         user_api_key: Optional[str] = None,
+        target_platform: str = "cuda",
     ) -> Tuple[str, str, str, str, str, str]:
         """
         Generate a Triton kernel based on the problem description
@@ -138,7 +139,9 @@ class TritonKernelUI:
                 os.environ[key_env_var] = api_key
 
             agent = TritonKernelAgent(
-                model_name=model_name, high_reasoning_effort=high_reasoning_effort
+                model_name=model_name,
+                high_reasoning_effort=high_reasoning_effort,
+                target_platform=target_platform,
             )
 
             # If provider failed to initialize, return a clear error immediately
@@ -429,7 +432,12 @@ def _create_app() -> gr.Blocks:
                     info="Use high reasoning effort for better quality (o4-mini and o3 series only)",
                     interactive=True,
                 )
-
+                platform_dropdown = gr.Dropdown(
+                    choices=["cuda", "xpu"],
+                    label="🎯 Target Platform",
+                    value="cuda",
+                    info="CUDA for NVIDIA GPUs, XPU for Intel GPUs",
+                )
                 gr.Markdown("## 🧩 Problem Library")
 
                 problem_dropdown = gr.Dropdown(
@@ -538,7 +546,12 @@ def _create_app() -> gr.Blocks:
             return gr.update(value=problem_cache[selection])
 
         def generate_with_status(
-            problem_desc, test_code, model_name, high_reasoning_effort, user_api_key
+            problem_desc,
+            test_code,
+            model_name,
+            high_reasoning_effort,
+            user_api_key,
+            target_platform,
         ):
             """Wrapper for generate_kernel with status updates"""
             try:
@@ -548,6 +561,7 @@ def _create_app() -> gr.Blocks:
                     model_name,
                     high_reasoning_effort,
                     user_api_key,
+                    target_platform,
                 )
             except Exception as e:
                 error_msg = f"❌ **UI ERROR**: {str(e)}\n\n**Traceback:**\n{traceback.format_exc()}"
@@ -614,6 +628,7 @@ def _create_app() -> gr.Blocks:
                 model_dropdown,
                 high_reasoning_effort_checkbox,
                 api_key_input,
+                platform_dropdown,
             ],
             outputs=[
                 status_output,

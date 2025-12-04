@@ -100,6 +100,7 @@ class Orchestrator:
         self.console_threads: list[threading.Thread] = []
         self._stop_console = threading.Event()
         self._stream_mode = cfg.stream_mode
+        self.target_platform = cfg.target_platform
 
     def _make_worker_cfg(self, idx: int) -> WorkerConfig:
         worker_id = f"worker_{idx + 1:02d}"

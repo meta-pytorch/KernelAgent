@@ -157,6 +157,7 @@ def run_pipeline_ui(
     router_model: Optional[str] = None,
     router_high_reasoning: bool = True,
     user_api_key: Optional[str] = None,
+    target_platform: str = "cuda",
 ) -> PipelineArtifacts:
     from Fuser.auto_agent import AutoKernelRouter
     from Fuser.pipeline import run_pipeline
@@ -227,6 +228,7 @@ def run_pipeline_ui(
                 verify=verify,
                 dispatch_jobs=(dispatch_jobs if dispatch_jobs else "1"),
                 allow_fallback=True,
+                target_platform=target_platform,
             )
             rr = router.solve(problem_file)
             elapsed = time.time() - start_time
@@ -327,6 +329,7 @@ def run_pipeline_ui(
             out_root=None,
             verify=verify,
             compose_max_iters=compose_max_iters,
+            target_platform=target_platform,
         )
         elapsed = time.time() - start_time
         run_dir = Path(res.get("run_dir", ".")).resolve()
@@ -449,6 +452,7 @@ class PipelineUI:
         compose_max_iters: int,
         verify: bool,
         user_api_key: Optional[str],
+        target_platform: str = "cuda",
     ) -> Tuple[str, str, str, str, Optional[str]]:
         problem_mapping = {label: path for label, path in self.problem_choices}
         selected_path = problem_mapping.get(selected_problem_label, "")
@@ -471,6 +475,7 @@ class PipelineUI:
             router_model=router_model,
             router_high_reasoning=router_high_reasoning,
             user_api_key=user_api_key,
+            target_platform=target_platform,
         )
         return (
             arts.status_md,
@@ -613,7 +618,12 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
                 verify_checkbox = gr.Checkbox(
                     label="Verify composed kernel", value=True
                 )
-
+                platform_dropdown = gr.Dropdown(
+                    choices=["cuda", "xpu"],
+                    label="Target Platform",
+                    value="cuda",
+                    info="CUDA for NVIDIA GPUs, XPU for Intel GPUs",
+                )
                 run_button = gr.Button("🚀 Run Pipeline", variant="primary")
 
             with gr.Column(scale=1.5):
@@ -643,6 +653,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
             compose_max_iters: int,
             verify: bool,
             api_key: Optional[str],
+            target_platform: str,
         ):
             return ui.run(
                 selected_problem_label=selected_label,
@@ -661,6 +672,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
                 compose_max_iters=compose_max_iters,
                 verify=verify,
                 user_api_key=api_key,
+                target_platform=target_platform,
             )
 
         run_button.click(
@@ -682,6 +694,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
                 compose_iters_slider,
                 verify_checkbox,
                 api_key_input,
+                platform_dropdown,
             ],
             outputs=[status_out, details_out, code_out, run_info_out, download_out],
             show_progress=True,
