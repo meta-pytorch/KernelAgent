@@ -301,7 +301,9 @@ def _build_refinement_prompt(
     return "\n".join(lines)
 
 
-def _auto_patch_common_triton_issues(code: str, target_platform: str = "cuda") -> Tuple[str, bool]:
+def _auto_patch_common_triton_issues(
+    code: str, target_platform: str = "cuda"
+) -> Tuple[str, bool]:
     """Apply tiny safe textual patches for known Triton pitfalls.
 
     - Replace tl.broadcast(0.0, ...) or tl.broadcast(1.0, ...) with scalar constants.
@@ -323,33 +325,33 @@ def _auto_patch_common_triton_issues(code: str, target_platform: str = "cuda") -
     # Remove cuda paterns
     if target_platform == "xpu":
         cuda_hacks = [
-            'torch.cuda.is_available = lambda: True',
-            '_orig_torch_device = torch.device',
-            '_real_torch_device = torch.device',
-            'def _fake_torch_device',
-            'torch.device = _fake_torch_device',
+            "torch.cuda.is_available = lambda: True",
+            "_orig_torch_device = torch.device",
+            "_real_torch_device = torch.device",
+            "def _fake_torch_device",
+            "torch.device = _fake_torch_device",
             'os.environ["TRITON_BACKENDS"] = "cuda"',
-            'from triton.backends.intel.driver import XPUDriver',
-            'XPUDriver.is_available = classmethod(lambda cls: False)',
+            "from triton.backends.intel.driver import XPUDriver",
+            "XPUDriver.is_available = classmethod(lambda cls: False)",
         ]
         for hack in cuda_hacks:
             if hack in patched:
                 # Remove lines containing these patterns
-                lines = patched.split('\n')
+                lines = patched.split("\n")
                 filtered_lines = []
                 skip_until_blank = False
                 for line in lines:
                     if any(h in line for h in cuda_hacks):
                         changed = True
-                        if 'def _fake_torch_device' in line:
+                        if "def _fake_torch_device" in line:
                             skip_until_blank = True
                         continue
                     if skip_until_blank:
-                        if line.strip() == '':
+                        if line.strip() == "":
                             skip_until_blank = False
                         continue
                     filtered_lines.append(line)
-                    patched = '\n'.join(filtered_lines)
+                    patched = "\n".join(filtered_lines)
 
     return patched, changed
 
@@ -388,7 +390,9 @@ def compose(
 
     for i in range(1, max_iters + 1):
         if i == 1 or last_code is None:
-            prompt = _build_composition_prompt(problem_code, subgraphs, kernels, target_platform=target_platform)
+            prompt = _build_composition_prompt(
+                problem_code, subgraphs, kernels, target_platform=target_platform
+            )
         else:
             # Build refinement using previous error info
             stderr_tail = ""
@@ -513,7 +517,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--platform",
         default="cuda",
         choices=["cuda", "xpu"],
-        help="Target platform (default: cuda)"
+        help="Target platform (default: cuda)",
     )
     p.add_argument("--max-iters", type=int, default=5, help="Max LLM refinement rounds")
     args = p.parse_args(argv)

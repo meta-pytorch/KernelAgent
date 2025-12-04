@@ -64,7 +64,7 @@ class WorkerConfig:
     stream_dir: Path
     workspace_dir: Path
     shared_digests_dir: Path
-    target_platform: str = "cuda"  
+    target_platform: str = "cuda"
 
 
 @dataclass

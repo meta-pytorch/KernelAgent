@@ -438,8 +438,10 @@ class FuserAgentUI:
 
             # Determine device based on target platform
             if target_platform == "xpu":
-                if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
-                    return "*Intel XPU not available. Install PyTorch with XPU support.*"
+                if not hasattr(torch, "xpu") or not torch.xpu.is_available():
+                    return (
+                        "*Intel XPU not available. Install PyTorch with XPU support.*"
+                    )
                 device = "xpu"
             else:
                 if not torch.cuda.is_available():
@@ -578,7 +580,7 @@ class FuserAgentUI:
                     acts = [ProfilerActivity.CPU]
                     if target_platform == "xpu":
                         # XPU profiling support (requires PyTorch 2.4+ with XPU)
-                        if hasattr(ProfilerActivity, 'XPU'):
+                        if hasattr(ProfilerActivity, "XPU"):
                             acts.append(ProfilerActivity.XPU)
                     elif torch.cuda.is_available():
                         acts.append(ProfilerActivity.CUDA)
@@ -588,7 +590,7 @@ class FuserAgentUI:
                             _ = compiled(x)
                             # Synchronize based on platform
                             if target_platform == "xpu":
-                                if hasattr(torch, 'xpu'):
+                                if hasattr(torch, "xpu"):
                                     torch.xpu.synchronize()
                             elif torch.cuda.is_available():
                                 torch.cuda.synchronize()
@@ -640,7 +642,9 @@ class FuserAgentUI:
                             if len(names) >= 8:
                                 break
 
-                    platform_label = "xpu_kernels" if target_platform == "xpu" else "cuda_kernels"
+                    platform_label = (
+                        "xpu_kernels" if target_platform == "xpu" else "cuda_kernels"
+                    )
                     notes.append(
                         f"{platform_label}={len(kde)}; sample: "
                         + (", ".join(names) or "(none)")

@@ -139,7 +139,9 @@ class TritonKernelUI:
                 os.environ[key_env_var] = api_key
 
             agent = TritonKernelAgent(
-                model_name=model_name, high_reasoning_effort=high_reasoning_effort, target_platform=target_platform
+                model_name=model_name,
+                high_reasoning_effort=high_reasoning_effort,
+                target_platform=target_platform,
             )
 
             # If provider failed to initialize, return a clear error immediately
@@ -544,7 +546,12 @@ def _create_app() -> gr.Blocks:
             return gr.update(value=problem_cache[selection])
 
         def generate_with_status(
-            problem_desc, test_code, model_name, high_reasoning_effort, user_api_key, target_platform
+            problem_desc,
+            test_code,
+            model_name,
+            high_reasoning_effort,
+            user_api_key,
+            target_platform,
         ):
             """Wrapper for generate_kernel with status updates"""
             try:

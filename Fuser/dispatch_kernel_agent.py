@@ -252,7 +252,9 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     return "\n".join(lines) + "\n", params
 
 
-def _synthesize_problem_description(item: Dict[str, Any], target_platform: str = "cuda") -> str:
+def _synthesize_problem_description(
+    item: Dict[str, Any], target_platform: str = "cuda"
+) -> str:
     id_ = str(item.get("id", "unknown"))
     type_ = str(item.get("type", ""))
     layout = item.get("data_layout") or "NCHW"
@@ -318,7 +320,11 @@ def _synthesize_problem_description(item: Dict[str, Any], target_platform: str =
 
 
 def run(
-    subgraphs_path: Path, out_dir: Path, agent_model: str | None = None, jobs: int = 1, target_platform: str = "cuda",
+    subgraphs_path: Path,
+    out_dir: Path,
+    agent_model: str | None = None,
+    jobs: int = 1,
+    target_platform: str = "cuda",
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -349,7 +355,10 @@ def run(
 
         # Pin KernelAgent concurrency defaults: 4 workers, 10 rounds
         local_agent = TritonKernelAgent(
-            num_workers=4, max_rounds=10, model_name=agent_model, target_platform=target_platform,
+            num_workers=4,
+            max_rounds=10,
+            model_name=agent_model,
+            target_platform=target_platform,
         )
         try:
             result = local_agent.generate_kernel(
@@ -436,7 +445,7 @@ def main(argv: List[str] | None = None) -> int:
         "--platform",
         default="cuda",
         choices=["cuda", "xpu"],
-        help="Target platform (default: cuda)"
+        help="Target platform (default: cuda)",
     )
     args = p.parse_args(argv)
 
@@ -461,7 +470,11 @@ def main(argv: List[str] | None = None) -> int:
         jobs_val = 1
 
     summary_path = run(
-        subgraphs_path, out_dir, agent_model=args.agent_model, jobs=jobs_val, target_platform=args.platform,
+        subgraphs_path,
+        out_dir,
+        agent_model=args.agent_model,
+        jobs=jobs_val,
+        target_platform=args.platform,
     )
     print(str(summary_path))
     return 0
