@@ -50,6 +50,12 @@ class RelayProvider(BaseProvider):
     def get_response(
         self, model_name: str, messages: List[Dict[str, str]], **kwargs
     ) -> LLMResponse:
+        # Utilized kwargs:
+        # - max_tokens: int (default 8192)
+        # - text: str
+        # - seed: int
+        # - high_reasoning_effort: bool (default False)
+
         max_tokens = kwargs.get("max_tokens", 8192)
 
         # Prepare request data for the plugboard server
@@ -60,6 +66,16 @@ class RelayProvider(BaseProvider):
             "max_tokens": max_tokens,
             "top_p": 0.95,
         }
+
+        # Add reasoning config if high_reasoning_effort is set
+        if kwargs.get("high_reasoning_effort", None):
+            request_data["reasoning"] = {"effort": "high"}
+
+        # Add pass-through kwargs
+        nargs = ["text", "seed"]
+        for arg in nargs:
+            if arg in kwargs:
+                request_data[arg] = kwargs[arg]
 
         logging.debug("\n=== DEBUG: PROMPT SENT TO LLM RELAY ===")
         logging.debug(request_data)
