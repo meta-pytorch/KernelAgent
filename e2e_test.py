@@ -15,19 +15,33 @@
 
 """End-to-end BF16 matmul+sigmoid test harness."""
 
+from pathlib import Path
 import sys
 import time
 from dotenv import load_dotenv
+from hydra import main as hydra_main
+from omegaconf import DictConfig
 from triton_kernel_agent import TritonKernelAgent
 
 
-def main():
+@hydra_main(
+    version_base=None,
+    config_path=str(Path(__file__).resolve().parent / "configs"),
+    config_name="e2e_test",
+)
+def main(cfg: DictConfig) -> None:
     """Generate and test a BF16 matmul kernel with fused sigmoid activation."""
     # Load environment
     load_dotenv()
 
-    # Create agent
-    agent = TritonKernelAgent()
+    # Create agent with config parameters
+    agent = TritonKernelAgent(
+        num_workers=cfg.num_workers,
+        max_rounds=cfg.max_rounds,
+        log_dir=cfg.log_dir,
+        model_name=cfg.model_name,
+        high_reasoning_effort=cfg.high_reasoning_effort,
+    )
 
     print("=" * 80)
     print("BF16 Matmul with Fused Sigmoid Activation")
