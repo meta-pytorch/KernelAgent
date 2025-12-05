@@ -124,6 +124,10 @@ class OpenAICompatibleProvider(BaseProvider):
         else:
             params["max_tokens"] = max_tokens_value
 
+        # Add n parameter if specified
+        if "n" in kwargs:
+            params["n"] = kwargs["n"]
+
         # Auto-enable high reasoning for GPT-5
         if model_name.startswith("gpt-5"):
             params["reasoning_effort"] = "high"
@@ -131,12 +135,6 @@ class OpenAICompatibleProvider(BaseProvider):
             ("o3", "o1")
         ):
             params["reasoning_effort"] = "high"
-
-        # Add pass-through kwargs
-        nargs = ["n", "text", "seed"]
-        for arg in nargs:
-            if arg in kwargs:
-                params[arg] = kwargs[arg]
 
         return params
 
