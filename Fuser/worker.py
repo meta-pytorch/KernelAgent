@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Optional, Any, Callable
 
 from .config import WorkerConfig
+
 from .event_adapter import EventAdapter
+from utils.providers.models import get_model_provider, RelayProvider
 from .prompting import render_prompt, SYSTEM_PROMPT
 from .code_extractor import extract_single_python_file, sha256_of_code
 from .runner import run_candidate
@@ -117,21 +119,58 @@ class Worker:
             prompt_path = self.dirs["prompts"] / f"iteration_{k}.txt"
             prompt_path.write_text(rp.user, encoding="utf-8")
 
-            # Stream via EventAdapter
-            jsonl_path = self.dirs["responses"] / f"iteration_{k}.stream.jsonl"
-            adapter = EventAdapter(
-                model=self.cfg.model,
-                store_responses=self.cfg.store_responses,
-                timeout_s=self.cfg.llm_timeout_s,
-                jsonl_path=jsonl_path,
-                stop_event=self.cancel_event,
-                on_delta=self.on_delta,
+            """
+            Temporary MUX to support Relay while we migrate to OpenAI Responses
+            API.
+
+            Uses the Provider inferface for Relay, and EventAdapter otherwise
+            (OpenAI)
+            """
+            provider = get_model_provider(self.cfg.model)
+            if isinstance(provider, RelayProvider):
+                # Call LLM directly using provider
+                provider = get_model_provider(self.cfg.model)
+                messages: list[dict[str, str]] = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": rp.user},
+                ]
+                try:
+                    response = provider.get_response(
+                        self.cfg.model, messages, max_tokens=16000, **rp.extras
+                    )
+                    state.last_response_id = response.response_id
+                    result = {
+                        "output_text": response.content,
+                        "response_id": response.response_id,
+                        "error": None,
+                    }
+                except Exception as e:
+                    error = f"stream_error: {e.__class__.__name__}: {e}"
+                    result = {
+                        "output_text": None,
+                        "response_id": None,
+                        "error": error,
+                    }
+            else:
+                # Stream via EventAdapter
+                jsonl_path = self.dirs["responses"] / f"iteration_{k}.stream.jsonl"
+                adapter = EventAdapter(
+                    model=self.cfg.model,
+                    store_responses=self.cfg.store_responses,
+                    timeout_s=self.cfg.llm_timeout_s,
+                    jsonl_path=jsonl_path,
+                    stop_event=self.cancel_event,
+                    on_delta=self.on_delta,
+                )
+                result = adapter.stream(
+                    system_prompt=SYSTEM_PROMPT, user_prompt=rp.user, extras=rp.extras
+                )
+                state.last_response_id = result.get("response_id")
+
+            _write_json(
+                self.dirs["responses"] / f"iteration_{k}.final.json",
+                result,
             )
-            result = adapter.stream(
-                system_prompt=SYSTEM_PROMPT, user_prompt=rp.user, extras=rp.extras
-            )
-            state.last_response_id = result.get("response_id")
-            _write_json(self.dirs["responses"] / f"iteration_{k}.final.json", result)
 
             if self.cancel_event.is_set():
                 self.logger.info("cancel after streaming; exiting")
