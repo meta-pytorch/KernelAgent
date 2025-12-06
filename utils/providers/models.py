@@ -15,7 +15,7 @@
 """Model registry and configuration for KernelAgent."""
 
 from dataclasses import dataclass
-from typing import Dict, Type
+from typing import Dict, List, Optional, Type
 
 from .base import BaseProvider
 from .openai_provider import OpenAIProvider
@@ -28,7 +28,7 @@ class ModelConfig:
     """Configuration for a specific model."""
 
     name: str
-    provider_class: Type[BaseProvider]
+    provider_classes: List[Type[BaseProvider]]
     description: str = ""
 
 
@@ -36,34 +36,34 @@ class ModelConfig:
 AVAILABLE_MODELS = [
     ModelConfig(
         name="o4-mini",
-        provider_class=OpenAIProvider,
+        provider_classes=[OpenAIProvider],
         description="OpenAI o4-mini - fast reasoning model",
     ),
     # OpenAI GPT-5 Model (Only GPT-5)
     ModelConfig(
         name="gpt-5",
-        provider_class=OpenAIProvider,
+        provider_classes=[RelayProvider, OpenAIProvider],
         description="GPT-5 flagship model (Released Aug 2025)",
     ),
     # Anthropic Claude 4 Models (Latest)
     ModelConfig(
         name="claude-opus-4-1-20250805",
-        provider_class=AnthropicProvider,
+        provider_classes=[AnthropicProvider],
         description="Claude 4.1 Opus - most capable (Released Aug 2025)",
     ),
     ModelConfig(
         name="claude-sonnet-4-20250514",
-        provider_class=AnthropicProvider,
+        provider_classes=[AnthropicProvider],
         description="Claude 4 Sonnet - high performance (Released May 2025)",
     ),
     ModelConfig(
         name="claude-sonnet-4-5-20250929",
-        provider_class=AnthropicProvider,
-        description="Claude 4.5 Sonnet - latest balanced model (Released Sep 2025)",
+        provider_classes=[AnthropicProvider],
+        description="Claude 4.5 Sonnet - latest balanced model (Sep 2025)",
     ),
     ModelConfig(
         name="gcp-claude-4-sonnet",
-        provider_class=RelayProvider,
+        provider_classes=[RelayProvider],
         description="[Relay] Claude 4 Sonnet",
     ),
 ]
@@ -78,18 +78,32 @@ MODEL_NAME_TO_CONFIG: Dict[str, ModelConfig] = {
 _provider_instances: Dict[Type[BaseProvider], BaseProvider] = {}
 
 
-def get_model_provider(model_name: str) -> BaseProvider:
+def _get_or_create_provider(
+    provider_class: Type[BaseProvider],
+) -> BaseProvider:
+    """Get a cached provider instance or create a new one."""
+    if provider_class not in _provider_instances:
+        _provider_instances[provider_class] = provider_class()
+    return _provider_instances[provider_class]
+
+
+def get_model_provider(
+    model_name: str, preferred_provider: Optional[Type[BaseProvider]] = None
+) -> BaseProvider:
     """
-    Get the appropriate provider instance for a given model.
+    Get the first available provider instance for a given model. If a preferred
+    provider is specified, only it will be tried
 
     Args:
         model_name: Name of the model
+        preferred_provider: Optional preffered provider class
 
     Returns:
         Provider instance
+        (first available from the list of providers, or the preferred one)
 
     Raises:
-        ValueError: If model is not found or provider is not available
+        ValueError: If model is not found or no provider is available
     """
     if model_name not in MODEL_NAME_TO_CONFIG:
         available = list(MODEL_NAME_TO_CONFIG.keys())
@@ -98,27 +112,43 @@ def get_model_provider(model_name: str) -> BaseProvider:
         )
 
     model_config = MODEL_NAME_TO_CONFIG[model_name]
-    provider_class = model_config.provider_class
 
-    # Use cached instance if available
-    if provider_class not in _provider_instances:
-        _provider_instances[provider_class] = provider_class()
+    # Determine which providers to try
+    if preferred_provider is not None:
+        if preferred_provider not in model_config.provider_classes:
+            allowed = [p.__name__ for p in model_config.provider_classes]
+            raise ValueError(
+                f"Preferred provider '{preferred_provider.__name__}' "
+                f"is not configured for model '{model_name}'. "
+                f"Allowed providers: {allowed}"
+            )
+        providers_to_try = [preferred_provider]
+    else:
+        providers_to_try = model_config.provider_classes
 
-    provider = _provider_instances[provider_class]
+    # Try each provider and return the first available one
+    for provider_class in providers_to_try:
+        provider = _get_or_create_provider(provider_class)
+        if provider.is_available():
+            return provider
 
-    if not provider.is_available():
-        raise ValueError(
-            f"Provider '{provider.name}' for model '{model_name}' is not available. "
-            f"Check API keys and dependencies."
-        )
+    # No provider was available
+    tried_names = [p.name() for p in providers_to_try]
+    raise ValueError(
+        f"No available provider for model '{model_name}'. "
+        f"Tried providers: {tried_names}. "
+        f"Check API keys and dependencies."
+    )
 
-    return provider
 
-
-def is_model_available(model_name: str) -> bool:
-    """Check if a model is available and its provider is ready."""
+def is_model_available(
+    model_name: str, preferred_provider: Optional[Type[BaseProvider]] = None
+) -> bool:
+    """Check if a model is available and its provider is ready.
+    If a preferred provider is specified, only it will be checked
+    """
     try:
-        provider = get_model_provider(model_name)
+        provider = get_model_provider(model_name, preferred_provider)
         return provider.is_available()
     except (ValueError, Exception):
         return False

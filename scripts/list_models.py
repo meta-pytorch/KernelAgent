@@ -17,6 +17,7 @@
 
 import os
 import sys
+from collections import defaultdict
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,25 +34,19 @@ def main():
     print("KernelAgent - Available Models")
     print("=" * 80)
 
-    models = AVAILABLE_MODELS
-    providers = {}
-
-    # Group models by provider
-    for model in models:
-        provider_name = model.provider_class().name
-        if provider_name not in providers:
-            providers[provider_name] = []
-        providers[provider_name].append(model)
+    providers: dict[type, list] = defaultdict(list)
+    for model in AVAILABLE_MODELS:
+        for provider in model.provider_classes:
+            providers[provider].append(model)
 
     # Display models by provider
-    for provider_name, provider_models in providers.items():
-        print(f"\n🔹 {provider_name.upper()} Provider:")
+    for provider, models in providers.items():
+        print(f"\n🔹 {provider().name.upper()} Provider:")
         print("-" * 50)
 
-        for model in provider_models:
-            # Check if model is available (API key set)
-            available = is_model_available(model.name)
-            status = "✅ Available" if available else "❌ Not Available (check API key)"
+        for model in models:
+            available = is_model_available(model.name, provider)
+            status = "✅ Available" if available else "❌ Not Available"
 
             print(f"  {model.name:<35} {status}")
             if model.description:
