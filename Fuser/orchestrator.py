@@ -122,6 +122,7 @@ class Orchestrator:
             stream_dir=self.orchestrator_dir / "stream.log",
             workspace_dir=wdir,
             shared_digests_dir=digests_dir,
+            target_platform=self.target_platform,
         )
 
     def _start_console_mux(self, queues: dict[str, mp.Queue[str]]) -> None:
