@@ -98,6 +98,7 @@ def cmd_run(argv: list[str]) -> int:
         isolated=args.isolated,
         deny_network=args.deny_network,
         enable_reasoning_extras=args.enable_reasoning_extras,
+        target_platform=args.platform,
     )
 
     run_id = new_run_id()

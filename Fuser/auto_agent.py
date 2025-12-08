@@ -736,6 +736,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         verify=args.verify,
         dispatch_jobs=args.dispatch_jobs,
         allow_fallback=(not args.no_fallback),
+        target_platform=args.platform,
     )
 
     try:
