@@ -109,6 +109,7 @@ class PromptManager:
         return template.render(
             problem_description=problem_description,
             provided_test_code=provided_test_code,
+            target_platform=self.target_platform,
         )
 
     def render_kernel_generation_prompt(
@@ -177,6 +178,7 @@ class PromptManager:
             error_info=error_info,
             history_context=history_context,
             triton_guidelines=triton_guidelines,
+            target_platform=self.target_platform,
         )
 
     def render_triton_guidelines(self) -> str:

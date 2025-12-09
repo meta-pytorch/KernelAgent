@@ -249,7 +249,7 @@ def _build_refinement_prompt(
     out_tail = error_info.get("stdout_tail", "")
 
     guidance = textwrap.dedent(
-        """
+        f"""
         You previously produced a composed Triton implementation, but it failed
         to run/compile. Analyze the ERROR_CONTEXT below and re-emit the entire
         corrected single-file implementation as one ```python block.
