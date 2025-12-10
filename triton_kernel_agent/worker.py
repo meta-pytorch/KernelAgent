@@ -428,11 +428,12 @@ class VerificationWorker:
 
             # Run test
             self.logger.info(
-                "KA Proc exec" + str(os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", 1) == 1)
+                "KA Proc exec"
+                + str(os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1")
             )
             success, stdout, stderr = (
                 self._run_test()
-                if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", 1) == 1
+                if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
                 else _run_test_multiprocess(self.logger, self.workdir, self.test_file)
             )
 
