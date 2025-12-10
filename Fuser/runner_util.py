@@ -16,9 +16,25 @@
 
 import multiprocessing
 import os
+import signal
 import sys
 import time
 from pathlib import Path
+
+
+def _kill_process_group(pid: int) -> None:
+    """Kill the process group of pid. Similar behavior as os.killpg."""
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    # Give processes a moment to terminate gracefully
+    time.sleep(0.1)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
 
 def _run_candidate_process(
     exec_filename: str,
@@ -29,9 +45,14 @@ def _run_candidate_process(
     stderr_path: Path,
 ) -> None:
     """Target function for multiprocessing.Process that executes the candidate."""
+    # Create a new process group to contain potential subprocesses for cancel/timeout.
+    # This is similar to subprocess.Popen(start_new_session=True) behavior.
+    os.setpgrp()
+
     with stdout_path.open("wb") as f_out, stderr_path.open("wb") as f_err:
         os.chdir(str(run_dir))
-        # Replace environment
+        # Replace the child's environment (similar to subprocess.Popen(...env=env)).
+        # This sets up the environment for the candidate execution.
         os.environ.clear()
         os.environ.update(env)
         # Redirect stdout/stderr
@@ -53,15 +74,17 @@ def _run_candidate_process(
 
 
 def _run_candidate_multiprocess(
-    exec_filename, 
-    run_dir, 
-    argv, 
+    exec_filename,
+    run_dir,
+    argv,
     env: dict[str, str],
-    stdout_path: Path, 
-    stderr_path: Path, 
-    t_started: float, 
-    timeout_s: float, 
-    cancel_event):
+    stdout_path: Path,
+    stderr_path: Path,
+    t_started: float,
+    timeout_s: float,
+    cancel_event,
+):
+    """Run candidate with multiprocessing.Process."""
     p = multiprocessing.Process(
         target=_run_candidate_process,
         args=(exec_filename, run_dir, argv, env, stdout_path, stderr_path),
@@ -77,12 +100,8 @@ def _run_candidate_multiprocess(
                 break
 
             if cancel_event is not None and cancel_event.is_set():
-                # Terminate process
-                p.terminate()
-                try:
-                    p.join(timeout=1.0)
-                except Exception:
-                    pass
+                _kill_process_group(p.pid)
+                p.join(timeout=1.0)
                 if p.is_alive():
                     p.kill()
                     p.join(timeout=1.0)
@@ -91,11 +110,8 @@ def _run_candidate_multiprocess(
 
             # Check wall-clock timeout
             if time.time() - t_started > timeout_s:
-                p.terminate()
-                try:
-                    p.join(timeout=1.0)
-                except Exception:
-                    pass
+                _kill_process_group(p.pid)
+                p.join(timeout=1.0)
                 if p.is_alive():
                     p.kill()
                     p.join(timeout=1.0)

@@ -204,7 +204,6 @@ def run_candidate(
     isolated: bool,
     deny_network: bool,
     cancel_event: Optional["threading.Event"] = None,
-    use_sys_exec: bool = True,
 ) -> RunResult:
     """
     Execute a candidate program in a fresh run directory under run_root.
@@ -248,7 +247,7 @@ def run_candidate(
     (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
 
     # Run the candidate (via subprocess or multiprocess)
-    print("Fuser env ", os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", 1) == 1)
+    print("Fuser env ", os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", "1") == "1")
     rc, t_finished = (
         _run_candidate(
             run_dir,
@@ -260,7 +259,7 @@ def run_candidate(
             timeout_s,
             cancel_event,
         )
-        if os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", 1) == 1
+        if os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", "1") == "1"
         else _run_candidate_multiprocess(
             exec_filename,
             run_dir,
