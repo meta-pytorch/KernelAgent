@@ -247,7 +247,6 @@ def run_candidate(
     (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
 
     # Run the candidate (via subprocess or multiprocess)
-    print("Fuser env ", os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", "1") == "1")
     rc, t_finished = (
         _run_candidate(
             run_dir,
