@@ -17,7 +17,9 @@ class TestAutoPatchCudaHacksXPU:
         """XPU should strip torch.cuda.is_available hack."""
         from Fuser.compose_end_to_end import _auto_patch_common_triton_issues
 
-        code = "import torch\ntorch.cuda.is_available = lambda: True\nx = torch.randn(10)"
+        code = (
+            "import torch\ntorch.cuda.is_available = lambda: True\nx = torch.randn(10)"
+        )
         platform = get_platform("xpu")
         patched, changed = _auto_patch_common_triton_issues(code, platform)
 
