@@ -616,7 +616,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
 
                 run_button = gr.Button("🚀 Run Pipeline", variant="primary")
 
-            with gr.Column(scale=1.5):
+            with gr.Column(scale=2):
                 gr.Markdown("## Results")
                 status_out = gr.Markdown(value="*Awaiting run...*")
                 details_out = gr.Markdown(value="")
@@ -717,7 +717,6 @@ def main() -> None:
             ssl_keyfile=str(meta_keyfile),
             ssl_certfile=str(meta_keyfile),
             ssl_verify=False,
-            show_api=False,
             inbrowser=False,
         )
     else:
@@ -727,7 +726,6 @@ def main() -> None:
             show_error=True,
             server_name=args.host,
             server_port=args.port,
-            show_api=False,
             inbrowser=True,
         )
 

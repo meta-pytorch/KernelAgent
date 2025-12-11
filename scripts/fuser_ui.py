@@ -771,7 +771,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
 
                 generate_button = gr.Button("🚀 Run FuserAgent", variant="primary")
 
-            with gr.Column(scale=1.5):
+            with gr.Column(scale=2):
                 gr.Markdown("## Results")
                 status_output = gr.Markdown(value="*Awaiting run...*")
                 with gr.Tabs():
