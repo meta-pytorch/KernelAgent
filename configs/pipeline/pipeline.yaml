@@ -1,0 +1,27 @@
+# Configuration for pipeline.py
+# One-shot pipeline runner: extract → dispatch → compose
+# Shares fuser configuration with auto_agent.py
+
+problem: ???  # Required: absolute path to the kernelbench problem file
+
+# Extraction step settings
+extractor:
+  model: gpt-5
+  workers: 4
+  max_iters: 5
+  llm_timeout_s: 1200
+  run_timeout_s: 1200
+
+# Dispatch step settings
+dispatcher:
+  model: null
+  jobs: 2  # Max concurrent tasks; use 'auto' to match subgraph count
+
+# Composition step settings
+composer:
+  model: o4-mini
+  verify: false
+  max_iters: 5
+
+# Output settings (field unused)
+out_root: null  # Optional; if not set, uses default location

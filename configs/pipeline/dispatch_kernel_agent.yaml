@@ -1,0 +1,13 @@
+# Configuration for dispatch_kernel_agent.py
+# Dispatches subgraphs to KernelAgent for Triton kernel generation
+
+subgraphs: ???  # Required: absolute path to subgraphs.json file
+
+# Output directory for per-subgraph artifacts
+out_dir: kernels_out
+
+# KernelAgent model configuration
+agent_model: null
+
+# Concurrency settings
+jobs: 2  # Max concurrent subgraph dispatches; use 'auto' to match subgraph count

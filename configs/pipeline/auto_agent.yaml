@@ -1,0 +1,43 @@
+# Configuration for auto_agent.py
+# Converts KernelBench problems either via KernelAgent or Fuser based on complexity
+
+problem: ???  # Required: absolute path to the problem file
+
+# KernelAgent settings
+ka:
+  model_name: null  # Optional; uses env default if omitted
+  num_workers: 4
+  max_rounds: 10
+  high_reasoning: true
+
+# Router LLM settings
+router:
+  model: gpt-5
+  high_reasoning: true
+  temperature: 0.2
+  max_tokens: 700
+
+# Fuser pipeline settings
+fuser:
+  # Extraction step settings
+  extractor:
+    model: gpt-5
+    workers: 4
+    max_iters: 5
+    llm_timeout_s: 1200
+    run_timeout_s: 1200
+
+  # Dispatch step settings
+  dispatcher:
+    model: o4-mini
+    jobs: 2  # Max concurrent tasks; use 'auto' to match subgraph count
+
+  # Composition step settings
+  composer:
+    model: o4-mini
+    verify: false
+    max_iters: 5
+
+# Fallback and routing settings
+routing:
+  allow_fallback: true

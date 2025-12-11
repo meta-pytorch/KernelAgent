@@ -1,0 +1,26 @@
+# Configuration for cli.py (Fuser Orchestrator)
+# Runs multiple workers concurrently to generate and verify fused code
+
+problem: ???  # Required: absolute path to the Python problem file
+
+# LLM configuration
+model: gpt-5
+
+# Worker configuration
+workers: 4
+max_iters: 10
+
+# Timeout settings
+llm_timeout_s: 120
+run_timeout_s: 180
+
+# Streaming configuration
+stream: all  # Stream mode: 'all', 'winner', or 'none'
+
+# Storage and isolation settings
+store_responses: false  # Store LLM responses to disk
+isolated: false  # Run workers in isolated environment
+deny_network: false  # Deny network access during execution
+
+# LLM features
+enable_reasoning_extras: true  # Enable reasoning extras in LLM prompts

@@ -1,0 +1,18 @@
+# Configuration for compose_end_to_end.py
+# Compose end-to-end Triton kernel from subgraphs + generated kernels
+
+problem: ???  # Required: absolute path to KernelBench problem file
+subgraphs: ???  # Required: path to subgraphs.json from Fuser
+kernels_summary: ???  # Required: path to summary.json from dispatch step
+
+# Output directory for composed artifacts
+out_dir: compose_out
+
+# LLM configuration
+model: null
+
+# Verification settings
+verify: false  # Execute generated file and check PASS sentinel
+
+# Refinement settings
+max_iters: 5
