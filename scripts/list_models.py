@@ -22,7 +22,7 @@ from collections import defaultdict
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
-from utils.providers import AVAILABLE_MODELS, is_model_available
+from utils.providers import get_available_models, is_model_available
 
 # Load environment variables
 load_dotenv()
@@ -34,8 +34,9 @@ def main():
     print("KernelAgent - Available Models")
     print("=" * 80)
 
+    models = get_available_models()
     providers: dict[type, list] = defaultdict(list)
-    for model in AVAILABLE_MODELS:
+    for model in models:
         for provider in model.provider_classes:
             providers[provider].append(model)
 

@@ -14,65 +14,13 @@
 
 """Model registry and configuration for KernelAgent."""
 
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Type
 
 from .base import BaseProvider
-from .openai_provider import OpenAIProvider
-from .anthropic_provider import AnthropicProvider
-from .relay_provider import RelayProvider
+from .model_config import ModelConfig
 
-
-@dataclass
-class ModelConfig:
-    """Configuration for a specific model."""
-
-    name: str
-    provider_classes: List[Type[BaseProvider]]
-    description: str = ""
-
-
-# Registry of all available models
-AVAILABLE_MODELS = [
-    ModelConfig(
-        name="o4-mini",
-        provider_classes=[OpenAIProvider],
-        description="OpenAI o4-mini - fast reasoning model",
-    ),
-    # OpenAI GPT-5 Model (Only GPT-5)
-    ModelConfig(
-        name="gpt-5",
-        provider_classes=[RelayProvider, OpenAIProvider],
-        description="GPT-5 flagship model (Released Aug 2025)",
-    ),
-    # Anthropic Claude 4 Models (Latest)
-    ModelConfig(
-        name="claude-opus-4-1-20250805",
-        provider_classes=[AnthropicProvider],
-        description="Claude 4.1 Opus - most capable (Released Aug 2025)",
-    ),
-    ModelConfig(
-        name="claude-sonnet-4-20250514",
-        provider_classes=[AnthropicProvider],
-        description="Claude 4 Sonnet - high performance (Released May 2025)",
-    ),
-    ModelConfig(
-        name="claude-sonnet-4-5-20250929",
-        provider_classes=[AnthropicProvider],
-        description="Claude 4.5 Sonnet - latest balanced model (Sep 2025)",
-    ),
-    ModelConfig(
-        name="gcp-claude-4-sonnet",
-        provider_classes=[RelayProvider],
-        description="[Relay] Claude 4 Sonnet",
-    ),
-]
-
-# Create lookup dictionaries
-MODEL_NAME_TO_CONFIG: Dict[str, ModelConfig] = {
-    model.name: model for model in AVAILABLE_MODELS
-}
-
+# Cached model lookup dictionary (lazily initialized)
+_model_name_to_config: Optional[Dict[str, ModelConfig]] = None
 
 # Provider instances cache
 _provider_instances: Dict[Type[BaseProvider], BaseProvider] = {}
@@ -85,6 +33,20 @@ def _get_or_create_provider(
     if provider_class not in _provider_instances:
         _provider_instances[provider_class] = provider_class()
     return _provider_instances[provider_class]
+
+
+def get_available_models() -> List[ModelConfig]:
+    from .available_models import AVAILABLE_MODELS
+
+    return AVAILABLE_MODELS
+
+
+def _get_model_name_to_config() -> Dict[str, ModelConfig]:
+    """Get the model name to config lookup dictionary (lazily initialized)."""
+    global _model_name_to_config
+    if _model_name_to_config is None:
+        _model_name_to_config = {model.name: model for model in get_available_models()}
+    return _model_name_to_config
 
 
 def get_model_provider(
@@ -105,13 +67,14 @@ def get_model_provider(
     Raises:
         ValueError: If model is not found or no provider is available
     """
-    if model_name not in MODEL_NAME_TO_CONFIG:
-        available = list(MODEL_NAME_TO_CONFIG.keys())
+    model_name_to_config = _get_model_name_to_config()
+    if model_name not in model_name_to_config:
+        available = list(model_name_to_config.keys())
         raise ValueError(
             f"Model '{model_name}' not found. Available models: {available}"
         )
 
-    model_config = MODEL_NAME_TO_CONFIG[model_name]
+    model_config = model_name_to_config[model_name]
 
     # Determine which providers to try
     if preferred_provider is not None:
