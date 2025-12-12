@@ -49,7 +49,9 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
 - DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, torch.matmul, torch.mm, torch.bmm, torch.einsum, etc.) inside the kernel computation
 - DO NOT use PyTorch operations to perform the actual computation and just return the result (this includes tensor-tensor ops such as x.matmul(y), x.bmm(y), x.mm(y), or x.einsum(...))
+- DO NOT call low-level operator APIs like torch.ops.aten.* (e.g., torch.ops.aten.conv2d, torch.ops.aten.addmm, torch.ops.aten.layer_norm, torch.ops.aten.mean); these are PyTorch compute ops and using them instead of Triton is considered cheating
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
+- DO NOT hide PyTorch compute (including torch.ops.aten.* calls or torch.nn/torch.nn.functional usage) inside helper functions that are then called from the wrapper; ALL numerical computation must be implemented in Triton kernels
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
 - DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
