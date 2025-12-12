@@ -66,6 +66,52 @@ DISALLOWED_TORCH_PATTERNS = [
         re.compile(r"\.forward\("),
         "Calling .forward() indicates torch.nn module usage and is not allowed",
     ),
+    (
+        re.compile(r"\btorch\.ops\.aten\b"),
+        "Low-level torch.ops.aten.* calls are not allowed; implement these ops directly in Triton kernels instead of relying on PyTorch compute",
+    ),
+    # Generic tensor-tensor math that must be implemented in Triton kernels
+    (
+        re.compile(r"\btorch\.(matmul|mm|bmm)\s*\("),
+        "PyTorch matmul/mm/bmm tensor-tensor ops are not allowed; implement these in Triton kernels",
+    ),
+    (
+        re.compile(r"\.(matmul|mm|bmm)\s*\("),
+        "Tensor.matmul/mm/bmm methods are not allowed; implement these in Triton kernels",
+    ),
+    (
+        re.compile(r"\btorch\.einsum\s*\("),
+        "torch.einsum is not allowed; implement this contraction with Triton primitives",
+    ),
+    (
+        re.compile(r"\.einsum\s*\("),
+        "Tensor.einsum is not allowed; implement this contraction with Triton primitives",
+    ),
+    # Introspection / frame inspection that can be used to steal test locals
+    (
+        re.compile(r"\bimport\s+inspect\b"),
+        "inspect-based reflection is not allowed inside kernel files",
+    ),
+    (
+        re.compile(r"\binspect\.(stack|currentframe|getouterframes)\s*\("),
+        "inspect stack/frame introspection is not allowed in kernels",
+    ),
+    (
+        re.compile(r"\bsys\._getframe\s*\("),
+        "sys._getframe is not allowed in kernels; do not access caller frames",
+    ),
+    (
+        re.compile(r"\.f_locals\b|\.f_globals\b"),
+        "Accessing frame locals/globals (f_locals/f_globals) from kernels is not allowed",
+    ),
+    (
+        re.compile(r"\bglobals\s*\("),
+        "globals() is not allowed in kernels; avoid depending on ambient test state",
+    ),
+    (
+        re.compile(r"\blocals\s*\("),
+        "locals() is not allowed in kernels; avoid depending on caller scopes",
+    ),
 ]
 
 

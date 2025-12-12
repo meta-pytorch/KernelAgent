@@ -488,7 +488,7 @@ class PipelineUI:
 
 
 def build_interface() -> gr.Blocks:
-    from utils.providers.models import MODEL_NAME_TO_CONFIG
+    from utils.providers.models import _get_model_name_to_config
 
     ui = PipelineUI()
     default_problem = ui.problem_choices[0][0] if ui.problem_choices else ""
@@ -544,7 +544,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
 
                 # Model selectors
                 openai_extract_models = ["gpt-5", "o4-mini"]
-                registry_models = sorted(list(MODEL_NAME_TO_CONFIG.keys())) or [
+                registry_models = sorted(list(_get_model_name_to_config().keys())) or [
                     "gpt-5",
                     "o4-mini",
                 ]

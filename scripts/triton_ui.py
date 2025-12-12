@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.platform_config import get_platform_choices, get_platform
 from utils.providers.models import AVAILABLE_MODELS
+from utils.providers.models import get_available_models
 from utils.providers.openai_provider import OpenAIProvider
 from utils.providers.anthropic_provider import AnthropicProvider
 
@@ -72,7 +73,7 @@ class TritonKernelUI:
         self.last_result = None
         # Build a mapping from model name -> provider class for quick lookup
         self._model_to_provider = {
-            cfg.name: cfg.provider_class for cfg in AVAILABLE_MODELS
+            cfg.name: cfg.provider_class for cfg in get_available_models()
         }
 
     def _provider_env_var_for_model(self, model_name: str) -> str:
@@ -414,7 +415,7 @@ def _create_app() -> gr.Blocks:
                 CLAUDE_SONNET_4_5_MODEL_NAME = "claude-sonnet-4-5-20250929"
                 CLAUDE_SONNET_4_5_LABEL = "Claude Sonnet 4.5"
                 choices = []
-                for config in AVAILABLE_MODELS:
+                for config in get_available_models():
                     label = config.description
                     if config.name == CLAUDE_SONNET_4_5_MODEL_NAME:
                         label = CLAUDE_SONNET_4_5_LABEL  # Shorten the Anthropic label for clarity
