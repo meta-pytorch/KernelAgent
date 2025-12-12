@@ -676,7 +676,6 @@ def main():
             ssl_keyfile=meta_keyfile,
             ssl_certfile=meta_keyfile,
             ssl_verify=False,
-            show_api=False,
             inbrowser=False,  # Don't auto-open browser on remote server
         )
     else:
@@ -691,7 +690,6 @@ def main():
             show_error=True,
             server_name=args.host,
             server_port=args.port,
-            show_api=False,
             inbrowser=True,  # Auto-open browser for local development
         )
 
