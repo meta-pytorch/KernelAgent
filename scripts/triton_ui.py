@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 
 
 from triton_kernel_agent import TritonKernelAgent
-from triton_kernel_agent.platform_config import get_platform_choices, get_platform
+from triton_kernel_agent.platform_config import get_platform_choices
 from utils.providers.models import AVAILABLE_MODELS
 from utils.providers.models import get_available_models
 from utils.providers.openai_provider import OpenAIProvider
@@ -144,7 +144,7 @@ class TritonKernelUI:
             agent = TritonKernelAgent(
                 model_name=model_name,
                 high_reasoning_effort=high_reasoning_effort,
-                target_platform=get_platform(target_platform),
+                target_platform=target_platform,
             )
 
             # If provider failed to initialize, return a clear error immediately

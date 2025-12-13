@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover
 from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
-from triton_kernel_agent.platform_config import get_platform, get_platform_choices
+from triton_kernel_agent.platform_config import get_platform_choices
 
 
 @dataclass
@@ -226,7 +226,7 @@ def run_fuser_problem(
             isolated=False,
             deny_network=False,
             enable_reasoning_extras=enable_reasoning,
-            target_platform=get_platform(target_platform),
+            target_platform=target_platform,
         )
 
         run_id = new_run_id()

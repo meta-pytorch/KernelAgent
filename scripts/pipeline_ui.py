@@ -28,7 +28,7 @@ from typing import List, Optional, Tuple
 
 import gradio as gr
 from dotenv import load_dotenv
-from triton_kernel_agent.platform_config import get_platform, get_platform_choices
+from triton_kernel_agent.platform_config import get_platform_choices
 
 # Ensure project root is importable when run as a script.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -229,7 +229,7 @@ def run_pipeline_ui(
                 verify=verify,
                 dispatch_jobs=(dispatch_jobs if dispatch_jobs else "1"),
                 allow_fallback=True,
-                target_platform=get_platform(target_platform),
+                target_platform=target_platform,
             )
             rr = router.solve(problem_file)
             elapsed = time.time() - start_time
@@ -330,7 +330,7 @@ def run_pipeline_ui(
             out_root=None,
             verify=verify,
             compose_max_iters=compose_max_iters,
-            target_platform=get_platform(target_platform),
+            target_platform=target_platform,
         )
         elapsed = time.time() - start_time
         run_dir = Path(res.get("run_dir", ".")).resolve()

@@ -26,6 +26,8 @@ Usage:
 from dataclasses import dataclass, field
 from typing import Dict, List
 
+DEFAULT_PLATFORM = "cuda"
+
 
 @dataclass(frozen=True)
 class PlatformConfig:
@@ -92,8 +94,6 @@ PLATFORMS: Dict[str, PlatformConfig] = {
         cuda_hacks_to_strip=_XPU_CUDA_HACKS,
     ),
 }
-
-DEFAULT_PLATFORM = "cuda"
 
 
 def get_platform(name: str) -> PlatformConfig:
