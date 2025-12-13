@@ -128,7 +128,7 @@ class VerificationWorker:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        target_platform: Optional[PlatformConfig] = None,
+        target_platform: str = "cuda",
     ):
         """
         Initialize a verification worker.
@@ -151,9 +151,8 @@ class VerificationWorker:
         self.history_size = history_size
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
-        if target_platform is None:
-            target_platform = get_platform("cuda")
         self.target_platform = target_platform
+        self._platform_config: Optional[PlatformConfig] = None
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -165,6 +164,9 @@ class VerificationWorker:
         # Setup logging early so it is available for any error paths
         self._setup_logging()
 
+        # Initialize prompt manager with resolved config
+        self.prompt_manager = PromptManager(target_platform=self.platform_config)
+
         # Initialize provider (may be unavailable in offline/test environments)
         self.provider = None
         try:
@@ -175,6 +177,12 @@ class VerificationWorker:
 
         # Initialize prompt manager
         self.prompt_manager = PromptManager(target_platform=target_platform)
+
+    @property
+    def platform_config(self) -> PlatformConfig:
+        if self._platform_config is None:
+            self._platform_config = get_platform(self.target_platform)
+        return self._platform_config
 
     def _setup_logging(self):
         """Setup worker-specific logging."""

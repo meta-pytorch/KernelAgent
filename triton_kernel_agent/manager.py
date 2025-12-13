@@ -38,7 +38,7 @@ class WorkerManager:
         openai_api_key: Optional[str] = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
-        target_platform: Optional[PlatformConfig] = None,
+        target_platform: str = "cuda",
     ):
         """
         Initialize the worker manager.
@@ -59,8 +59,6 @@ class WorkerManager:
         self.openai_api_key = openai_api_key
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
-        if target_platform is None:
-            target_platform = get_platform("cuda")
         self.target_platform = target_platform
 
         # Setup logging

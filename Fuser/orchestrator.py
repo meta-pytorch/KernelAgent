@@ -26,6 +26,7 @@ from queue import Empty
 from typing import Any, Dict
 
 from dotenv import load_dotenv
+from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 from .config import OrchestratorConfig, ResultSummary, WorkerConfig
 from .logging_utils import redact, setup_file_logger
@@ -65,6 +66,7 @@ def _worker_process_main(
         stream_dir=_P("."),  # unused by Worker
         workspace_dir=_P(cfg_payload["workspace_dir"]),
         shared_digests_dir=_P(cfg_payload["shared_digests_dir"]),
+        target_platform=cfg_payload["target_platform"],
     )
 
     def _on_delta(s: str) -> None:
@@ -101,6 +103,13 @@ class Orchestrator:
         self._stop_console = threading.Event()
         self._stream_mode = cfg.stream_mode
         self.target_platform = cfg.target_platform
+        self._platform_config = None
+
+        @property
+        def platform_config(self) -> PlatformConfig:
+            if self._platform_config is None:
+                self._platform_config = get_platform(self.target_platform)
+            return self._platform_config
 
     def _make_worker_cfg(self, idx: int) -> WorkerConfig:
         worker_id = f"worker_{idx + 1:02d}"

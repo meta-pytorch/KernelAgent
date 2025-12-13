@@ -352,9 +352,15 @@ class AutoKernelRouter:
         self.verify = verify
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
-        if target_platform is None:
-            target_platform = get_platform("cuda")
-        self.target_platform = target_platform
+        self.target_platform = target_platform  # Store str
+        self._platform_config: Optional[PlatformConfig] = None
+
+    @property
+    def platform_config(self) -> PlatformConfig:
+        """Lazy-resolve to PlatformConfig."""
+        if self._platform_config is None:
+            self._platform_config = get_platform(self.target_platform)
+        return self._platform_config
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -362,7 +368,7 @@ class AutoKernelRouter:
             max_rounds=self.ka_max_rounds,
             model_name=self.ka_model,
             high_reasoning_effort=self.ka_high_reasoning,
-            target_platform=self.target_platform,
+            target_platform=self.platform_config,
         )
         try:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
