@@ -170,7 +170,8 @@ def _build_composition_prompt(
 
         Hard requirements:
         - Return ONE complete Python file only, fenced as a single ```python block.
-        - Use device='{target_platform.device_string}' for ALL tensor allocations in the code.
+        - Allocate inputs, weights, intermediates, and outputs on device='{target_platform.device_string}' and keep them there throughout forward/verification.
+        - CPU is acceptable only for metadata, scalars, and export serialization—avoid `.cpu()` or `.to('cpu')` on compute tensors.
         - Provide at least one @triton.jit kernel and a top-level Python wrapper
           named kernel_function(...). This wrapper must accept the same primary
           input tensor(s) as the model and any required weights/biases with shapes
