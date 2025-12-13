@@ -228,7 +228,7 @@ def worker_process(
     openai_api_key: Optional[str],
     openai_model: str,
     high_reasoning_effort: bool,
-    target_platform: PlatformConfig,
+    target_platform: str,
 ):
     """
     Worker process for kernel verification and refinement.

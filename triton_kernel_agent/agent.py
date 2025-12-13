@@ -108,7 +108,7 @@ class TritonKernelAgent:
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_model=self.model_name,
             high_reasoning_effort=self.high_reasoning_effort,
-            target_platform=self.target_platform,
+            target_platform=self._platform_config.name,
         )
 
     def _setup_logging(self):

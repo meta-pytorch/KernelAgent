@@ -242,6 +242,7 @@ class Orchestrator:
                     "enable_reasoning_extras": wcfg.enable_reasoning_extras,
                     "workspace_dir": str(wcfg.workspace_dir),
                     "shared_digests_dir": str(wcfg.shared_digests_dir),
+                    "target_platform": wcfg.target_platform,
                 }
                 p = mp.Process(
                     target=_worker_process_main,
