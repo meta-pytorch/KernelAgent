@@ -45,7 +45,7 @@ REQUIREMENTS:
 2. Import the kernel function using: from kernel import kernel_function
 3. Call kernel_function as a NORMAL PYTHON FUNCTION (no grid configuration or kernel launch)
 4. The kernel.py file will handle all Triton-specific launch logic internally
-5. Create appropriate test data (e.g., torch tensors on CUDA device)
+5. Create appropriate test data (e.g., torch tensors on {{ device_string }} device)
 6. Pass test data to kernel_function as regular function arguments
 7. Verify the results are correct
 8. Return True if test passes, False if it fails
@@ -54,7 +54,7 @@ REQUIREMENTS:
 11. Handle exceptions gracefully
 12. Do NOT use globals in the test (no "global" statements). Keep all tensors/parameters local and pass them explicitly to kernel_function.
 13. Assume the kernel implementation is self-contained inside kernel.py. Do NOT rely on or import any helper that is not defined in kernel.py. The test should surface a clear error if kernel_function references an undefined helper (NameError).
-14. Device checks: use result.device == input.device (or result.device.type == 'cuda'); never compare to 'cuda' or torch.device('cuda').
+14. Device checks: use result.device == input.device (or result.device.type == '{{ device_string }}'); never compare to 'cuda' or torch.device('cuda').
 
 ANTI-CHEATING CONSTRAINTS:
 - You MAY instantiate a PyTorch reference Model (nn.Module) in the test and use it to compute a reference output for comparison, but you MUST NOT pass that module instance into kernel_function (no model/module/net argument).
@@ -114,9 +114,19 @@ def test_kernel():
             print("kernel_function is not callable")
             return False
 
+        # Device setup
+        device = "{{ device_string }}"
+{% if device_string == "xpu" %}
+        if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
+            raise RuntimeError("Intel XPU not available. Install PyTorch with Intel GPU support.")
+{% else %}
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA not available")
+{% endif %}
+
         # Create test data using EXACT specifications from problem description
         # If problem specifies shape/dtype, use those exact values
-        # input_tensor = torch.randn(EXACT_SHAPE, dtype=EXACT_DTYPE, device='cuda')
+        # input_tensor = torch.randn(EXACT_SHAPE, dtype=EXACT_DTYPE, device=device)
         
         # Call kernel_function as a normal Python function
         # result = kernel_function(input_tensor, other_args...)

@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 import json
 import time
 import uuid
+from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 
 @dataclass
@@ -33,11 +34,18 @@ class OrchestratorConfig:
     isolated: bool = False
     deny_network: bool = False
     enable_reasoning_extras: bool = True
+    target_platform: str = "cuda"
 
     def to_json(self) -> str:
         d = asdict(self)
         d["problem_path"] = str(self.problem_path)
         return json.dumps(d, indent=2)
+
+    def get_platform_config(self) -> "PlatformConfig":
+        """Resolve to PlatformConfig at runtime."""
+        from triton_kernel_agent.platform_config import get_platform
+
+        return get_platform(self.target_platform)
 
 
 @dataclass
@@ -63,6 +71,13 @@ class WorkerConfig:
     stream_dir: Path
     workspace_dir: Path
     shared_digests_dir: Path
+    target_platform: str = "cuda"
+
+    def get_platform_config(self) -> "PlatformConfig":
+        """Resolve to PlatformConfig at runtime."""
+        from triton_kernel_agent.platform_config import get_platform
+
+        return get_platform(self.target_platform)
 
 
 @dataclass

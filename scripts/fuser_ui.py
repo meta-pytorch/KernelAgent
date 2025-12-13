@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover
 from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
+from triton_kernel_agent.platform_config import get_platform_choices
 
 
 @dataclass
@@ -174,6 +175,7 @@ def run_fuser_problem(
     run_timeout: int,
     enable_reasoning: bool,
     user_api_key: Optional[str] = None,
+    target_platform: str = "cuda",
 ) -> RunArtifacts:
     """Execute the Fuser orchestrator and collect artifacts."""
     if not problem_path:
@@ -224,6 +226,7 @@ def run_fuser_problem(
             isolated=False,
             deny_network=False,
             enable_reasoning_extras=enable_reasoning,
+            target_platform=target_platform,
         )
 
         run_id = new_run_id()
@@ -415,7 +418,7 @@ class FuserAgentUI:
             return f"*Failed to extract subgraphs: {e}*"
 
     def _compute_torchcompile_subgraphs(
-        self, problem_path: Path, strict: bool = False
+        self, problem_path: Path, strict: bool = False, target_platform: str = "cuda"
     ) -> str:
         """Best-effort torch.compile view in FuserAgent style.
 
@@ -434,8 +437,21 @@ class FuserAgentUI:
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)  # type: ignore
 
-            model = mod.Model(*mod.get_init_inputs()).eval()
-            x = mod.get_inputs()[0]
+            # Determine device based on target platform
+            if target_platform == "xpu":
+                if not hasattr(torch, "xpu") or not torch.xpu.is_available():
+                    return (
+                        "*Intel XPU not available. Install PyTorch with XPU support.*"
+                    )
+                device = "xpu"
+            else:
+                if not torch.cuda.is_available():
+                    return "*CUDA not available.*"
+                device = "cuda"
+
+            model = mod.Model(*mod.get_init_inputs()).eval().to(device)
+            x = mod.get_inputs()[0].to(device)
+
             # Probe attributes
             has_ct = hasattr(model, "conv_transpose")
             has_conv = hasattr(model, "conv")
@@ -560,29 +576,52 @@ class FuserAgentUI:
                 # Profile compiled model kernel launches
                 try:
                     compiled = torch.compile(model, backend="inductor")
+
+                    # Build activity list based on target platform
                     acts = [ProfilerActivity.CPU]
-                    if torch.cuda.is_available():
+                    if target_platform == "xpu":
+                        # XPU profiling support (requires PyTorch 2.4+ with XPU)
+                        if hasattr(ProfilerActivity, "XPU"):
+                            acts.append(ProfilerActivity.XPU)
+                    elif torch.cuda.is_available():
                         acts.append(ProfilerActivity.CUDA)
+
                     with profile(activities=acts, record_shapes=False) as prof:
                         with torch.no_grad():
                             _ = compiled(x)
-                            if torch.cuda.is_available():
+                            # Synchronize based on platform
+                            if target_platform == "xpu":
+                                if hasattr(torch, "xpu"):
+                                    torch.xpu.synchronize()
+                            elif torch.cuda.is_available():
                                 torch.cuda.synchronize()
+
                     events = prof.key_averages()
-                    # Count and sample names
-                    kde = [
-                        e
-                        for e in events
-                        if hasattr(e, "device_type")
-                        and e.device_type == torch.device("cuda").type
-                    ]
-                    if not kde:
+                    # Count and sample kernel names based on platform
+                    if target_platform == "xpu":
                         kde = [
                             e
                             for e in events
                             if "triton" in (e.key or "").lower()
-                            or "cuda" in (e.key or "").lower()
+                            or "xpu" in (e.key or "").lower()
+                            or "onednn" in (e.key or "").lower()
+                            or "sycl" in (e.key or "").lower()
                         ]
+                    else:
+                        kde = [
+                            e
+                            for e in events
+                            if hasattr(e, "device_type")
+                            and e.device_type == torch.device("cuda").type
+                        ]
+                        if not kde:
+                            kde = [
+                                e
+                                for e in events
+                                if "triton" in (e.key or "").lower()
+                                or "cuda" in (e.key or "").lower()
+                            ]
+
                     names = []
                     for ev in kde:
                         name = ev.key or "?"
@@ -591,18 +630,24 @@ class FuserAgentUI:
                             for s in [
                                 "triton",
                                 "cudnn",
+                                "onednn",
                                 "conv",
                                 "group_norm",
                                 "batch_norm",
                                 "gelu",
                                 "tanh",
+                                "sycl",
                             ]
                         ):
                             names.append(f"{name} x{int(ev.count)}")
                             if len(names) >= 8:
                                 break
+
+                    platform_label = (
+                        "xpu_kernels" if target_platform == "xpu" else "cuda_kernels"
+                    )
                     notes.append(
-                        f"cuda_kernels={len(kde)}; sample: "
+                        f"{platform_label}={len(kde)}; sample: "
                         + (", ".join(names) or "(none)")
                     )
                 except Exception as _e:
@@ -664,6 +709,7 @@ class FuserAgentUI:
         run_timeout: int,
         enable_reasoning: bool,
         user_api_key: Optional[str],
+        target_platform: str = "cuda",
     ) -> Tuple[str, str, str, str, Optional[str]]:
         problem_path = custom_problem.strip() or selected_problem
         artifacts = run_fuser_problem(
@@ -675,6 +721,7 @@ class FuserAgentUI:
             run_timeout=run_timeout,
             enable_reasoning=enable_reasoning,
             user_api_key=user_api_key,
+            target_platform=target_platform,
         )
         zip_str = str(artifacts.zip_path) if artifacts.zip_path else None
         return (
@@ -763,6 +810,12 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                     label="Enable reasoning extras",
                     value=True,
                 )
+                platform_dropdown = gr.Dropdown(
+                    choices=get_platform_choices(),
+                    label="Target Platform",
+                    value="cuda",
+                    info="Select GPU platform (CUDA for NVIDIA, XPU for Intel)",
+                )
                 strict_compile_checkbox = gr.Checkbox(
                     label="Strict (compile/profiler)",
                     value=False,
@@ -800,6 +853,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
             llm_timeout: int,
             run_timeout: int,
             reasoning: bool,
+            platform: str,
             strict_compile: bool,
             api_key: Optional[str],
         ):
@@ -814,6 +868,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                 run_timeout=run_timeout,
                 enable_reasoning=reasoning,
                 user_api_key=api_key,
+                target_platform=platform,
             )
             # Compute additional tabs
             try:
@@ -829,7 +884,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                     run_timeout,
                 )
                 tc_md = ui._compute_torchcompile_subgraphs(
-                    problem_path, strict=strict_compile
+                    problem_path, strict=strict_compile, target_platform=platform
                 )
             except Exception as _e:
                 fuser_md = f"*Subgraph extraction error: {_e}*"
@@ -847,8 +902,9 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                 llm_timeout_slider,
                 run_timeout_slider,
                 reasoning_checkbox,
-                api_key_input,
+                platform_dropdown,
                 strict_compile_checkbox,
+                api_key_input,
             ],
             outputs=[
                 status_output,

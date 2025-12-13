@@ -45,6 +45,7 @@ from .config import OrchestratorConfig, new_run_id
 from .orchestrator import Orchestrator
 from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 from .event_adapter import EventAdapter
+from triton_kernel_agent.platform_config import get_platform_choices
 
 
 def _load_code_from_tar(artifact_path: Path) -> str:
@@ -210,6 +211,7 @@ def extract_subgraphs_to_json(
     max_iters: int,
     llm_timeout_s: int,
     run_timeout_s: int,
+    target_platform: str = "cuda",
 ) -> Tuple[Path, Path]:
     """Run Fuser to produce fused code, then use LLM to emit subgraphs JSON.
 
@@ -228,6 +230,7 @@ def extract_subgraphs_to_json(
         isolated=False,
         deny_network=False,
         enable_reasoning_extras=True,
+        target_platform=target_platform,
     )
     run_id = new_run_id()
     base_dir = Path.cwd() / ".fuse"
@@ -358,6 +361,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--max-iters", type=int, default=5)
     p.add_argument("--llm-timeout-s", type=int, default=2400)
     p.add_argument("--run-timeout-s", type=int, default=2400)
+    p.add_argument(
+        "--target-platform",
+        default="cuda",
+        choices=get_platform_choices(),
+        help="Target platform",
+    )
     args = p.parse_args(argv)
 
     try:
@@ -373,6 +382,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_iters=args.max_iters,
         llm_timeout_s=args.llm_timeout_s,
         run_timeout_s=args.run_timeout_s,
+        target_platform=args.target_platform,
     )
     print(str(json_path))
     return 0

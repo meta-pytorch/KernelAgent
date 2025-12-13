@@ -41,6 +41,7 @@ from typing import Optional
 from .subgraph_extractor import extract_subgraphs_to_json
 from .dispatch_kernel_agent import run as dispatch_run
 from .compose_end_to_end import compose
+from triton_kernel_agent.platform_config import get_platform_choices
 
 
 def run_pipeline(
@@ -56,6 +57,7 @@ def run_pipeline(
     out_root: Optional[Path] = None,
     verify: bool = True,
     compose_max_iters: int = 5,
+    target_platform: str = "cuda",
 ) -> dict:
     # Select default KernelAgent model if not provided: prefer GPT-5 for Level 2/3
     if dispatch_model is None:
@@ -83,6 +85,7 @@ def run_pipeline(
         max_iters=max_iters,
         llm_timeout_s=llm_timeout_s,
         run_timeout_s=run_timeout_s,
+        target_platform=target_platform,
     )
 
     # Step 2: dispatch to KernelAgent
@@ -108,6 +111,7 @@ def run_pipeline(
         out_dir=out_dir,
         agent_model=dispatch_model,
         jobs=jobs_val,
+        target_platform=target_platform,
     )
 
     # Step 3: compose end-to-end
@@ -121,6 +125,7 @@ def run_pipeline(
         model_name=compose_model,
         verify=verify,
         max_iters=compose_max_iters,
+        target_platform=target_platform,
     )
     return {
         "run_dir": str(run_dir),
@@ -162,6 +167,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--out-root", default=None)
     p.add_argument("--verify", action="store_true")
     p.add_argument("--compose-max-iters", type=int, default=5)
+    p.add_argument(
+        "--target-platform",
+        default="cuda",
+        choices=get_platform_choices(),
+        help="Target platform",
+    )
     args = p.parse_args(argv)
 
     problem_path = Path(args.problem).resolve()
@@ -183,6 +194,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             out_root=Path(args.out_root) if args.out_root else None,
             verify=args.verify,
             compose_max_iters=args.compose_max_iters,
+            target_platform=args.target_platform,
         )
         print(json.dumps(res, indent=2))
         return 0
