@@ -44,8 +44,8 @@ from .cli import _load_dotenv_if_present  # reuse env loader
 from .config import OrchestratorConfig, new_run_id
 from .orchestrator import Orchestrator
 from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
-
 from .event_adapter import EventAdapter
+
 from utils.providers import get_model_provider
 
 

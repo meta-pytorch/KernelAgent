@@ -55,7 +55,7 @@ class RelayProvider(BaseProvider):
         - max_tokens: int (default 8192)
         - temperature: float (default 0.2)
         - top_p: float (default 0.95)
-        - text: str
+        - text: dict
         - high_reasoning_effort: bool (default False)
         - reasoning: dict
 

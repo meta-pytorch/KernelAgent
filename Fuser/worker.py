@@ -19,14 +19,14 @@ from pathlib import Path
 from typing import Optional, Any, Callable
 
 from .config import WorkerConfig
-
 from .event_adapter import EventAdapter
-from utils.providers import get_model_provider
 from .prompting import render_prompt, SYSTEM_PROMPT
 from .code_extractor import extract_single_python_file, sha256_of_code
 from .runner import run_candidate
 from .logging_utils import setup_file_logger
 from .dedup import register_digest
+
+from utils.providers import get_model_provider
 
 
 @dataclass
@@ -141,7 +141,6 @@ class Worker:
                         "response_id": response.response_id or None,
                         "error": None,
                     }
-                    state.last_response_id = response.response_id
                 except Exception as e:
                     error = f"stream_error: {e.__class__.__name__}: {e}"
                     result = {
@@ -163,8 +162,8 @@ class Worker:
                 result = adapter.stream(
                     system_prompt=SYSTEM_PROMPT, user_prompt=rp.user, extras=rp.extras
                 )
-                state.last_response_id = result.get("response_id")
 
+            state.last_response_id = result.get("response_id")
             _write_json(
                 self.dirs["responses"] / f"iteration_{k}.final.json",
                 result,
