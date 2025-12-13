@@ -50,16 +50,38 @@ class RelayProvider(BaseProvider):
     def get_response(
         self, model_name: str, messages: List[Dict[str, str]], **kwargs
     ) -> LLMResponse:
-        max_tokens = kwargs.get("max_tokens", 8192)
+        """
+        Supported kwargs:
+        - max_tokens: int (default 8192)
+        - temperature: float (default 0.2)
+        - top_p: float (default 0.95)
+        - text: dict
+        - high_reasoning_effort: bool (default False)
+        - reasoning: dict
+
+        TODO: Reasoning is handled twice (reasoning_effort and reasoning)
+        this is due to multiple call sites conventions (orchestrator, KA)
+        and OpenAI moving to Responses (vs Completion) should be cleaned up
+        """
 
         # Prepare request data for the plugboard server
         request_data = {
             "messages": messages,
             "model": model_name,
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
-            "top_p": 0.95,
+            "temperature": kwargs.get("temperature", 0.2),
+            "max_tokens": kwargs.get("max_tokens", 8192),
+            "top_p": kwargs.get("top_p", 0.95),
         }
+
+        # Add reasoning config if high_reasoning_effort is set
+        if kwargs.get("high_reasoning_effort", None):
+            request_data["reasoning"] = {"effort": "high"}
+
+        # Add pass-through kwargs
+        nargs = ["text", "reasoning"]
+        for arg in nargs:
+            if arg in kwargs:
+                request_data[arg] = kwargs[arg]
 
         logging.debug("\n=== DEBUG: PROMPT SENT TO LLM RELAY ===")
         logging.debug(request_data)
@@ -83,10 +105,20 @@ class RelayProvider(BaseProvider):
         logging.debug("=== END RESPONSE ===\n")
 
         content = response_data.get("output", "")
-        return LLMResponse(content=content, model=model_name, provider=self.name)
+        return LLMResponse(
+            content=content,
+            model=model_name,
+            provider=self.name,
+            # Note: Plugboard doesn't have a response_id, so request_id is used
+            response_id=response_data.get("plugboard_request_id", None),
+        )
 
     def get_multiple_responses(
-        self, model_name: str, messages: List[Dict[str, str]], n: int = 1, **kwargs
+        self,
+        model_name: str,
+        messages: List[Dict[str, str]],
+        n: int = 1,
+        **kwargs,
     ) -> List[LLMResponse]:
         return [
             self.get_response(

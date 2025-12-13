@@ -28,6 +28,7 @@ class LLMResponse:
     model: str
     provider: str
     usage: Optional[Dict[str, Any]] = None
+    response_id: Optional[str] = None
 
 
 class BaseProvider(ABC):

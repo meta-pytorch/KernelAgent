@@ -46,6 +46,8 @@ from .orchestrator import Orchestrator
 from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 from .event_adapter import EventAdapter
 
+from utils.providers import get_model_provider
+
 
 def _load_code_from_tar(artifact_path: Path) -> str:
     if not artifact_path.is_file():
@@ -251,19 +253,39 @@ def extract_subgraphs_to_json(
 
     # Ask LLM for shapes JSON
     system, user = _build_llm_prompt_for_shapes(fused_code, problem_code)
-    jsonl_path = dirs["orchestrator"] / "subgraphs.stream.jsonl"
-    adapter = EventAdapter(
-        model=model_name,
-        store_responses=False,
-        timeout_s=llm_timeout_s,
-        jsonl_path=jsonl_path,
-    )
-    result = adapter.stream(
-        system_prompt=system,
-        user_prompt=user,
-        extras={"text": {"format": {"type": "text"}}},
-    )
-    output_text = result.get("output_text", "")
+
+    """
+    Temporary MUX to support Relay while we migrate to OpenAI Responses API.
+
+    Uses EventAdapter for OpenAI, otherwise Provider inferface
+    """
+    provider = get_model_provider(model_name)
+    if provider.name != "openai":
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        result = provider.get_response(
+            model_name,
+            messages,
+            max_tokens=16000,
+            text={"format": {"type": "text"}},
+        )
+        output_text = result.content or ""
+    else:
+        jsonl_path = dirs["orchestrator"] / "subgraphs.stream.jsonl"
+        adapter = EventAdapter(
+            model=model_name,
+            store_responses=False,
+            timeout_s=llm_timeout_s,
+            jsonl_path=jsonl_path,
+        )
+        result = adapter.stream(
+            system_prompt=system,
+            user_prompt=user,
+            extras={"text": {"format": {"type": "text"}}},
+        )
+        output_text = result.get("output_text", "")
 
     raw_json = _extract_json_block(output_text)
     try:
