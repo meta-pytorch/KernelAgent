@@ -256,21 +256,22 @@ def extract_subgraphs_to_json(
 
     """
     Temporary MUX to support Relay while we migrate to OpenAI Responses API.
-    Uses the Provider inferface for Relay, and EventAdapter otherwise (OpenAI)
+
+    Uses EventAdapter for OpenAI, otherwise Provider inferface
     """
     provider = get_model_provider(model_name)
-    if isinstance(provider, RelayProvider):
+    if provider.name != "openai":
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        response = provider.get_response(
+        result = provider.get_response(
             model_name,
             messages,
             max_tokens=16000,
             text={"format": {"type": "text"}},
         )
-        output_text = response.content
+        output_text = result.content or ""
     else:
         jsonl_path = dirs["orchestrator"] / "subgraphs.stream.jsonl"
         adapter = EventAdapter(

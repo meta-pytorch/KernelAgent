@@ -53,6 +53,8 @@ class RelayProvider(BaseProvider):
         """
         Supported kwargs:
         - max_tokens: int (default 8192)
+        - temperature: float (default 0.2)
+        - top_p: float (default 0.95)
         - text: str
         - high_reasoning_effort: bool (default False)
         - reasoning: dict
@@ -62,16 +64,13 @@ class RelayProvider(BaseProvider):
         and OpenAI moving to Responses (vs Completion) should be cleaned up
         """
 
-        max_tokens = kwargs.get("max_tokens", 8192)
-
         # Prepare request data for the plugboard server
-        # TODO: Add support for passing in a custom temperature and top_p
         request_data = {
             "messages": messages,
             "model": model_name,
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
-            "top_p": 0.95,
+            "temperature": kwargs.get("temperature", 0.2),
+            "max_tokens": kwargs.get("max_tokens", 8192),
+            "top_p": kwargs.get("top_p", 0.95),
         }
 
         # Add reasoning config if high_reasoning_effort is set

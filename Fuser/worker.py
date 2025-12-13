@@ -21,7 +21,7 @@ from typing import Optional, Any, Callable
 from .config import WorkerConfig
 
 from .event_adapter import EventAdapter
-from utils.providers.models import get_model_provider, RelayProvider
+from utils.providers import get_model_provider, RelayProvider
 from .prompting import render_prompt, SYSTEM_PROMPT
 from .code_extractor import extract_single_python_file, sha256_of_code
 from .runner import run_candidate
@@ -123,13 +123,11 @@ class Worker:
             Temporary MUX to support Relay while we migrate to OpenAI Responses
             API.
 
-            Uses the Provider inferface for Relay, and EventAdapter otherwise
-            (OpenAI)
+            Uses EventAdapter for OpenAI otherwise Provider inferface
             """
             provider = get_model_provider(self.cfg.model)
-            if isinstance(provider, RelayProvider):
+            if provider.name != "openai":
                 # Call LLM directly using provider
-                provider = get_model_provider(self.cfg.model)
                 messages: list[dict[str, str]] = [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": rp.user},
@@ -138,16 +136,16 @@ class Worker:
                     response = provider.get_response(
                         self.cfg.model, messages, max_tokens=16000, **rp.extras
                     )
-                    state.last_response_id = response.response_id
                     result = {
-                        "output_text": response.content,
-                        "response_id": response.response_id,
+                        "output_text": response.content or "",
+                        "response_id": response.response_id or None,
                         "error": None,
                     }
+                    state.last_response_id = response.response_id
                 except Exception as e:
                     error = f"stream_error: {e.__class__.__name__}: {e}"
                     result = {
-                        "output_text": None,
+                        "output_text": "",
                         "response_id": None,
                         "error": error,
                     }
