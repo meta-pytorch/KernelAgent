@@ -21,7 +21,7 @@ from typing import Optional, Any, Callable
 from .config import WorkerConfig
 
 from .event_adapter import EventAdapter
-from utils.providers import get_model_provider, RelayProvider
+from utils.providers import get_model_provider
 from .prompting import render_prompt, SYSTEM_PROMPT
 from .code_extractor import extract_single_python_file, sha256_of_code
 from .runner import run_candidate
