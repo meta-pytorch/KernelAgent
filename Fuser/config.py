@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from __future__ import annotations
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 import json
@@ -43,7 +43,6 @@ class OrchestratorConfig:
 
     def get_platform_config(self) -> "PlatformConfig":
         """Resolve to PlatformConfig at runtime."""
-        from triton_kernel_agent.platform_config import get_platform
 
         return get_platform(self.target_platform)
 
@@ -75,7 +74,6 @@ class WorkerConfig:
 
     def get_platform_config(self) -> "PlatformConfig":
         """Resolve to PlatformConfig at runtime."""
-        from triton_kernel_agent.platform_config import get_platform
 
         return get_platform(self.target_platform)
 

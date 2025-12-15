@@ -26,7 +26,6 @@ from queue import Empty
 from typing import Any, Dict
 
 from dotenv import load_dotenv
-from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 from .config import OrchestratorConfig, ResultSummary, WorkerConfig
 from .logging_utils import redact, setup_file_logger

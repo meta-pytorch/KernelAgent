@@ -29,7 +29,7 @@ from typing import Any, Dict, Optional, Tuple
 from .prompt_manager import PromptManager
 from .worker_util import _run_test_multiprocess
 from utils.providers import get_model_provider
-from triton_kernel_agent.platform_config import PlatformConfig, get_platform
+from triton_kernel_agent.platform_config import get_platform
 
 
 DISALLOWED_TORCH_PATTERNS = [

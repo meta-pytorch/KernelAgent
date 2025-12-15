@@ -23,7 +23,6 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
 from contextlib import contextmanager
-from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 
 class WorkerManager:
