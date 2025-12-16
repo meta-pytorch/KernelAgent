@@ -137,9 +137,10 @@ def _load_code_from_tar(artifact_path: Path) -> str:
 def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
     if not artifact_path.is_file():
         return None
-    with tarfile.open(artifact_path, "r:gz") as tf, zipfile.ZipFile(
-        zip_path, "w", zipfile.ZIP_DEFLATED
-    ) as zf:
+    with (
+        tarfile.open(artifact_path, "r:gz") as tf,
+        zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf,
+    ):
         for member in tf.getmembers():
             if not member.isfile():
                 continue
@@ -771,7 +772,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
 
                 generate_button = gr.Button("🚀 Run FuserAgent", variant="primary")
 
-            with gr.Column(scale=1.5):
+            with gr.Column(scale=2):
                 gr.Markdown("## Results")
                 status_output = gr.Markdown(value="*Awaiting run...*")
                 with gr.Tabs():
