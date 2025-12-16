@@ -12,21 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LLM Provider system for KernelAgent."""
+"""Model configuration dataclass for KernelAgent."""
 
-from .base import BaseProvider, LLMResponse
-from .openai_provider import OpenAIProvider
-from .anthropic_provider import AnthropicProvider
-from .relay_provider import RelayProvider
-from .models import get_model_provider, get_available_models, is_model_available
+from dataclasses import dataclass
+from typing import List, Type
 
-__all__ = [
-    "BaseProvider",
-    "LLMResponse",
-    "OpenAIProvider",
-    "AnthropicProvider",
-    "RelayProvider",
-    "get_model_provider",
-    "get_available_models",
-    "is_model_available",
-]
+from .base import BaseProvider
+
+
+@dataclass
+class ModelConfig:
+    """Configuration for a specific model."""
+
+    name: str
+    provider_classes: List[Type[BaseProvider]]
+    description: str = ""

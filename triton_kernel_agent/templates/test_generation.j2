@@ -56,6 +56,19 @@ REQUIREMENTS:
 13. Assume the kernel implementation is self-contained inside kernel.py. Do NOT rely on or import any helper that is not defined in kernel.py. The test should surface a clear error if kernel_function references an undefined helper (NameError).
 14. Device checks: use result.device == input.device (or result.device.type == 'cuda'); never compare to 'cuda' or torch.device('cuda').
 
+ANTI-CHEATING CONSTRAINTS:
+- You MAY instantiate a PyTorch reference Model (nn.Module) in the test and use it to compute a reference output for comparison, but you MUST NOT pass that module instance into kernel_function (no model/module/net argument).
+- You MUST NOT pass any precomputed reference outputs (e.g., tensors named expected) into kernel_function. The kernel must compute its result purely from its own inputs.
+- Keep any reference outputs (expected tensors) local to test_kernel() and use them only for numerical comparisons. Do not store them as module-level globals or design the test such that kernel_function can trivially reuse them.
+
+REFERENCE SEMANTICS (WHEN AVAILABLE):
+- If the problem description includes a complete PyTorch reference Model or forward pass (as in KernelBench problems with a Model class and get_inputs()/get_init_inputs()), the test MUST:
+  - Instantiate that reference model (and use get_init_inputs()/get_inputs() when provided to construct inputs).
+  - Compute a reference output y_ref = Model(*inputs) on CUDA using the specified dtype.
+  - Call kernel_function on the same logical inputs (passing weights separately only if the kernel API requires it).
+  - Compare the kernel output numerically against y_ref with appropriate tolerances.
+- Do NOT design the test to verify only a sub-operation (e.g., just a softmax) when the original Model composes multiple operations; the test must validate the full forward mapping described for the given shapes.
+
 CRITICAL TEST DATA REQUIREMENTS:
 - If the problem description specifies exact shapes, dtypes, or tensor dimensions, use EXACTLY those specifications
 - Do NOT create multiple test cases with different shapes/dtypes if specific ones are mentioned
