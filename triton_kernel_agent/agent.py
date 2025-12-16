@@ -18,7 +18,7 @@ import os
 import json
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 from dotenv import load_dotenv
@@ -39,7 +39,7 @@ class TritonKernelAgent:
         log_dir: Optional[str] = None,
         model_name: Optional[str] = None,
         high_reasoning_effort: bool = True,
-        target_platform: Union[str, PlatformConfig, None] = None,
+        target_platform: Optional[PlatformConfig] = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -83,12 +83,9 @@ class TritonKernelAgent:
         self.log_dir.mkdir(exist_ok=True, parents=True)
 
         # Normalize to PlatformConfig
-        if target_platform is None:
-            self._platform_config = get_platform("cuda")
-        elif isinstance(target_platform, str):
-            self._platform_config = get_platform(target_platform)
-        else:
-            self._platform_config = target_platform
+        self._platform_config = (
+            target_platform if target_platform else get_platform("cuda")
+        )
 
         # Setup main logger
         self._setup_logging()
