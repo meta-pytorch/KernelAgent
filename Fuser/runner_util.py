@@ -58,8 +58,15 @@ def _run_candidate_process(
         # Redirect stdout/stderr
         sys.stdout.flush()
         sys.stderr.flush()
-        os.dup2(f_out.fileno(), sys.stdout.fileno())
-        os.dup2(f_err.fileno(), sys.stderr.fileno())
+        os.dup2(f_out.fileno(), 1)
+        os.dup2(f_err.fileno(), 2)
+
+        # Explicitly execute sitecustomization (network blocking) if configured
+        sitecustomize_path = run_dir / "sitecustomize.py"
+        if sitecustomize_path.exists():
+            with open(sitecustomize_path, "r") as f:
+                sc_code = compile(f.read(), str(sitecustomize_path), "exec")
+                exec(sc_code, {})
 
         # Find the script in argv and take everything from there
         if argv and exec_filename in argv:
@@ -67,10 +74,19 @@ def _run_candidate_process(
             sys.argv = argv[script_idx:]
         else:
             sys.argv = [exec_filename]
-        # Execute the target script
+
+        # Set up sys.path to allow imports from the script's directory
+        sys.path.insert(0, str(run_dir))
         with open(exec_filename, "r") as f:
             code = compile(f.read(), exec_filename, "exec")
-            exec(code, {"__name__": "__main__"})
+            exec(
+                code,
+                {
+                    "__name__": "__main__",
+                    "__file__": str(run_dir / exec_filename),
+                    "__package__": None,
+                },
+            )
 
 
 def _run_candidate_multiprocess(
