@@ -352,7 +352,6 @@ class AutoKernelRouter:
         self.verify = verify
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
-        self.target_platform = target_platform  # Store str
         self.platform_config = get_platform(target_platform)
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
@@ -425,7 +424,7 @@ class AutoKernelRouter:
                 run_timeout_s=self.run_timeout_s,
                 verify=self.verify,
                 compose_max_iters=self.compose_max_iters,
-                target_platform=self.target_platform,
+                target_platform=self.platform_config.name,
             )
         except BaseException as exc:  # catch SystemExit and others
             # Return a structured failure so caller can decide on fallback
