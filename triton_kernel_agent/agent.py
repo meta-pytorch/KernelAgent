@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-from utils.providers import get_model_provider
+from utils.providers import BaseProvider, get_model_provider
 
 
 class TritonKernelAgent:
@@ -38,6 +38,7 @@ class TritonKernelAgent:
         log_dir: Optional[str] = None,
         model_name: Optional[str] = None,
         high_reasoning_effort: bool = True,
+        preferred_provider: Optional[BaseProvider] = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -63,7 +64,7 @@ class TritonKernelAgent:
         # Initialize provider
         self.provider = None
         try:
-            self.provider = get_model_provider(self.model_name)
+            self.provider = get_model_provider(self.model_name, preferred_provider)
             self.logger = logging.getLogger(self.__class__.__name__)
             self.logger.info(
                 f"Initialized provider '{self.provider.name}' for model '{self.model_name}'"
