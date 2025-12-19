@@ -24,7 +24,7 @@ import sys
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from .prompt_manager import PromptManager
 from utils.providers import get_model_provider
@@ -127,7 +127,7 @@ class VerificationWorker:
         log_dir: Path,
         max_rounds: int = 10,
         history_size: int = 8,
-        openai_api_key: Optional[str] = None,
+        openai_api_key: str | None = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
     ):
@@ -187,7 +187,7 @@ class VerificationWorker:
 
     def _extract_code_from_response(
         self, response_text: str, language: str = "python"
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Extract code from LLM response text.
 
@@ -258,7 +258,7 @@ class VerificationWorker:
         pattern = re.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|#.*)')
         return re.sub(pattern, "", code)
 
-    def _detect_pytorch_compute(self, kernel_code: str) -> Optional[str]:
+    def _detect_pytorch_compute(self, kernel_code: str) -> str | None:
         """Detect disallowed PyTorch usage inside the kernel wrapper."""
         sanitized = self._strip_comments_and_strings(kernel_code)
         for pattern, message in DISALLOWED_TORCH_PATTERNS:
@@ -266,7 +266,7 @@ class VerificationWorker:
                 return message
         return None
 
-    def _run_test(self) -> Tuple[bool, str, str]:
+    def _run_test(self) -> tuple[bool, str, str]:
         """
         Run the test script and capture results.
 
@@ -327,7 +327,7 @@ class VerificationWorker:
     def _refine_kernel(
         self,
         kernel_code: str,
-        error_info: Dict[str, str],
+        error_info: dict[str, str],
         problem_description: str,
         test_code: str,
     ) -> str:
@@ -419,7 +419,7 @@ class VerificationWorker:
         test_code: str,
         problem_description: str,
         success_event: mp.Event,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run verification and refinement loop.
 

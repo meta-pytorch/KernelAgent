@@ -14,8 +14,6 @@
 
 """Relay provider implementation."""
 
-from typing import Dict, List
-
 import requests
 import logging
 import os
@@ -48,7 +46,7 @@ class RelayProvider(BaseProvider):
             self.is_available_flag = False
 
     def get_response(
-        self, model_name: str, messages: List[Dict[str, str]], **kwargs
+        self, model_name: str, messages: list[dict[str, str]], **kwargs
     ) -> LLMResponse:
         """
         Supported kwargs:
@@ -116,10 +114,10 @@ class RelayProvider(BaseProvider):
     def get_multiple_responses(
         self,
         model_name: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         n: int = 1,
         **kwargs,
-    ) -> List[LLMResponse]:
+    ) -> list[LLMResponse]:
         return [
             self.get_response(
                 model_name,

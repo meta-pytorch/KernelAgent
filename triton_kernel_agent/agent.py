@@ -18,7 +18,7 @@ import os
 import json
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any
 from datetime import datetime
 import logging
 from dotenv import load_dotenv
@@ -33,12 +33,12 @@ class TritonKernelAgent:
 
     def __init__(
         self,
-        num_workers: Optional[int] = None,
-        max_rounds: Optional[int] = None,
-        log_dir: Optional[str] = None,
-        model_name: Optional[str] = None,
+        num_workers: int | None = None,
+        max_rounds: int | None = None,
+        log_dir: str | None = None,
+        model_name: str | None = None,
         high_reasoning_effort: bool = True,
-        preferred_provider: Optional[BaseProvider] = None,
+        preferred_provider: BaseProvider | None = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -111,7 +111,7 @@ class TritonKernelAgent:
 
     def _extract_code_from_response(
         self, response_text: str, language: str = "python"
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Extract code from LLM response text.
 
@@ -160,7 +160,7 @@ class TritonKernelAgent:
         self.logger.warning("No code block found in LLM response")
         return None
 
-    def _call_llm(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    def _call_llm(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
         Call the LLM provider for the configured model.
 
@@ -182,7 +182,7 @@ class TritonKernelAgent:
         return response.content
 
     def _generate_test(
-        self, problem_description: str, provided_test_code: Optional[str] = None
+        self, problem_description: str, provided_test_code: str | None = None
     ) -> str:
         """
         Generate test code for the problem using OpenAI API.
@@ -305,8 +305,8 @@ if __name__ == "__main__":
         return test_code
 
     def _generate_kernel_seeds(
-        self, problem_description: str, test_code: str, num_seeds: Optional[int] = None
-    ) -> List[str]:
+        self, problem_description: str, test_code: str, num_seeds: int | None = None
+    ) -> list[str]:
         """
         Generate initial kernel implementations using OpenAI API.
 
@@ -422,8 +422,8 @@ def kernel_function(*args, **kwargs):
         return kernels
 
     def generate_kernel(
-        self, problem_description: str, test_code: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, problem_description: str, test_code: str | None = None
+    ) -> dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
 

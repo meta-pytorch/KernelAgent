@@ -15,7 +15,7 @@
 """Model configuration dataclass for KernelAgent."""
 
 from dataclasses import dataclass
-from typing import List, Type
+from typing import Type
 
 from .base import BaseProvider
 
@@ -25,5 +25,5 @@ class ModelConfig:
     """Configuration for a specific model."""
 
     name: str
-    provider_classes: List[Type[BaseProvider]]
+    provider_classes: list[Type[BaseProvider]]
     description: str = ""

@@ -39,7 +39,7 @@ import json
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 import concurrent.futures as _futures
 
 from dotenv import load_dotenv
@@ -50,7 +50,7 @@ except Exception:  # pragma: no cover - import-time dependency
     TritonKernelAgent = None  # type: ignore
 
 
-def _shape_list(shape: Any) -> List[str]:
+def _shape_list(shape: Any) -> list[str]:
     if isinstance(shape, list):
         return [str(x) for x in shape]
     return [str(shape)] if shape is not None else []
@@ -69,7 +69,7 @@ def _py_tuple(arr: Any) -> str:
     return f"({', '.join(vals)})"
 
 
-def _pick_weights(item: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
+def _pick_weights(item: dict[str, Any], keys: list[str]) -> dict[str, Any]:
     # Prefer explicit fused/original dicts; fallback to generic 'weights'
     ws = (
         item.get("weights_fused")
@@ -79,7 +79,7 @@ def _pick_weights(item: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
     )
     if not isinstance(ws, dict):
         return {}
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for k in keys:
         if k in ws:
             out[k] = ws[k]
@@ -89,20 +89,20 @@ def _pick_weights(item: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
     return out
 
 
-def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
+def _build_reference_code(item: dict[str, Any]) -> tuple[str, list[str]]:
     """Return (reference_code_str, param_names) implementing the subgraph.
 
     param_names are additional parameters to reference() beyond the first input(s).
     """
-    ops: List[Dict[str, Any]] = [
+    ops: list[dict[str, Any]] = [
         op for op in (item.get("ops") or []) if isinstance(op, dict)
     ]
-    lines: List[str] = ["import torch", "import torch.nn.functional as F", ""]
-    params: List[str] = []
+    lines: list[str] = ["import torch", "import torch.nn.functional as F", ""]
+    params: list[str] = []
 
     # Determine if multi-input
     inputs_multi = item.get("inputs")
-    input_names: List[str]
+    input_names: list[str]
     if isinstance(inputs_multi, list) and inputs_multi:
         input_names = [f"x{i}" for i in range(len(inputs_multi))]
         header = f"def reference({', '.join(input_names)}"  # weights appended later
@@ -110,7 +110,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
         input_names = ["x"]
         header = "def reference(x"
 
-    body: List[str] = []
+    body: list[str] = []
     cur = input_names[0] if input_names else "x"
 
     for op in ops:
@@ -123,7 +123,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
                 else ("weight" if "weight" in wmap else "conv_weight")
             )
             b = "bias" if "bias" in wmap else None
-            args: List[str] = [cur, w]
+            args: list[str] = [cur, w]
             if b:
                 args.append(b)
             stride = _py_tuple(op.get("stride", (1, 1)))
@@ -142,7 +142,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
                 else ("weight" if "weight" in wmap else "conv_transpose_weight")
             )
             b = "bias" if "bias" in wmap else None
-            args: List[str] = [cur, w]
+            args: list[str] = [cur, w]
             if b:
                 args.append(b)
             stride = _py_tuple(op.get("stride", (1, 1)))
@@ -252,7 +252,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     return "\n".join(lines) + "\n", params
 
 
-def _synthesize_problem_description(item: Dict[str, Any]) -> str:
+def _synthesize_problem_description(item: dict[str, Any]) -> str:
     id_ = str(item.get("id", "unknown"))
     type_ = str(item.get("type", ""))
     layout = item.get("data_layout") or "NCHW"
@@ -327,7 +327,7 @@ def run(
         )
 
     with subgraphs_path.open("r", encoding="utf-8") as f:
-        items: List[Dict[str, Any]] = json.load(f)
+        items: list[dict[str, Any]] = json.load(f)
     if not isinstance(items, list):
         raise SystemExit("subgraphs.json must be a JSON array")
 
@@ -335,7 +335,7 @@ def run(
 
     # Worker function: create a dedicated agent instance per subgraph to avoid
     # cross-thread state interactions inside the agent/manager.
-    def _handle_one(idx_item: Tuple[int, Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
+    def _handle_one(idx_item: tuple[int, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
         idx, item = idx_item
         sid = str(item.get("id", f"subgraph_{idx}"))
         pdesc = _synthesize_problem_description(item)
@@ -384,8 +384,8 @@ def run(
 
     # Submit tasks with bounded concurrency
     jobs = max(1, int(jobs or 1))
-    ordered_inputs: List[Tuple[int, Dict[str, Any]]] = list(enumerate(items, start=1))
-    results: Dict[int, Dict[str, Any]] = {}
+    ordered_inputs: list[tuple[int, dict[str, Any]]] = list(enumerate(items, start=1))
+    results: dict[int, dict[str, Any]] = {}
     if jobs == 1:
         for pair in ordered_inputs:
             i, res = _handle_one(pair)
@@ -400,13 +400,13 @@ def run(
                 results[i] = res
 
     # Preserve input order in summary output
-    summary: List[Dict[str, Any]] = [results[i] for i in sorted(results.keys())]
+    summary: list[dict[str, Any]] = [results[i] for i in sorted(results.keys())]
     out_summary = out_dir / "summary.json"
     out_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return out_summary
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     p = argparse.ArgumentParser(
         description="Generate Triton kernels for subgraphs via KernelAgent"
