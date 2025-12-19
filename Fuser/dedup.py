@@ -17,7 +17,6 @@ import time
 from pathlib import Path
 
 
-
 def register_digest(
     shared_digests_dir: Path, sha256: str, worker_id: str, iter_index: int
 ) -> tuple[str, str | None]:

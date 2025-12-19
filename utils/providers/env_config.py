@@ -19,7 +19,6 @@ import subprocess
 import logging
 
 
-
 def _get_meta_proxy_config() -> dict[str, str] | None:
     """
     Get Meta's proxy configuration if available.

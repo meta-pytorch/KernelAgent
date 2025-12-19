@@ -14,8 +14,6 @@
 
 """Relay provider implementation."""
 
-
-
 import requests
 import logging
 import os

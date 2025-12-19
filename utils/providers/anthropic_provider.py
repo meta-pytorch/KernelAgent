@@ -14,7 +14,6 @@
 
 """Anthropic provider implementation."""
 
-
 from .base import BaseProvider, LLMResponse
 from .env_config import configure_proxy_environment
 
