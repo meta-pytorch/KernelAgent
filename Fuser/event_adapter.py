@@ -49,7 +49,7 @@ class EventAdapter:
         timeout_s: int,
         jsonl_path: Path,
         stop_event: threading.Event | None = None,
-        on_delta: Callable[[str | None, None]] = None,
+        on_delta: Callable[[str, None]] | None = None,
         client: Any | None = None,
     ) -> None:
         self.model = model
@@ -117,7 +117,7 @@ class EventAdapter:
         self,
         system_prompt: str,
         user_prompt: str,
-        extras: dict[str, Any | None] = None,
+        extras: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Start streaming and persist events. Returns a dict with summary fields:

@@ -129,7 +129,7 @@ def run_pipeline(
     }
 
 
-def main(argv: list[str | None] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     # Load .env if present for OPENAI_API_KEY, proxies, etc.
     try:
         from dotenv import load_dotenv  # type: ignore

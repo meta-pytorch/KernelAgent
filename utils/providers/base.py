@@ -27,7 +27,7 @@ class LLMResponse:
     content: str
     model: str
     provider: str
-    usage: Dict[str, Any | None] = None
+    usage: Dict[str, Any] | None = None
     response_id: str | None = None
 
 

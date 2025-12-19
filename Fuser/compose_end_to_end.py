@@ -404,7 +404,7 @@ def compose(
     return result
 
 
-def main(argv: List[str | None] = None) -> int:
+def main(argv: List[str] | None = None) -> int:
     load_dotenv()
     p = argparse.ArgumentParser(
         description="Compose end-to-end Triton kernel from subgraphs + generated kernels"

@@ -668,7 +668,7 @@ class AutoKernelRouter:
 # ------------------------
 
 
-def main(argv: list[str | None] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
     )

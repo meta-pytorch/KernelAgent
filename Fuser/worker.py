@@ -77,7 +77,7 @@ class Worker:
         problem_path: Path,
         winner_queue: Any,
         cancel_event: Any,
-        on_delta: Callable[[str | None, None]] = None,
+        on_delta: Callable[[str, None]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.problem_path = problem_path
