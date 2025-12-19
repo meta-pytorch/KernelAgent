@@ -41,7 +41,8 @@ class OrchestratorConfig:
         d["problem_path"] = str(self.problem_path)
         return json.dumps(d, indent=2)
 
-    def get_platform_config(self) -> "PlatformConfig":
+    @property
+    def platform_config(self) -> "PlatformConfig":
         """Resolve to PlatformConfig at runtime."""
 
         return get_platform(self.target_platform)
@@ -72,7 +73,8 @@ class WorkerConfig:
     shared_digests_dir: Path
     target_platform: str = "cuda"
 
-    def get_platform_config(self) -> "PlatformConfig":
+    @property
+    def platform_config(self) -> "PlatformConfig":
         """Resolve to PlatformConfig at runtime."""
 
         return get_platform(self.target_platform)
