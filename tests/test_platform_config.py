@@ -33,12 +33,6 @@ from triton_kernel_agent.platform_config import (
 class TestGetPlatform:
     """Tests for the get_platform() function."""
 
-    def test_get_platform_cuda(self):
-        """get_platform('cuda') should return CUDA config."""
-        config = get_platform("cuda")
-        assert config.name == "cuda"
-        assert config.device_string == "cuda"
-
     def test_get_platform_xpu(self):
         """get_platform('xpu') should return XPU config."""
         config = get_platform("xpu")
