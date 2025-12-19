@@ -14,13 +14,13 @@
 
 """Model registry and configuration for KernelAgent."""
 
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Type
 
 from .base import BaseProvider
 from .model_config import ModelConfig
 
 # Cached model lookup dictionary (lazily initialized)
-_model_name_to_config: Optional[Dict[str, ModelConfig]] = None
+_model_name_to_config: Dict[str, ModelConfig | None] = None
 
 # Provider instances cache
 _provider_instances: Dict[Type[BaseProvider], BaseProvider] = {}
@@ -50,7 +50,7 @@ def _get_model_name_to_config() -> Dict[str, ModelConfig]:
 
 
 def get_model_provider(
-    model_name: str, preferred_provider: Optional[Type[BaseProvider]] = None
+    model_name: str, preferred_provider: Type[BaseProvider | None] = None
 ) -> BaseProvider:
     """
     Get the first available provider instance for a given model. If a preferred
@@ -58,7 +58,7 @@ def get_model_provider(
 
     Args:
         model_name: Name of the model
-        preferred_provider: Optional preffered provider class
+        preferred_provider:  preffered provider class
 
     Returns:
         Provider instance
@@ -105,7 +105,7 @@ def get_model_provider(
 
 
 def is_model_available(
-    model_name: str, preferred_provider: Optional[Type[BaseProvider]] = None
+    model_name: str, preferred_provider: Type[BaseProvider | None] = None
 ) -> bool:
     """Check if a model is available and its provider is ready.
     If a preferred provider is specified, only it will be checked

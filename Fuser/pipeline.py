@@ -36,7 +36,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Optional
 
 from .subgraph_extractor import extract_subgraphs_to_json
 from .dispatch_kernel_agent import run as dispatch_run
@@ -46,14 +45,14 @@ from .compose_end_to_end import compose
 def run_pipeline(
     problem_path: Path,
     extract_model: str,
-    dispatch_model: Optional[str],
+    dispatch_model: str | None,
     compose_model: str,
     dispatch_jobs: int | str,
     workers: int,
     max_iters: int,
     llm_timeout_s: int,
     run_timeout_s: int,
-    out_root: Optional[Path] = None,
+    out_root: Path | None = None,
     verify: bool = True,
     compose_max_iters: int = 5,
 ) -> dict:
@@ -130,7 +129,7 @@ def run_pipeline(
     }
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str | None] = None) -> int:
     # Load .env if present for OPENAI_API_KEY, proxies, etc.
     try:
         from dotenv import load_dotenv  # type: ignore

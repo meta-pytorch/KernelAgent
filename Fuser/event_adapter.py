@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Any
+from typing import Callable, Any
 
 try:
     # OpenAI official SDK (Responses API)
@@ -48,9 +48,9 @@ class EventAdapter:
         store_responses: bool,
         timeout_s: int,
         jsonl_path: Path,
-        stop_event: Optional[threading.Event] = None,
-        on_delta: Optional[Callable[[str], None]] = None,
-        client: Optional[Any] = None,
+        stop_event: threading.Event | None = None,
+        on_delta: Callable[[str | None, None]] = None,
+        client: Any | None = None,
     ) -> None:
         self.model = model
         self.store_responses = store_responses
@@ -117,7 +117,7 @@ class EventAdapter:
         self,
         system_prompt: str,
         user_prompt: str,
-        extras: Optional[dict[str, Any]] = None,
+        extras: dict[str, Any | None] = None,
     ) -> dict[str, Any]:
         """
         Start streaming and persist events. Returns a dict with summary fields:
@@ -125,8 +125,8 @@ class EventAdapter:
         """
         client = self._ensure_client()
         output_text_parts: list[str] = []
-        response_id: Optional[str] = None
-        error_msg: Optional[str] = None
+        response_id: str | None = None
+        error_msg: str | None = None
 
         # Start background flusher
         done_flag = threading.Event()

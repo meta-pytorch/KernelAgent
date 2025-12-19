@@ -24,7 +24,6 @@ import random
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from Fuser.runner_util import _run_candidate_multiprocess
 
@@ -203,7 +202,7 @@ def run_candidate(
     timeout_s: int,
     isolated: bool,
     deny_network: bool,
-    cancel_event: Optional["threading.Event"] = None,
+    cancel_event: "threading.Event" | None = None,
 ) -> RunResult:
     """
     Execute a candidate program in a fresh run directory under run_root.

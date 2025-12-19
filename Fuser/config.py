@@ -14,7 +14,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
 import json
 import time
 import uuid
@@ -68,8 +67,8 @@ class WorkerConfig:
 @dataclass
 class ResultSummary:
     run_id: str
-    winner_worker_id: Optional[str]
-    artifact_path: Optional[str]
+    winner_worker_id: str | None
+    artifact_path: str | None
     reason: str
 
 

@@ -15,7 +15,7 @@
 """Prompt Manager for handling Jinja2 templates."""
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 try:
     from jinja2 import Environment, FileSystemLoader, Template
@@ -36,7 +36,7 @@ class PromptManager:
     for test generation, kernel generation, and kernel refinement.
     """
 
-    def __init__(self, templates_dir: Optional[str] = None):
+    def __init__(self, templates_dir: str | None = None):
         """
         Initialize the prompt manager.
 
@@ -91,7 +91,7 @@ class PromptManager:
                 raise FileNotFoundError(f"Template file not found: {template_path}")
 
     def render_test_generation_prompt(
-        self, problem_description: str, provided_test_code: Optional[str] = None
+        self, problem_description: str, provided_test_code: str | None = None
     ) -> str:
         """
         Render the test generation prompt.
@@ -113,7 +113,7 @@ class PromptManager:
         self,
         problem_description: str,
         test_code: str,
-        triton_guidelines: Optional[str] = None,
+        triton_guidelines: str | None = None,
     ) -> str:
         """
         Render the kernel generation prompt.
@@ -144,8 +144,8 @@ class PromptManager:
         test_code: str,
         kernel_code: str,
         error_info: Dict[str, str],
-        history_context: Optional[str] = None,
-        triton_guidelines: Optional[str] = None,
+        history_context: str | None = None,
+        triton_guidelines: str | None = None,
     ) -> str:
         """
         Render the kernel refinement prompt.

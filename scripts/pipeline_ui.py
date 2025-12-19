@@ -24,7 +24,7 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -51,7 +51,7 @@ def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
     return problems
 
 
-def _zip_dir(src_dir: Path, zip_path: Path) -> Optional[Path]:
+def _zip_dir(src_dir: Path, zip_path: Path) -> Path | None:
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for root, _dirs, files in os.walk(src_dir):
@@ -81,7 +81,7 @@ class PipelineArtifacts:
     details_md: str
     code_text: str
     run_info_md: str
-    zip_path: Optional[Path]
+    zip_path: Path | None
 
 
 def _write_temp_problem(code: str) -> Path:
@@ -154,9 +154,9 @@ def run_pipeline_ui(
     compose_max_iters: int,
     verify: bool,
     auto_route: bool = False,
-    router_model: Optional[str] = None,
+    router_model: str | None = None,
     router_high_reasoning: bool = True,
-    user_api_key: Optional[str] = None,
+    user_api_key: str | None = None,
 ) -> PipelineArtifacts:
     from Fuser.auto_agent import AutoKernelRouter
     from Fuser.pipeline import run_pipeline
@@ -448,8 +448,8 @@ class PipelineUI:
         run_timeout: int,
         compose_max_iters: int,
         verify: bool,
-        user_api_key: Optional[str],
-    ) -> Tuple[str, str, str, str, Optional[str]]:
+        user_api_key: str | None,
+    ) -> Tuple[str, str, str, str, str | None]:
         problem_mapping = {label: path for label, path in self.problem_choices}
         selected_path = problem_mapping.get(selected_problem_label, "")
         # Use description override if present; otherwise selected path
@@ -642,7 +642,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
             run_timeout: int,
             compose_max_iters: int,
             verify: bool,
-            api_key: Optional[str],
+            api_key: str | None,
         ):
             return ui.run(
                 selected_problem_label=selected_label,

@@ -38,7 +38,7 @@ import re
 import sys
 import tarfile
 from pathlib import Path
-from typing import Any, Optional, Tuple, Dict
+from typing import Any, Tuple, Dict
 
 from .cli import _load_dotenv_if_present  # reuse env loader
 from .config import OrchestratorConfig, new_run_id
@@ -72,7 +72,7 @@ _JSON_BLOCK_RE = re.compile(
 def _extract_json_block(text: str) -> str:
     """Extract the last fenced JSON block or fallback to best-effort slice."""
     matches = list(_JSON_BLOCK_RE.finditer(text))
-    chosen: Optional[re.Match[str]] = None
+    chosen: re.Match[str | None] = None
     for m in reversed(matches):
         lang = (m.group(1) or "").strip().lower()
         if lang == "json":
@@ -367,7 +367,7 @@ def extract_subgraphs_to_json(
     return dirs["run_dir"], out_path
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str | None] = None) -> int:
     _load_dotenv_if_present()
     p = argparse.ArgumentParser(
         description="Extract unique subgraphs with shapes (JSON)"

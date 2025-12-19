@@ -50,7 +50,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from dotenv import load_dotenv
 from Fuser.pipeline import run_pipeline
@@ -299,18 +299,18 @@ class RouteResult:
     route: str  # "kernelagent" or "fuser"
     success: bool
     details: Dict[str, Any]
-    kernel_code: Optional[str] = None
+    kernel_code: str | None = None
 
 
 class AutoKernelRouter:
     def __init__(
         self,
-        ka_model: Optional[str] = None,
+        ka_model: str | None = None,
         ka_num_workers: int = 4,
         ka_max_rounds: int = 10,
         ka_high_reasoning: bool = True,
         # Router LLM
-        router_model: Optional[str] = "gpt-5",
+        router_model: str | None = "gpt-5",
         router_high_reasoning: bool = True,
         router_temperature: float = 0.2,
         router_max_tokens: int = 700,
@@ -431,7 +431,7 @@ class AutoKernelRouter:
 
         comp = res.get("composition", {}) or {}
         ok = bool(comp.get("verify_passed", not self.verify))
-        kernel_code: Optional[str] = None
+        kernel_code: str | None = None
         try:
             composed_path = comp.get("composed_path")
             if composed_path and Path(composed_path).is_file():
@@ -457,8 +457,8 @@ class AutoKernelRouter:
         cache = _load_router_cache()
         cached = cache.get(code_hash)
 
-        strategy: Optional[str] = None
-        route_conf: Optional[float] = None
+        strategy: str | None = None
+        route_conf: float | None = None
         route_cfg: Dict[str, Any] = {}
 
         if isinstance(cached, dict):
@@ -545,7 +545,7 @@ class AutoKernelRouter:
     # -------- LLM decision helper --------
     def _llm_decide_route(
         self, problem_path: Path, code: str, cx: Complexity
-    ) -> Tuple[Optional[str], Optional[float], Dict[str, Any]]:
+    ) -> Tuple[str | None, float | None, Dict[str, Any]]:
         """Ask an LLM to choose a routing STRATEGY and optional budgets.
 
         The LLM must return JSON with keys:
@@ -668,7 +668,7 @@ class AutoKernelRouter:
 # ------------------------
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str | None] = None) -> int:
     p = argparse.ArgumentParser(
         description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
     )

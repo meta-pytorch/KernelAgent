@@ -16,7 +16,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import os
 
 
@@ -27,8 +27,8 @@ class LLMResponse:
     content: str
     model: str
     provider: str
-    usage: Optional[Dict[str, Any]] = None
-    response_id: Optional[str] = None
+    usage: Dict[str, Any | None] = None
+    response_id: str | None = None
 
 
 class BaseProvider(ABC):
@@ -97,7 +97,7 @@ class BaseProvider(ABC):
         """Get the maximum tokens limit for a model."""
         return 8192  # Default limit
 
-    def _get_api_key(self, env_var: str) -> Optional[str]:
+    def _get_api_key(self, env_var: str) -> str | None:
         """Helper to get API key from environment."""
         api_key = os.getenv(env_var)
         if api_key and api_key != "your-api-key-here":

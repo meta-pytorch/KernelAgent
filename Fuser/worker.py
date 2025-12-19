@@ -16,7 +16,7 @@ import json
 import queue
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional, Any, Callable
+from typing import Any, Callable
 
 from .config import WorkerConfig
 from .event_adapter import EventAdapter
@@ -33,8 +33,8 @@ from utils.providers import get_model_provider
 class WorkerState:
     worker_id: str
     iter_index: int
-    last_response_id: Optional[str]
-    last_error: Optional[str]
+    last_response_id: str | None
+    last_error: str | None
     passed: bool
 
 
@@ -77,7 +77,7 @@ class Worker:
         problem_path: Path,
         winner_queue: Any,
         cancel_event: Any,
-        on_delta: Optional[Callable[[str], None]] = None,
+        on_delta: Callable[[str | None, None]] = None,
     ) -> None:
         self.cfg = cfg
         self.problem_path = problem_path

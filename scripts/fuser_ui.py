@@ -25,7 +25,7 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -48,7 +48,7 @@ class RunArtifacts:
     summary_md: str
     code_text: str
     run_info_md: str
-    zip_path: Optional[Path]
+    zip_path: Path | None
 
 
 def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
@@ -81,7 +81,7 @@ def _format_classes_summary(code_text: str) -> str:
             return node.id
         if isinstance(node, ast.Attribute):
             parts: List[str] = []
-            cur: Optional[ast.AST] = node
+            cur: ast.AST | None = node
             while isinstance(cur, ast.Attribute):
                 parts.append(cur.attr)
                 cur = cur.value
@@ -134,7 +134,7 @@ def _load_code_from_tar(artifact_path: Path) -> str:
         return extracted.read().decode("utf-8")
 
 
-def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
+def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Path | None:
     if not artifact_path.is_file():
         return None
     with (
@@ -153,7 +153,7 @@ def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
 
 
 def _compose_run_info(
-    run_dir: Path, summary_reason: str, elapsed: float, winner: Optional[str]
+    run_dir: Path, summary_reason: str, elapsed: float, winner: str | None
 ) -> str:
     lines = ["## 📁 Run Information"]
     lines.append(f"- Run directory: `{run_dir}`")
@@ -174,7 +174,7 @@ def run_fuser_problem(
     llm_timeout: int,
     run_timeout: int,
     enable_reasoning: bool,
-    user_api_key: Optional[str] = None,
+    user_api_key: str | None = None,
 ) -> RunArtifacts:
     """Execute the Fuser orchestrator and collect artifacts."""
     if not problem_path:
@@ -664,8 +664,8 @@ class FuserAgentUI:
         llm_timeout: int,
         run_timeout: int,
         enable_reasoning: bool,
-        user_api_key: Optional[str],
-    ) -> Tuple[str, str, str, str, Optional[str]]:
+        user_api_key: str | None,
+    ) -> Tuple[str, str, str, str, str | None]:
         problem_path = custom_problem.strip() or selected_problem
         artifacts = run_fuser_problem(
             problem_path=problem_path,
@@ -802,7 +802,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
             run_timeout: int,
             reasoning: bool,
             strict_compile: bool,
-            api_key: Optional[str],
+            api_key: str | None,
         ):
             selected_path = problem_mapping.get(selected_label, default_problem)
             status, summary, code_text, run_info, zip_path = ui.run(

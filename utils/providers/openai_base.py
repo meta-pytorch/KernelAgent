@@ -14,7 +14,7 @@
 
 """Base provider for OpenAI-compatible APIs."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import logging
 from .base import BaseProvider, LLMResponse
 from .env_config import configure_proxy_environment
@@ -31,7 +31,7 @@ except ImportError:
 class OpenAICompatibleProvider(BaseProvider):
     """Base provider for OpenAI-compatible APIs."""
 
-    def __init__(self, api_key_env: str, base_url: Optional[str] = None):
+    def __init__(self, api_key_env: str, base_url: str | None = None):
         self.api_key_env = api_key_env
         self.base_url = base_url
         self._original_proxy_env = None

@@ -17,10 +17,10 @@
 import os
 import subprocess
 import logging
-from typing import Dict, Optional
+from typing import Dict
 
 
-def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
+def _get_meta_proxy_config() -> Dict[str, str | None]:
     """
     Get Meta's proxy configuration if available.
 
@@ -59,7 +59,7 @@ def _get_meta_proxy_config() -> Optional[Dict[str, str]]:
         return None
 
 
-def configure_proxy_environment() -> Optional[Dict[str, Optional[str]]]:
+def configure_proxy_environment() -> Dict[str[str | None]]:
     """
     Configure proxy environment variables for Meta environment.
     This is the centralized proxy configuration logic used by all providers.

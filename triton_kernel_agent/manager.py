@@ -19,7 +19,7 @@ import shutil
 import multiprocessing as mp
 import queue
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
 import logging
 from contextlib import contextmanager
@@ -33,8 +33,8 @@ class WorkerManager:
         num_workers: int = 4,
         max_rounds: int = 10,
         history_size: int = 8,
-        log_dir: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
+        log_dir: str | None = None,
+        openai_api_key: str | None = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
     ):
@@ -110,8 +110,8 @@ class WorkerManager:
         kernel_seeds: List[str],
         test_code: str,
         problem_description: str,
-        session_log_dir: Optional[Path] = None,
-    ) -> Optional[Dict[str, Any]]:
+        session_log_dir: Path | None = None,
+    ) -> Dict[str, Any | None]:
         """
         Run parallel verification on multiple kernel seeds.
 
@@ -220,7 +220,7 @@ def worker_process(
     history_size: int,
     success_event: mp.Event,
     result_queue: mp.Queue,
-    openai_api_key: Optional[str],
+    openai_api_key: str | None,
     openai_model: str,
     high_reasoning_effort: bool,
 ):

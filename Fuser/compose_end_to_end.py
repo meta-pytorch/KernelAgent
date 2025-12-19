@@ -45,7 +45,7 @@ import os
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
 
@@ -404,7 +404,7 @@ def compose(
     return result
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: List[str | None] = None) -> int:
     load_dotenv()
     p = argparse.ArgumentParser(
         description="Compose end-to-end Triton kernel from subgraphs + generated kernels"

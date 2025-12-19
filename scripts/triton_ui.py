@@ -20,7 +20,7 @@ import os
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Tuple
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -99,11 +99,11 @@ class TritonKernelUI:
     def generate_kernel(
         self,
         problem_description: str,
-        test_code: Optional[str] = None,
+        test_code: str | None = None,
         model_name: str = "o3-2025-04-16",
         provider_class_name: str = "",
         high_reasoning_effort: bool = True,
-        user_api_key: Optional[str] = None,
+        user_api_key: str | None = None,
     ) -> Tuple[str, str, str, str, str, str]:
         """
         Generate a Triton kernel based on the problem description
@@ -546,7 +546,7 @@ def _create_app() -> gr.Blocks:
 
         # Event handlers
 
-        def update_problem_descriptor(selection: Optional[str]):
+        def update_problem_descriptor(selection: str | None):
             if not selection:
                 return gr.update()
 
