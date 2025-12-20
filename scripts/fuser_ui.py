@@ -40,7 +40,7 @@ except Exception:  # pragma: no cover
 from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
-from triton_kernel_agent.platform_config import get_platform_choices
+from triton_kernel_agent.platform_config import get_platform_choices, get_platform
 
 
 @dataclass
@@ -439,16 +439,16 @@ class FuserAgentUI:
             spec.loader.exec_module(mod)  # type: ignore
 
             # Determine device based on target platform
-            if target_platform == "xpu":
+            platform_cfg = get_platform(target_platform)
+            if platform_cfg.name == "xpu":
                 if not hasattr(torch, "xpu") or not torch.xpu.is_available():
                     return (
                         "*Intel XPU not available. Install PyTorch with XPU support.*"
                     )
-                device = "xpu"
             else:
                 if not torch.cuda.is_available():
                     return "*CUDA not available.*"
-                device = "cuda"
+            device = platform_cfg.device_string
 
             model = mod.Model(*mod.get_init_inputs()).eval().to(device)
             x = mod.get_inputs()[0].to(device)
