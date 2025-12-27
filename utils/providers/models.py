@@ -96,7 +96,7 @@ def get_model_provider(
             return provider
 
     # No provider was available
-    tried_names = [p.name() for p in providers_to_try]
+    tried_names = [_get_or_create_provider(p).name for p in providers_to_try]
     raise ValueError(
         f"No available provider for model '{model_name}'. "
         f"Tried providers: {tried_names}. "
