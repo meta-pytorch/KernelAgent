@@ -31,7 +31,9 @@ class DeepSeekProvider(OpenAICompatibleProvider):
         return "deepseek"
 
     def get_max_tokens_limit(self, model_name: str) -> int:
-        """Get max tokens limit for DeepSeek models."""
-        # DeepSeek models typically support up to 64K context
-        # Using conservative limit of 8192 for output tokens
+        """Get max tokens limit for DeepSeek models.
+        
+        Note: DeepSeek models support up to 64K input context window,
+        but this method returns the output token limit for completions.
+        """
         return 8192
