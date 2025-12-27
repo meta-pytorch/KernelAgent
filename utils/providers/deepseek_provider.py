@@ -33,10 +33,5 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     def get_max_tokens_limit(self, model_name: str) -> int:
         """Get max tokens limit for DeepSeek models."""
         # DeepSeek models typically support up to 64K context
-        # Using conservative limits for output tokens
-        if model_name.startswith("deepseek-chat"):
-            return 8192
-        elif model_name.startswith("deepseek-reasoner"):
-            return 8192
-        else:
-            return 8192
+        # Using conservative limit of 8192 for output tokens
+        return 8192
