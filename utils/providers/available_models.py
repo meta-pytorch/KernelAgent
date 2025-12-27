@@ -18,6 +18,7 @@ from utils.providers.model_config import ModelConfig
 from utils.providers.openai_provider import OpenAIProvider
 from utils.providers.anthropic_provider import AnthropicProvider
 from utils.providers.relay_provider import RelayProvider
+from utils.providers.deepseek_provider import DeepSeekProvider
 
 
 # Registry of all available models (external/OSS version)
@@ -53,5 +54,16 @@ AVAILABLE_MODELS = [
         name="gcp-claude-4-sonnet",
         provider_classes=[RelayProvider],
         description="[Relay] Claude 4 Sonnet",
+    ),
+    # DeepSeek Models
+    ModelConfig(
+        name="deepseek-chat",
+        provider_classes=[DeepSeekProvider],
+        description="DeepSeek Chat - general purpose model",
+    ),
+    ModelConfig(
+        name="deepseek-reasoner",
+        provider_classes=[DeepSeekProvider],
+        description="DeepSeek Reasoner - reasoning model",
     ),
 ]

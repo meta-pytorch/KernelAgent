@@ -69,7 +69,7 @@ LOG_LEVEL=INFO                # logging level
 ```
 
 #### LLM Providers
-KernelAgent currently supports OpenAI and Anthropic out-of-the-box. You can also use a custom OpenAI endpoint.
+KernelAgent currently supports OpenAI, Anthropic, and DeepSeek out-of-the-box. You can also use a custom OpenAI endpoint.
 These can be configured in `.env` or via environment variables.
 ```bash
 # OpenAI (models like `o4-mini`, `gpt-5`)
@@ -77,6 +77,9 @@ OPENAI_API_KEY=sk-...
 
 # Anthropic (default; `claude-sonnet-4-20250514` is used when `OPENAI_MODEL` is unset)
 ANTHROPIC_API_KEY=sk-ant-...
+
+# DeepSeek (models like `deepseek-chat`, `deepseek-reasoner`)
+DEEPSEEK_API_KEY=sk-...
 
 # Relay configuration for self-hosted gateways
 LLM_RELAY_URL=http://127.0.0.1:11434
