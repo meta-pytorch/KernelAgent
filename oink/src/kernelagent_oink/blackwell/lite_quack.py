@@ -54,6 +54,7 @@ TORCH2CUTE_DTYPE = {
 # Tensor conversion helpers
 # -------------------------
 
+
 def convert_from_dlpack(
     x: Tensor,
     leading_dim: int,
@@ -82,7 +83,9 @@ def convert_from_dlpack(
 
 
 @dsl_user_op
-def elem_pointer(x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None) -> cute.Pointer:
+def elem_pointer(
+    x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None
+) -> cute.Pointer:
     return x.iterator + cute.crd2idx(coord, x.layout, loc=loc, ip=ip)
 
 
@@ -133,7 +136,9 @@ def store_shared_remote(
     ).ir_value()
     if const_expr(isinstance(val, float)):
         val = Float32(val)
-    assert isinstance(val, (Float32, Int32, cutlass.Int64)), "val must be Float32, Int32, or Int64"
+    assert isinstance(val, (Float32, Int32, cutlass.Int64)), (
+        "val must be Float32, Int32, or Int64"
+    )
     suffix = {Float32: "f32", Int32: "s32", cutlass.Int64: "s64"}[type(val)]
     constraint = {Float32: "f", Int32: "r", cutlass.Int64: "l"}[type(val)]
     llvm.inline_asm(
@@ -155,19 +160,27 @@ def predicate_k(tAcA: cute.Tensor, limit: cutlass.Int32) -> cute.Tensor:
     """
     tApA = cute.make_fragment(
         cute.make_layout(
-            (cute.size(tAcA, mode=[0, 1]), cute.size(tAcA, mode=[1]), cute.size(tAcA, mode=[2])),
+            (
+                cute.size(tAcA, mode=[0, 1]),
+                cute.size(tAcA, mode=[1]),
+                cute.size(tAcA, mode=[2]),
+            ),
             stride=(cute.size(tAcA, mode=[2]), 0, 1),
         ),
         cutlass.Boolean,
     )
     for rest_v in cutlass.range_constexpr(tApA.shape[0]):
         for rest_k in cutlass.range_constexpr(tApA.shape[2]):
-            tApA[rest_v, 0, rest_k] = cute.elem_less(tAcA[(0, rest_v), 0, rest_k][1], limit)
+            tApA[rest_v, 0, rest_k] = cute.elem_less(
+                tAcA[(0, rest_v), 0, rest_k][1], limit
+            )
     return tApA
 
 
 @dsl_user_op
-def domain_offset_i64(coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None) -> cute.Tensor:
+def domain_offset_i64(
+    coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None
+) -> cute.Tensor:
     """
     Return a tensor whose iterator is offset by an Int64 byte offset
     computed from `coord` and the tensor's strides.
@@ -287,7 +300,9 @@ def block_or_cluster_reduce(
     """Dispatch between block or cluster reduction depending on mbar_ptr."""
     if cutlass.const_expr(mbar_ptr is None):
         return block_reduce(val, op, reduction_buffer, init_val=init_val)
-    return cluster_reduce(val, op, reduction_buffer, mbar_ptr, init_val=init_val, phase=phase)
+    return cluster_reduce(
+        val, op, reduction_buffer, mbar_ptr, init_val=init_val, phase=phase
+    )
 
 
 @cute.jit
@@ -313,7 +328,9 @@ def row_reduce(
         val = x
     warp_op = {
         cute.ReductionOp.ADD: operator.add,
-        cute.ReductionOp.MAX: cute.arch.fmax if cutlass.const_expr(x.dtype == Float32) else max,
+        cute.ReductionOp.MAX: cute.arch.fmax
+        if cutlass.const_expr(x.dtype == Float32)
+        else max,
         cute.ReductionOp.MIN: min,
         cute.ReductionOp.MUL: operator.mul,
     }[op]
@@ -353,10 +370,16 @@ def get_sm_count(N: int, device: torch.device) -> int:
     RMSNorm kernels but lives entirely in this local module.
     """
     sm_count_multiple = (
-        16 if N <= 256 else (8 if N <= 1024 else (4 if N <= 2048 else (2 if N <= 4096 else 1)))
+        16
+        if N <= 256
+        else (8 if N <= 1024 else (4 if N <= 2048 else (2 if N <= 4096 else 1)))
     )
     sm_count = torch.cuda.get_device_properties(device).multi_processor_count
     sm_count = (
-        sm_count * sm_count_multiple if N <= 8192 else sm_count // 2 if N <= 16384 else sm_count * 2
+        sm_count * sm_count_multiple
+        if N <= 8192
+        else sm_count // 2
+        if N <= 16384
+        else sm_count * 2
     )
     return sm_count

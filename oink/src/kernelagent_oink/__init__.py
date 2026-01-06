@@ -94,7 +94,9 @@ def register() -> None:
 
         # Ensure CuTeDSL sees a target arch early. If the user has already set it,
         # respect their choice.
-        os.environ.setdefault("CUTE_DSL_ARCH", _compute_cutedsl_arch(int(major), int(minor)))
+        os.environ.setdefault(
+            "CUTE_DSL_ARCH", _compute_cutedsl_arch(int(major), int(minor))
+        )
 
         # Import registers the ops via torch.library.custom_op decorators.
         from .blackwell import oink_custom_ops  # noqa: F401

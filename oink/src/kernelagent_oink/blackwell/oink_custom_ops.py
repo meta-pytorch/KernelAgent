@@ -80,6 +80,7 @@ def _get_sm(device: torch.device | None = None) -> int:
 # RMSNorm (functional)
 #
 
+
 @custom_op("oink::rmsnorm", mutates_args=())
 def oink_rmsnorm(
     x: torch.Tensor,
@@ -158,6 +159,7 @@ def oink_rmsnorm_fake(
 # Fused residual-add + RMSNorm (in-place, vLLM semantics)
 #
 
+
 @custom_op("oink::fused_add_rms_norm", mutates_args=("x", "residual"))
 def oink_fused_add_rms_norm(
     x: torch.Tensor,
@@ -174,7 +176,9 @@ def oink_fused_add_rms_norm(
     Returns:
         None (mutates `x` and `residual` in-place).
     """
-    assert x.is_cuda and residual.is_cuda, "oink::fused_add_rms_norm requires CUDA tensors"
+    assert x.is_cuda and residual.is_cuda, (
+        "oink::fused_add_rms_norm requires CUDA tensors"
+    )
     assert x.shape == residual.shape, "x and residual must have the same shape"
     assert x.dtype == residual.dtype, "x and residual must have the same dtype"
     assert weight.dim() == 1, "weight must be 1D [N]"

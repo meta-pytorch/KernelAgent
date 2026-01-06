@@ -84,6 +84,7 @@ _PTR_COMPILE_CACHE = {}
 # pointer/scalar storage so concurrent callers don't race on in-place updates.
 _PTR_FAST_LAUNCH_TLS = threading.local()
 
+
 def _env_flag(name: str, default: bool) -> bool:
     val = os.environ.get(name)
     if val is None:
@@ -100,10 +101,16 @@ _FAST_LAUNCH_SUPPORTED = True
 
 # Fused-add RMSNorm schedule knobs (read once at import time; set env vars before
 # importing this module if you want to override).
-_DIRECT_GMEM_POLICY = (os.environ.get("OINK_RMSNORM_DIRECT_GMEM", "auto").strip().lower() or "auto")
-_COPY_BITS_POLICY = (os.environ.get("OINK_RMSNORM_COPY_BITS", "auto").strip().lower() or "auto")
+_DIRECT_GMEM_POLICY = (
+    os.environ.get("OINK_RMSNORM_DIRECT_GMEM", "auto").strip().lower() or "auto"
+)
+_COPY_BITS_POLICY = (
+    os.environ.get("OINK_RMSNORM_COPY_BITS", "auto").strip().lower() or "auto"
+)
 _ENABLE_CLUSTER_ILP = _env_flag("OINK_RMSNORM_ENABLE_CLUSTER_ILP", default=False)
-_ENABLE_CLUSTER_ILP_UNSAFE = _env_flag("OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE", default=False)
+_ENABLE_CLUSTER_ILP_UNSAFE = _env_flag(
+    "OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE", default=False
+)
 _ENABLE_TPR256 = _env_flag("OINK_RMSNORM_ENABLE_TPR256", default=False)
 _ENABLE_STAGE2 = _env_flag("OINK_RMSNORM_ENABLE_STAGE2", default=False)
 
@@ -252,6 +259,7 @@ print(f"ok {copy_bits}")
         _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = max_bits
         return max_bits
 
+
 def _parse_version_tuple(version: str) -> Tuple[int, int, int]:
     parts = version.split(".")
     nums: list[int] = []
@@ -275,7 +283,9 @@ _CUTLASS_DSL_VERSION = _cutlass_dsl_version()
 # passing Layout/Shape/Constexpr objects into @cute.kernel functions). Keep the
 # older signature for 4.3.2, but switch to a 4.3.4-compatible signature when we
 # detect 4.3.4+ (or when version detection is unavailable).
-_KERNEL_ACCEPTS_LAYOUT_ARGS = _CUTLASS_DSL_VERSION is not None and _CUTLASS_DSL_VERSION < (4, 3, 4)
+_KERNEL_ACCEPTS_LAYOUT_ARGS = (
+    _CUTLASS_DSL_VERSION is not None and _CUTLASS_DSL_VERSION < (4, 3, 4)
+)
 
 if _ENABLE_CLUSTER_ILP and not _ENABLE_CLUSTER_ILP_UNSAFE:
     # We have observed reproducible segfaults in some CuTeDSL builds when using
@@ -427,7 +437,9 @@ class _PtrRmsnormFastLaunch:
                 self._last_x_ptr = x_ptr
             except AttributeError:
                 self._disable_fast_launch()
-                self._fallback_launch(x=x, weight=weight, out=out, M=M, N=N, ld=ld, eps=eps)
+                self._fallback_launch(
+                    x=x, weight=weight, out=out, M=M, N=N, ld=ld, eps=eps
+                )
                 return
 
         if self._ptr_w is not None:
@@ -438,7 +450,9 @@ class _PtrRmsnormFastLaunch:
                     self._last_w_ptr = w_ptr
                 except AttributeError:
                     self._disable_fast_launch()
-                    self._fallback_launch(x=x, weight=weight, out=out, M=M, N=N, ld=ld, eps=eps)
+                    self._fallback_launch(
+                        x=x, weight=weight, out=out, M=M, N=N, ld=ld, eps=eps
+                    )
                     return
 
         out_ptr = out.data_ptr()
@@ -448,7 +462,9 @@ class _PtrRmsnormFastLaunch:
                 self._last_out_ptr = out_ptr
             except AttributeError:
                 self._disable_fast_launch()
-                self._fallback_launch(x=x, weight=weight, out=out, M=M, N=N, ld=ld, eps=eps)
+                self._fallback_launch(
+                    x=x, weight=weight, out=out, M=M, N=N, ld=ld, eps=eps
+                )
                 return
 
         if M != self._last_m:
@@ -492,10 +508,19 @@ class _PtrRmsnormFastLaunch:
         # If the packed-args or runtime pointer mutation path stops working
         # (e.g. due to a CuTeDSL upgrade), fall back to the regular call path.
         dtype = TORCH2CUTE_DTYPE[x.dtype]
-        ptr_x = rt.make_ptr(dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-        ptr_out = rt.make_ptr(dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        ptr_x = rt.make_ptr(
+            dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_out = rt.make_ptr(
+            dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         ptr_w = (
-            rt.make_ptr(dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+            rt.make_ptr(
+                dtype,
+                weight.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=16,
+            )
             if weight is not None
             else None
         )
@@ -695,7 +720,15 @@ def _get_fast_ptr_rmsnorm_launcher(
         return None
     # Keyed by the compiled object identity so schedule changes (e.g. copy width,
     # async/staged variants, etc.) never alias in the fast-launch cache.
-    key = ("ptr_fast", id(compiled), N, dtype, device_index, int(stream_handle), has_weight)
+    key = (
+        "ptr_fast",
+        id(compiled),
+        N,
+        dtype,
+        device_index,
+        int(stream_handle),
+        has_weight,
+    )
     cache = _tls_fast_launch_cache()
     cached = cache.get(key)
     if cached is not None:
@@ -705,7 +738,9 @@ def _get_fast_ptr_rmsnorm_launcher(
     ptr_x = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16)
     ptr_out = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16)
     ptr_w = (
-        rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16) if has_weight else None
+        rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        if has_weight
+        else None
     )
 
     arg_m = _StableI32Arg(0)
@@ -808,9 +843,15 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
     if cached is not None:
         return cached  # type: ignore[return-value]
 
-    ptr_x = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-    ptr_res = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-    ptr_w = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
+    ptr_x = rt.make_ptr(
+        dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+    )
+    ptr_res = rt.make_ptr(
+        dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+    )
+    ptr_w = rt.make_ptr(
+        dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+    )
 
     arg_m = _StableI32Arg(0)
     arg_n = _StableI32Arg(N)
@@ -884,6 +925,7 @@ from kernelagent_oink.blackwell.lite_quack import TORCH2CUTE_DTYPE, row_reduce  
 # Copy helpers (allow up to 256b)
 # -------------------------
 
+
 @cute.jit
 def get_copy_atom_bw(
     dtype: type[cutlass.Numeric], num_copy_elems: int, is_async: bool = False
@@ -892,6 +934,7 @@ def get_copy_atom_bw(
     max_bits = const_expr(128 if is_async else 256)
     num_copy_bits = const_expr(min(max_bits, num_copy_elems * dtype.width))
     from cutlass.cute.nvgpu import cpasync
+
     # Prefer GLOBAL cache policy for bulk streaming reads at large M
     copy_op = (
         cpasync.CopyG2SOp(cache_mode=cpasync.LoadCacheMode.GLOBAL)
@@ -1037,7 +1080,10 @@ class RMSNormSM100:
         tiler_mn = (cols_per_block, vecsize * num_blocks_N * tpr)
         tv_layout = cute.make_layout(
             ((tpr, cols_per_block), (vecsize, num_blocks_N)),
-            stride=((vecsize * cols_per_block, 1), (cols_per_block, cols_per_block * vecsize * tpr)),
+            stride=(
+                (vecsize * cols_per_block, 1),
+                (cols_per_block, cols_per_block * vecsize * tpr),
+            ),
         )
         return tiler_mn, tv_layout
 
@@ -1045,7 +1091,10 @@ class RMSNormSM100:
         # smem for X tile (+ residual if present) + reduction buffers + mbar(s)
         return (
             cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn))
-            + self.stage * num_warps * self._cluster_n() * (self.reduction_dtype.width // 8)
+            + self.stage
+            * num_warps
+            * self._cluster_n()
+            * (self.reduction_dtype.width // 8)
             + self.stage * (cutlass.Int64.width // 8)
         )
 
@@ -1072,7 +1121,9 @@ class RMSNormSM100:
             )
 
         mX, mRes, mO, mResO = [
-            cute.make_tensor(t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t)))
+            cute.make_tensor(
+                t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t))
+            )
             if const_expr(t is not None)
             else None
             for t in (mX, mRes, mO, mResO)
@@ -1082,23 +1133,34 @@ class RMSNormSM100:
 
         copy_bits = int(self.copy_bits)
         tiler_mn, tv_layout = self._tv_layout(num_copy_bits=copy_bits)
-        num_threads = cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._num_threads()
+        num_threads = (
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._num_threads()
+        )
         num_warps = num_threads // cute.arch.WARP_SIZE
-        threads_per_row = tv_layout.shape[0][0] if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._threads_per_row()
+        threads_per_row = (
+            tv_layout.shape[0][0]
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._threads_per_row()
+        )
         warps_per_row = max(threads_per_row // cute.arch.WARP_SIZE, 1)
         cluster_n = self._cluster_n()
 
         if const_expr(mW is not None):
             mW = cute.make_tensor(
-                mW.iterator, cute.prepend(mW.layout, cute.make_layout((tiler_mn[0],), stride=(0,)))
+                mW.iterator,
+                cute.prepend(mW.layout, cute.make_layout((tiler_mn[0],), stride=(0,))),
             )
         if const_expr(mB is not None):
             mB = cute.make_tensor(
-                mB.iterator, cute.prepend(mB.layout, cute.make_layout((tiler_mn[0],), stride=(0,)))
+                mB.iterator,
+                cute.prepend(mB.layout, cute.make_layout((tiler_mn[0],), stride=(0,))),
             )
         if const_expr(mRstd is not None):
             mRstd = cute.make_tensor(
-                mRstd.iterator, cute.append(mRstd.layout, cute.make_layout((self.N,), stride=(0,)))
+                mRstd.iterator,
+                cute.append(mRstd.layout, cute.make_layout((self.N,), stride=(0,))),
             )
 
         # No SMEM reload mode switch; overlap is controlled in the K-loop path
@@ -1114,11 +1176,14 @@ class RMSNormSM100:
             else 0
         )
         tile_bytes_res = (
-            cute.size_in_bytes(mRes.element_type, cute.make_layout(tiler_mn)) * stage_bufs
+            cute.size_in_bytes(mRes.element_type, cute.make_layout(tiler_mn))
+            * stage_bufs
             if const_expr(mRes is not None and not self.direct_gmem)
             else 0
         )
-        red_bytes = self.stage * num_warps * cluster_n * (self.reduction_dtype.width // 8)
+        red_bytes = (
+            self.stage * num_warps * cluster_n * (self.reduction_dtype.width // 8)
+        )
         # mbarriers are only allocated/used for cluster_n>1. Some CuTeDSL builds
         # require mbarrier state to be 16B-aligned in shared memory; account for
         # the alignment padding when computing dynamic smem bytes.
@@ -1211,14 +1276,10 @@ class RMSNormSM100:
             else None
         )
         mW = (
-            cute.make_tensor(ptr_w, layout_n)
-            if const_expr(ptr_w is not None)
-            else None
+            cute.make_tensor(ptr_w, layout_n) if const_expr(ptr_w is not None) else None
         )
         mB = (
-            cute.make_tensor(ptr_b, layout_n)
-            if const_expr(ptr_b is not None)
-            else None
+            cute.make_tensor(ptr_b, layout_n) if const_expr(ptr_b is not None) else None
         )
         mRstd = (
             cute.make_tensor(ptr_rstd, layout_m)
@@ -1303,7 +1364,9 @@ class RMSNormSM100:
         # Allocate one or two SMEM buffers depending on stage depth
         sX0 = (
             smem.allocate_tensor(
-                mX.element_type, cute.make_ordered_layout(tiler_mn, order=(1, 0)), byte_alignment=32
+                mX.element_type,
+                cute.make_ordered_layout(tiler_mn, order=(1, 0)),
+                byte_alignment=32,
             )
             if const_expr(not self.direct_gmem)
             else None
@@ -1319,7 +1382,9 @@ class RMSNormSM100:
         )
         sRes0 = (
             smem.allocate_tensor(
-                mRes.element_type, cute.make_ordered_layout(tiler_mn, order=(1, 0)), byte_alignment=32
+                mRes.element_type,
+                cute.make_ordered_layout(tiler_mn, order=(1, 0)),
+                byte_alignment=32,
             )
             if const_expr(mRes is not None and not self.direct_gmem)
             else None
@@ -1339,7 +1404,9 @@ class RMSNormSM100:
             (num_warps // warps_per_row, (warps_per_row, cluster_n), self.stage),
             order=(1, 0, 2),
         )
-        reduction_buffer = smem.allocate_tensor(self.reduction_dtype, red_layout, byte_alignment=4)
+        reduction_buffer = smem.allocate_tensor(
+            self.reduction_dtype, red_layout, byte_alignment=4
+        )
         if const_expr(cluster_n > 1):
             # Some CuTeDSL builds appear sensitive to the shared-memory alignment of
             # mbarrier state. `SmemAllocator.allocate_array` does not currently
@@ -1360,8 +1427,12 @@ class RMSNormSM100:
 
         # Tiled copy setup
         num_copy_elems_X = tv_layout.shape[1][0]
-        use_async = const_expr(self.use_async and self.N >= 1024 and not self.direct_gmem)
-        copy_atom = get_copy_atom_bw(mX.element_type, num_copy_elems_X, is_async=use_async)
+        use_async = const_expr(
+            self.use_async and self.N >= 1024 and not self.direct_gmem
+        )
+        copy_atom = get_copy_atom_bw(
+            mX.element_type, num_copy_elems_X, is_async=use_async
+        )
         thr_copy = cute.make_tiled_copy(copy_atom, tv_layout, tiler_mn).get_slice(tidx)
 
         # Tail predicate for the N dimension (when tile width > N). Reuse this
@@ -1386,7 +1457,9 @@ class RMSNormSM100:
             mW is not None and (self.direct_gmem or (mRes is None and mB is None))
         )
         if const_expr(prefetch_w_early):
-            gW = cute.local_tile(qutils.domain_offset_i64((0, n_off), mW), tiler_mn, (0, 0))
+            gW = cute.local_tile(
+                qutils.domain_offset_i64((0, n_off), mW), tiler_mn, (0, 0)
+            )
             tXgW = thr_copy.partition_S(gW)
             tXrW = cute.make_fragment_like(tXgW)
             if const_expr(not is_even_N_wb):
@@ -1398,7 +1471,9 @@ class RMSNormSM100:
                 pred=tXp_wb,
             )
         if const_expr(self.direct_gmem and mB is not None):
-            gB = cute.local_tile(qutils.domain_offset_i64((0, n_off), mB), tiler_mn, (0, 0))
+            gB = cute.local_tile(
+                qutils.domain_offset_i64((0, n_off), mB), tiler_mn, (0, 0)
+            )
             tXgB = thr_copy.partition_S(gB)
             tXrB = cute.make_fragment_like(tXgB)
             if const_expr(not is_even_N_wb):
@@ -1414,7 +1489,9 @@ class RMSNormSM100:
         self._init_cluster(tidx, mbar_ptr)
 
         mX_i, mRes_i, mO_i, mResO_i = [
-            qutils.domain_offset_i64((bidx * tiler_mn[0], 0), t) if t is not None else None
+            qutils.domain_offset_i64((bidx * tiler_mn[0], 0), t)
+            if t is not None
+            else None
             for t in (mX, mRes, mO, mResO)
         ]
         mX_i, mRes_i, mO_i, mResO_i = [
@@ -1424,27 +1501,39 @@ class RMSNormSM100:
         gX_i = cute.local_tile(mX_i, tiler_mn, (0, 0))
         gO_i = cute.local_tile(mO_i, tiler_mn, (0, 0))
         gRes_i = (
-            cute.local_tile(mRes_i, tiler_mn, (0, 0)) if const_expr(mRes is not None) else None
+            cute.local_tile(mRes_i, tiler_mn, (0, 0))
+            if const_expr(mRes is not None)
+            else None
         )
         gResO_i = (
-            cute.local_tile(mResO_i, tiler_mn, (0, 0)) if const_expr(mResO is not None) else None
+            cute.local_tile(mResO_i, tiler_mn, (0, 0))
+            if const_expr(mResO is not None)
+            else None
         )
         gRstd_i = (
-            cute.local_tile(mRstd, tiler_mn, (bidx, 0)) if const_expr(mRstd is not None) else None
+            cute.local_tile(mRstd, tiler_mn, (bidx, 0))
+            if const_expr(mRstd is not None)
+            else None
         )
         cX_i = cute.local_tile(idX, tiler_mn, (bidx, 0))
 
         # Common identity/row index partitions reused by both default and K-loop paths
         tXcX_i = thr_copy.partition_S(cX_i)[(0, None), None, None]
         row_i = tXcX_i[0][0]
-        tXgRstd_i = thr_copy.partition_D(gRstd_i) if const_expr(mRstd is not None) else None
+        tXgRstd_i = (
+            thr_copy.partition_D(gRstd_i) if const_expr(mRstd is not None) else None
+        )
 
         # Stage-2 intra-row K-loop cp.async ping-pong (two tiles). This reduces
         # per-thread fragment size and can improve memory-latency hiding for
         # N=7168 at large M. It is enabled by setting `stage=2` when constructing
         # the RMSNormSM100 op (see `_fused_add_rmsnorm_forward_ptr_inplace`).
         if const_expr(
-            self.stage > 1 and not self.direct_gmem and use_async and cluster_n == 1 and shape[1] == 7168
+            self.stage > 1
+            and not self.direct_gmem
+            and use_async
+            and cluster_n == 1
+            and shape[1] == 7168
         ):
             vecsize = tv_layout.shape[1][0]
             tpr = threads_per_row
@@ -1475,9 +1564,9 @@ class RMSNormSM100:
                         (tiler_mn[0], tiler_mn[0] * vecsize * tpr),
                     ),
                 )
-                thr_copy_tile = cute.make_tiled_copy(copy_atom, tv_layout_tile, tiler_mn_tile).get_slice(
-                    tidx
-                )
+                thr_copy_tile = cute.make_tiled_copy(
+                    copy_atom, tv_layout_tile, tiler_mn_tile
+                ).get_slice(tidx)
 
                 # Accumulate per-thread partial sums across tiles; reduce once.
                 sum_sq_thread = cute.Float32(0.0)
@@ -1499,7 +1588,13 @@ class RMSNormSM100:
                 tXp_pong = tXp_0
 
                 if row_i < shape[0]:
-                    copy_tiled(tXgX_0, tXsX_0, num_copy_elems=vecsize, is_async=True, pred=tXp_0)
+                    copy_tiled(
+                        tXgX_0,
+                        tXsX_0,
+                        num_copy_elems=vecsize,
+                        is_async=True,
+                        pred=tXp_0,
+                    )
                     if const_expr(mRes is not None):
                         gRes_0 = cute.local_tile(
                             qutils.domain_offset_i64((0, k_off0), mRes_i),
@@ -1538,19 +1633,27 @@ class RMSNormSM100:
                         if const_expr((t % 2) == 0):
                             tXsX_n = thr_copy_tile.partition_D(sX1_tile)
                             tXsRes_n = (
-                                thr_copy_tile.partition_D(sRes1_tile) if const_expr(mRes is not None) else None
+                                thr_copy_tile.partition_D(sRes1_tile)
+                                if const_expr(mRes is not None)
+                                else None
                             )
                             tXp_pong = tXp_n
                         else:
                             tXsX_n = thr_copy_tile.partition_D(sX0_tile)
                             tXsRes_n = (
-                                thr_copy_tile.partition_D(sRes0_tile) if const_expr(mRes is not None) else None
+                                thr_copy_tile.partition_D(sRes0_tile)
+                                if const_expr(mRes is not None)
+                                else None
                             )
                             tXp_ping = tXp_n
 
                         if row_i < shape[0]:
                             copy_tiled(
-                                tXgX_n, tXsX_n, num_copy_elems=vecsize, is_async=True, pred=tXp_n
+                                tXgX_n,
+                                tXsX_n,
+                                num_copy_elems=vecsize,
+                                is_async=True,
+                                pred=tXp_n,
                             )
                             if const_expr(mRes is not None):
                                 gRes_n = cute.local_tile(
@@ -1574,25 +1677,35 @@ class RMSNormSM100:
                     if const_expr((t % 2) == 0):
                         tXsX_cur = thr_copy_tile.partition_D(sX0_tile)
                         tXsRes_cur = (
-                            thr_copy_tile.partition_D(sRes0_tile) if const_expr(mRes is not None) else None
+                            thr_copy_tile.partition_D(sRes0_tile)
+                            if const_expr(mRes is not None)
+                            else None
                         )
                         pred_cur = tXp_ping
                     else:
                         tXsX_cur = thr_copy_tile.partition_D(sX1_tile)
                         tXsRes_cur = (
-                            thr_copy_tile.partition_D(sRes1_tile) if const_expr(mRes is not None) else None
+                            thr_copy_tile.partition_D(sRes1_tile)
+                            if const_expr(mRes is not None)
+                            else None
                         )
                         pred_cur = tXp_pong
 
                     k_off = t * tile_n
-                    gX_t = cute.local_tile(qutils.domain_offset_i64((0, k_off), mX_i), tiler_mn_tile, (0, 0))
+                    gX_t = cute.local_tile(
+                        qutils.domain_offset_i64((0, k_off), mX_i),
+                        tiler_mn_tile,
+                        (0, 0),
+                    )
                     tXgX_t = thr_copy_tile.partition_S(gX_t)
                     tXrX_t = cute.make_fragment_like(tXgX_t)
                     cute.autovec_copy(tXsX_cur, tXrX_t)
                     x_t = tXrX_t.load().to(cute.Float32)
                     if const_expr(mRes is not None):
                         gRes_t = cute.local_tile(
-                            qutils.domain_offset_i64((0, k_off), mRes_i), tiler_mn_tile, (0, 0)
+                            qutils.domain_offset_i64((0, k_off), mRes_i),
+                            tiler_mn_tile,
+                            (0, 0),
                         )
                         tXgRes_t = thr_copy_tile.partition_S(gRes_t)
                         tXrRes_t = cute.make_fragment_like(tXgRes_t)
@@ -1639,29 +1752,41 @@ class RMSNormSM100:
 
                 for t in cutlass.range_constexpr(num_tiles):
                     k_off = t * tile_n
-                    cX_t = cute.local_tile(cute.domain_offset((0, k_off), cX_i), tiler_mn_tile, (0, 0))
+                    cX_t = cute.local_tile(
+                        cute.domain_offset((0, k_off), cX_i), tiler_mn_tile, (0, 0)
+                    )
                     tXc_t = thr_copy_tile.partition_S(cX_t)
                     tXp_t = qutils.predicate_k(tXc_t, limit=limit_k)
 
                     if const_expr((t % 2) == 0):
                         tXsX_cur = thr_copy_tile.partition_D(sX0_tile)
                         tXsRes_cur = (
-                            thr_copy_tile.partition_D(sRes0_tile) if const_expr(mRes is not None) else None
+                            thr_copy_tile.partition_D(sRes0_tile)
+                            if const_expr(mRes is not None)
+                            else None
                         )
                     else:
                         tXsX_cur = thr_copy_tile.partition_D(sX1_tile)
                         tXsRes_cur = (
-                            thr_copy_tile.partition_D(sRes1_tile) if const_expr(mRes is not None) else None
+                            thr_copy_tile.partition_D(sRes1_tile)
+                            if const_expr(mRes is not None)
+                            else None
                         )
 
-                    gX_t = cute.local_tile(qutils.domain_offset_i64((0, k_off), mX_i), tiler_mn_tile, (0, 0))
+                    gX_t = cute.local_tile(
+                        qutils.domain_offset_i64((0, k_off), mX_i),
+                        tiler_mn_tile,
+                        (0, 0),
+                    )
                     tXgX_t = thr_copy_tile.partition_S(gX_t)
                     tXrX_t = cute.make_fragment_like(tXgX_t)
                     cute.autovec_copy(tXsX_cur, tXrX_t)
                     x_t = tXrX_t.load().to(cute.Float32)
                     if const_expr(mRes is not None):
                         gRes_t = cute.local_tile(
-                            qutils.domain_offset_i64((0, k_off), mRes_i), tiler_mn_tile, (0, 0)
+                            qutils.domain_offset_i64((0, k_off), mRes_i),
+                            tiler_mn_tile,
+                            (0, 0),
                         )
                         tXgRes_t = thr_copy_tile.partition_S(gRes_t)
                         tXrRes_t = cute.make_fragment_like(tXgRes_t)
@@ -1671,43 +1796,77 @@ class RMSNormSM100:
                     y_t = x_t * rstd
                     if const_expr(mW is not None):
                         gW_t = cute.local_tile(
-                            qutils.domain_offset_i64((0, k_off), mW), tiler_mn_tile, (0, 0)
+                            qutils.domain_offset_i64((0, k_off), mW),
+                            tiler_mn_tile,
+                            (0, 0),
                         )
                         tWgW_t = thr_copy_tile.partition_S(gW_t)
                         tWrW_t = cute.make_fragment_like(tWgW_t)
-                        copy_tiled(tWgW_t, tWrW_t, num_copy_elems=vecsize, is_async=False, pred=tXp_t)
+                        copy_tiled(
+                            tWgW_t,
+                            tWrW_t,
+                            num_copy_elems=vecsize,
+                            is_async=False,
+                            pred=tXp_t,
+                        )
                         y_t = y_t * tWrW_t.load().to(cute.Float32)
                     if const_expr(mB is not None):
                         gB_t = cute.local_tile(
-                            qutils.domain_offset_i64((0, k_off), mB), tiler_mn_tile, (0, 0)
+                            qutils.domain_offset_i64((0, k_off), mB),
+                            tiler_mn_tile,
+                            (0, 0),
                         )
                         tWgB_t = thr_copy_tile.partition_S(gB_t)
                         tWrB_t = cute.make_fragment_like(tWgB_t)
-                        copy_tiled(tWgB_t, tWrB_t, num_copy_elems=vecsize, is_async=False, pred=tXp_t)
+                        copy_tiled(
+                            tWgB_t,
+                            tWrB_t,
+                            num_copy_elems=vecsize,
+                            is_async=False,
+                            pred=tXp_t,
+                        )
                         y_t = y_t + tWrB_t.load().to(cute.Float32)
 
-                    gO_t = cute.local_tile(qutils.domain_offset_i64((0, k_off), mO_i), tiler_mn_tile, (0, 0))
+                    gO_t = cute.local_tile(
+                        qutils.domain_offset_i64((0, k_off), mO_i),
+                        tiler_mn_tile,
+                        (0, 0),
+                    )
                     tXgO_t = thr_copy_tile.partition_D(gO_t)
                     tXrO_t = cute.make_fragment_like(tXgO_t)
                     tXrO_t.store(y_t.to(tXrO_t.element_type))
                     if row_i < shape[0]:
-                        copy_tiled(tXrO_t, tXgO_t, num_copy_elems=vecsize, is_async=False, pred=tXp_t)
+                        copy_tiled(
+                            tXrO_t,
+                            tXgO_t,
+                            num_copy_elems=vecsize,
+                            is_async=False,
+                            pred=tXp_t,
+                        )
 
                 return
 
         # Single-stage path: one-row-per-CTA
         tXgX_i = thr_copy.partition_S(gX_i)
-        tXgRes_i = thr_copy.partition_S(gRes_i) if const_expr(mRes is not None) else None
+        tXgRes_i = (
+            thr_copy.partition_S(gRes_i) if const_expr(mRes is not None) else None
+        )
         tXgO_i = thr_copy.partition_D(gO_i)
-        tXgResO_i = thr_copy.partition_D(gResO_i) if const_expr(mResO is not None) else None
+        tXgResO_i = (
+            thr_copy.partition_D(gResO_i) if const_expr(mResO is not None) else None
+        )
         # tXgRstd_i / tXcX_i / row_i prepared above
         is_even_N_i = const_expr(shape[1] == tiler_mn[1] * cluster_n)
         tXpX_i = (
-            qutils.predicate_k(thr_copy.partition_S(cX_i), limit=limit_k) if not is_even_N_i else None
+            qutils.predicate_k(thr_copy.partition_S(cX_i), limit=limit_k)
+            if not is_even_N_i
+            else None
         )
 
         tXrX = cute.make_fragment_like(tXgX_i)
-        tXrRes = cute.make_fragment_like(tXgRes_i) if const_expr(mRes is not None) else None
+        tXrRes = (
+            cute.make_fragment_like(tXgRes_i) if const_expr(mRes is not None) else None
+        )
         if const_expr(self.direct_gmem):
             if const_expr(not is_even_N_i):
                 tXrX.fill(0)
@@ -1729,7 +1888,9 @@ class RMSNormSM100:
             if row_i < shape[0]:
                 cute.copy(copy_atom, tXgX_i, thr_copy.partition_D(sX0), pred=tXpX_i)
                 if const_expr(mRes is not None):
-                    cute.copy(copy_atom, tXgRes_i, thr_copy.partition_D(sRes0), pred=tXpX_i)
+                    cute.copy(
+                        copy_atom, tXgRes_i, thr_copy.partition_D(sRes0), pred=tXpX_i
+                    )
             if const_expr(use_async):
                 cute.arch.cp_async_commit_group()
                 cute.arch.cp_async_wait_group(0)
@@ -1746,7 +1907,9 @@ class RMSNormSM100:
             tXrResO.store(x_red.to(tXrResO.element_type))
             if row_i < shape[0]:
                 cute.copy(
-                    get_copy_atom_bw(tXrResO.element_type, num_copy_elems_X, is_async=False),
+                    get_copy_atom_bw(
+                        tXrResO.element_type, num_copy_elems_X, is_async=False
+                    ),
                     tXrResO,
                     tXgResO_i,
                     pred=tXpX_i,
@@ -1775,7 +1938,9 @@ class RMSNormSM100:
             # pressure during the long-scoreboard reduction phase (helping occupancy
             # when registers are the limiting factor).
             if const_expr(mW is not None):
-                gW = cute.local_tile(qutils.domain_offset_i64((0, n_off), mW), tiler_mn, (0, 0))
+                gW = cute.local_tile(
+                    qutils.domain_offset_i64((0, n_off), mW), tiler_mn, (0, 0)
+                )
                 tXgW = thr_copy.partition_S(gW)
                 tXrW = cute.make_fragment_like(tXgW)
                 if const_expr(not is_even_N_wb):
@@ -1787,7 +1952,9 @@ class RMSNormSM100:
                     pred=tXp_wb,
                 )
             if const_expr(mB is not None):
-                gB = cute.local_tile(qutils.domain_offset_i64((0, n_off), mB), tiler_mn, (0, 0))
+                gB = cute.local_tile(
+                    qutils.domain_offset_i64((0, n_off), mB), tiler_mn, (0, 0)
+                )
                 tXgB = thr_copy.partition_S(gB)
                 tXrB = cute.make_fragment_like(tXgB)
                 if const_expr(not is_even_N_wb):
@@ -1818,6 +1985,7 @@ class RMSNormSM100:
             )
 
     if _KERNEL_ACCEPTS_LAYOUT_ARGS:
+
         @cute.kernel
         def kernel(
             self,
@@ -1853,6 +2021,7 @@ class RMSNormSM100:
                 threads_per_row,
             )
     else:
+
         @cute.kernel
         def kernel(
             self,
@@ -2015,7 +2184,10 @@ def _rmsnorm_forward_ptr(
 
     if residual is not None:
         residual_out = torch.empty_strided(
-            residual.shape, residual.stride(), device=residual.device, dtype=residual.dtype
+            residual.shape,
+            residual.stride(),
+            device=residual.device,
+            dtype=residual.dtype,
         )
     if store_rstd:
         rstd = torch.empty(M, device=x.device, dtype=torch.float32)
@@ -2082,10 +2254,19 @@ def _rmsnorm_forward_ptr_into(
         if compiled is None:
             op = RMSNormSM100(N, dtype, stage=stage)
             ld_val = int(x.stride(0))
-            ptr_x = rt.make_ptr(dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-            ptr_out = rt.make_ptr(dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+            ptr_x = rt.make_ptr(
+                dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+            )
+            ptr_out = rt.make_ptr(
+                dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+            )
             ptr_w = (
-                rt.make_ptr(dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+                rt.make_ptr(
+                    dtype,
+                    weight.data_ptr(),
+                    mem_space=rt.AddressSpace.gmem,
+                    assumed_align=16,
+                )
                 if has_weight
                 else None
             )
@@ -2122,10 +2303,19 @@ def _rmsnorm_forward_ptr_into(
             launcher.launch(x=x, weight=weight, out=out, M=M, N=N, ld=ld_val, eps=eps)
             return
 
-        ptr_x = rt.make_ptr(dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-        ptr_out = rt.make_ptr(dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        ptr_x = rt.make_ptr(
+            dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_out = rt.make_ptr(
+            dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         ptr_w = (
-            rt.make_ptr(dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+            rt.make_ptr(
+                dtype,
+                weight.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=16,
+            )
             if has_weight
             else None
         )
@@ -2167,33 +2357,55 @@ def _rmsnorm_forward_ptr_into(
     compiled = _PTR_COMPILE_CACHE.get(key)
     if compiled is None:
         op = RMSNormSM100(N, dtype, stage=stage)
-        ptr_x = rt.make_ptr(dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-        ptr_out = rt.make_ptr(dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        ptr_x = rt.make_ptr(
+            dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_out = rt.make_ptr(
+            dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         ptr_res = (
-            rt.make_ptr(dtype, residual.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+            rt.make_ptr(
+                dtype,
+                residual.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=16,
+            )
             if residual is not None
             else None
         )
         ptr_res_out = (
             rt.make_ptr(
-                dtype, residual_out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+                dtype,
+                residual_out.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=16,
             )
             if residual_out is not None
             else None
         )
         ptr_w = (
-            rt.make_ptr(dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+            rt.make_ptr(
+                dtype,
+                weight.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=16,
+            )
             if weight is not None
             else None
         )
         ptr_b = (
-            rt.make_ptr(dtype, bias.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+            rt.make_ptr(
+                dtype, bias.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+            )
             if bias is not None
             else None
         )
         ptr_rstd = (
             rt.make_ptr(
-                cutlass.Float32, rstd.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=4
+                cutlass.Float32,
+                rstd.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=4,
             )
             if rstd is not None
             else None
@@ -2216,30 +2428,50 @@ def _rmsnorm_forward_ptr_into(
             Float32(eps),
         )
         _PTR_COMPILE_CACHE[key] = compiled
-    ptr_x = rt.make_ptr(dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-    ptr_out = rt.make_ptr(dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+    ptr_x = rt.make_ptr(
+        dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_out = rt.make_ptr(
+        dtype, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
     ptr_res = (
-        rt.make_ptr(dtype, residual.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        rt.make_ptr(
+            dtype, residual.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         if residual is not None
         else None
     )
     ptr_res_out = (
-        rt.make_ptr(dtype, residual_out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        rt.make_ptr(
+            dtype,
+            residual_out.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=16,
+        )
         if residual_out is not None
         else None
     )
     ptr_w = (
-        rt.make_ptr(dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        rt.make_ptr(
+            dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         if weight is not None
         else None
     )
     ptr_b = (
-        rt.make_ptr(dtype, bias.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        rt.make_ptr(
+            dtype, bias.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         if bias is not None
         else None
     )
     ptr_rstd = (
-        rt.make_ptr(cutlass.Float32, rstd.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=4)
+        rt.make_ptr(
+            cutlass.Float32,
+            rstd.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=4,
+        )
         if rstd is not None
         else None
     )
@@ -2296,7 +2528,9 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
     # benchmark other models/shapes, you can override it with:
     #   - OINK_RMSNORM_DIRECT_GMEM=0  (force staging/cp.async path)
     #   - OINK_RMSNORM_DIRECT_GMEM=1  (force direct-gmem path)
-    direct_gmem = _direct_gmem_from_policy(default=bool(dtype.width == 16 and N == 7168))
+    direct_gmem = _direct_gmem_from_policy(
+        default=bool(dtype.width == 16 and N == 7168)
+    )
     use_async = not direct_gmem
     tpr_override: Optional[int] = None
     nt_override: Optional[int] = None
@@ -2340,13 +2574,9 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
             tpr_override = 256
             nt_override = 256
 
-
     can_use_256 = bool(
         direct_gmem
-        and (
-            direct_gmem_max_copy_bits is None
-            or direct_gmem_max_copy_bits >= 256
-        )
+        and (direct_gmem_max_copy_bits is None or direct_gmem_max_copy_bits >= 256)
         and dtype.width == 16
         and (x.data_ptr() % 32) == 0
         and (residual.data_ptr() % 32) == 0
@@ -2395,13 +2625,22 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
         if cluster_n_override is not None:
             op._cluster_n_override = cluster_n_override  # type: ignore[attr-defined]
         ptr_x = rt.make_ptr(
-            dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+            dtype,
+            x.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=assumed_align,
         )
         ptr_res = rt.make_ptr(
-            dtype, residual.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+            dtype,
+            residual.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=assumed_align,
         )
         ptr_w = rt.make_ptr(
-            dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+            dtype,
+            weight.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=assumed_align,
         )
         stream = cuda.CUstream(stream_handle)
         ld_x = Int32(int(x.stride(0)))
@@ -2444,12 +2683,20 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
 
     # Fast-launch is disabled/unavailable (or CuTeDSL internals changed). Fall back
     # to calling the compiled function directly.
-    ptr_x = rt.make_ptr(dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
+    ptr_x = rt.make_ptr(
+        dtype, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+    )
     ptr_res = rt.make_ptr(
-        dtype, residual.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+        dtype,
+        residual.data_ptr(),
+        mem_space=rt.AddressSpace.gmem,
+        assumed_align=assumed_align,
     )
     ptr_w = rt.make_ptr(
-        dtype, weight.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+        dtype,
+        weight.data_ptr(),
+        mem_space=rt.AddressSpace.gmem,
+        assumed_align=assumed_align,
     )
     stream = cuda.CUstream(stream_handle)
     ld_x = Int32(int(x.stride(0)))
@@ -2486,7 +2733,12 @@ def rmsnorm_forward(
             rms2 = None  # type: ignore[assignment]
         if rms2 is not None:
             y, rstd, residual_out = rms2.rmsnorm_forward_with_stage2(
-                x, weight=weight, bias=bias, residual=residual, eps=eps, store_rstd=store_rstd
+                x,
+                weight=weight,
+                bias=bias,
+                residual=residual,
+                eps=eps,
+                store_rstd=store_rstd,
             )
             # Preserve stride contracts for torch.compile consistency, even
             # when using the optional stage-2 implementation.
@@ -2519,7 +2771,9 @@ def rmsnorm_forward(
     # Preserve the input stride contract even on the fallback path so
     # torch.compile sees a consistent output layout across all branches.
     if y.stride() != x.stride():
-        y_strided = torch.empty_strided(x.shape, x.stride(), device=x.device, dtype=x.dtype)
+        y_strided = torch.empty_strided(
+            x.shape, x.stride(), device=x.device, dtype=x.dtype
+        )
         y_strided.copy_(y)
         y = y_strided
     rstd = None
