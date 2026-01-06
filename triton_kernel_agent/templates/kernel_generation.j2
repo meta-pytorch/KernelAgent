@@ -69,6 +69,10 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
 9. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch operators in the execution path
 
+{% if kernel_guidance %}
+{{ kernel_guidance }}
+{% endif %}
+
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python
 import triton
