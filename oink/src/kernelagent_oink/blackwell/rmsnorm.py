@@ -1,3 +1,17 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 RMSNorm kernel for SM100 (Blackwell) in CuteDSL.
 
@@ -53,15 +67,15 @@ except Exception as e:
         "(`cutlass`, typically provided by `nvidia-cutlass-dsl`)."
     ) from e
 
-import torch
-from torch import Tensor
+import torch  # noqa: E402
+from torch import Tensor  # noqa: E402
 
-import cuda.bindings.driver as cuda  # provided by NVIDIA cuda-python
+import cuda.bindings.driver as cuda  # provided by NVIDIA cuda-python  # noqa: E402
 
-import cutlass
-import cutlass.cute as cute
-from cutlass import Float32, Int32, const_expr
-from cutlass.cute import runtime as rt
+import cutlass  # noqa: E402
+import cutlass.cute as cute  # noqa: E402
+from cutlass import Float32, Int32, const_expr  # noqa: E402
+from cutlass.cute import runtime as rt  # noqa: E402
 
 # Simple compile cache declared early so direct execution works
 _PTR_COMPILE_CACHE = {}
@@ -862,8 +876,8 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
 #
 # NOTE: Avoid `from . import ...` imports here: CuTeDSL's AST preprocessor may
 # mishandle that form (module=None in the AST). Use fully-qualified imports.
-from kernelagent_oink.blackwell import lite_quack as qutils
-from kernelagent_oink.blackwell.lite_quack import TORCH2CUTE_DTYPE, row_reduce
+from kernelagent_oink.blackwell import lite_quack as qutils  # noqa: E402
+from kernelagent_oink.blackwell.lite_quack import TORCH2CUTE_DTYPE, row_reduce  # noqa: E402
 
 
 # -------------------------
@@ -2458,7 +2472,6 @@ def rmsnorm_forward(
     assert x.is_cuda
     assert x.dim() == 2, "Use (M, N) tensor; flatten batch/seq beforehand."
     M, N = x.shape
-    dtype = TORCH2CUTE_DTYPE[x.dtype]
 
     # For DSv3 big-M outliers on SM100, keep using the dedicated
     # stage-2 K-loop implementation, which is already tuned and
