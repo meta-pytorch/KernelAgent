@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kernelagent-oink"
+version = "0.1.0"
+description = "vLLM plugin that registers Oink Blackwell RMSNorm custom ops"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "PyTorch Labs"}]
+
+# Keep dependencies minimal, but include the CuTeDSL stack required by the
+# Blackwell RMSNorm implementation.
+#
+# We intentionally do NOT depend on `torch` here because vLLM already pins and
+# provides a compatible PyTorch build.
+dependencies = [
+  "nvidia-cutlass-dsl",
+  "cuda-python",
+]
+
+[project.entry-points."vllm.general_plugins"]
+oink = "kernelagent_oink:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["kernelagent_oink*"]
