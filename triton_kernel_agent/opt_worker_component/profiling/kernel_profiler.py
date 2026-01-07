@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
-from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import (
+from kernel_perf_util.kernel_opt.profiler.ncu_profiler import (
     load_ncu_metrics,
     metrics_to_prompt,
     profile_triton_kernel,
@@ -61,7 +61,7 @@ class KernelProfiler:
             )
             if result.returncode == 0:
                 # Extract version from output (e.g., "NVIDIA Nsight Compute 2024.3.1")
-                version_line = result.stdout.strip().split('\n')[0]
+                version_line = result.stdout.strip().split("\n")[0]
                 return version_line
             return None
         except Exception as e:
@@ -144,7 +144,7 @@ class KernelProfiler:
                     f"❌ NCU profiling timed out after 120s (attempt {attempt}/{max_retries})"
                 )
                 if attempt < max_retries:
-                    wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    wait_time = 2**attempt  # Exponential backoff: 2, 4, 8 seconds
                     self.logger.warning(f"Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -153,7 +153,7 @@ class KernelProfiler:
             except json.JSONDecodeError as e:
                 self.logger.error(f"❌ Failed to parse NCU metrics: {e}")
                 if attempt < max_retries:
-                    wait_time = 2 ** attempt
+                    wait_time = 2**attempt
                     self.logger.warning(f"Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -162,10 +162,10 @@ class KernelProfiler:
             except Exception as e:
                 self.logger.error(
                     f"❌ Unexpected error during profiling (attempt {attempt}/{max_retries}): {e}",
-                    exc_info=True
+                    exc_info=True,
                 )
                 if attempt < max_retries:
-                    wait_time = 2 ** attempt
+                    wait_time = 2**attempt
                     self.logger.warning(f"Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
