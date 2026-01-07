@@ -16,7 +16,9 @@ from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import (
     profile_triton_kernel,
 )
 
-from .ncu_wrapper_generator import NCUWrapperGenerator
+from triton_kernel_agent.opt_worker_component.profiling.ncu_wrapper_generator import (
+    NCUWrapperGenerator,
+)
 
 
 class KernelProfiler:
