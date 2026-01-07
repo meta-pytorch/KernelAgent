@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
-from kernel_perf_util.kernel_opt.profiler.ncu_profiler import (
+from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import (
     load_ncu_metrics,
     metrics_to_prompt,
     profile_triton_kernel,
