@@ -52,7 +52,7 @@ pipeline-ui = "scripts.pipeline_ui:main"
 "Repository" = "https://github.com/pytorch-labs/KernelAgent"
 
 [tool.setuptools.packages.find]
-include = ["triton_kernel_agent*", "Fuser*", "scripts", "utils"]
+include = ["triton_kernel_agent*", "kernel_perf_agent*", "Fuser*", "scripts", "utils"]
 
 [tool.setuptools]
 include-package-data = true
