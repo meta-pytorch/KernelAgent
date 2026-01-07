@@ -162,7 +162,7 @@ def profile_triton_kernel(
         str(benchmark_script),
     ]
 
-    print(f"[NCU] Running profiling...")
+    print("[NCU] Running profiling...")
     print(f"[NCU] Benchmark: {benchmark_script.name}")
     print(f"[NCU] Output: {csv_path}")
     print(f"[NCU] Command: {' '.join(cmd[:10])}... (truncated)")
@@ -193,7 +193,7 @@ def profile_triton_kernel(
                 f"NCU CSV file is too small ({csv_size} bytes), likely empty"
             )
 
-        print(f"[NCU] ✓ Profiling completed successfully")
+        print("[NCU] ✓ Profiling completed successfully")
         print(f"[NCU] ✓ CSV written: {csv_path} ({csv_size} bytes)")
         return csv_path
 
