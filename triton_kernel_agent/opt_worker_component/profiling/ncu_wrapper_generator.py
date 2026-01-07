@@ -2,10 +2,20 @@
 
 import logging
 from pathlib import Path
+from typing import Optional
+
+try:
+    from jinja2 import Template
+    HAS_JINJA2 = True
+except ImportError:
+    HAS_JINJA2 = False
 
 
 class NCUWrapperGenerator:
     """Generates NCU wrapper scripts for profiling Triton kernels."""
+
+    # Template file path (relative to this file)
+    WRAPPER_TEMPLATE = Path(__file__).parent / "ncu_wrapper_template.j2"
 
     def __init__(self, logger: logging.Logger):
         """
@@ -15,140 +25,102 @@ class NCUWrapperGenerator:
             logger: Logger instance
         """
         self.logger = logger
+        self._template_cache: Optional[Template] = None
 
-    def create_ncu_wrapper(self, kernel_file: Path, problem_file: Path, output_dir: Path) -> Path:
+    def _load_template(self) -> Template:
+        """
+        Load the Jinja2 template (cached).
+
+        Returns:
+            Jinja2 Template object
+
+        Raises:
+            ImportError: If Jinja2 is not installed
+            FileNotFoundError: If template file doesn't exist
+        """
+        if self._template_cache is not None:
+            return self._template_cache
+
+        if not HAS_JINJA2:
+            raise ImportError(
+                "Jinja2 is required for wrapper generation. "
+                "Install it with: pip install jinja2"
+            )
+
+        if not self.WRAPPER_TEMPLATE.exists():
+            raise FileNotFoundError(f"Template not found: {self.WRAPPER_TEMPLATE}")
+
+        self._template_cache = Template(self.WRAPPER_TEMPLATE.read_text())
+        return self._template_cache
+
+    def create_ncu_wrapper(
+        self,
+        kernel_file: Path,
+        problem_file: Path,
+        output_dir: Path,
+        dtype_inference: bool = True,
+        model_extraction: bool = True,
+        use_cache: bool = True,
+    ) -> Path:
         """
         Create NCU wrapper script for profiling.
+
+        The wrapper handles multiple kernel types:
+        - Standard kernels: kernel_function(*inputs)
+        - Conv/Linear kernels: Extracts weights from Model
+        - RMSNorm kernels: Passes init_inputs (features, eps)
 
         Args:
             kernel_file: Path to kernel file
             problem_file: Path to problem file
             output_dir: Directory to write wrapper script
+            dtype_inference: Enable automatic dtype inference from kernel source (default: True)
+            model_extraction: Enable model weight extraction for Conv/Linear kernels (default: True)
+            use_cache: Reuse existing wrapper if files haven't changed (default: True)
 
         Returns:
             Path to created wrapper script
+
+        Raises:
+            FileNotFoundError: If kernel_file or problem_file doesn't exist
+            OSError: If output_dir is not writable
         """
+        # Validate inputs
+        if not kernel_file.exists():
+            raise FileNotFoundError(f"Kernel file not found: {kernel_file}")
+        if not problem_file.exists():
+            raise FileNotFoundError(f"Problem file not found: {problem_file}")
+
+        # Ensure output directory exists
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+
         wrapper_file = output_dir / "ncu_wrapper.py"
 
-        wrapper_content = f'''"""NCU profiling wrapper."""
-import sys
-import torch
-import inspect
-sys.path.insert(0, str({str(kernel_file.parent)!r}))
-sys.path.insert(0, str({str(problem_file.parent)!r}))
+        # Check cache: reuse wrapper if it's fresh
+        if use_cache and wrapper_file.exists():
+            wrapper_mtime = wrapper_file.stat().st_mtime
+            kernel_mtime = kernel_file.stat().st_mtime
+            problem_mtime = problem_file.stat().st_mtime
 
-from {kernel_file.stem} import kernel_function
-from {problem_file.stem} import get_inputs, get_init_inputs
+            if wrapper_mtime > kernel_mtime and wrapper_mtime > problem_mtime:
+                self.logger.info(
+                    f"Reusing cached NCU wrapper (fresher than source files): {wrapper_file}"
+                )
+                return wrapper_file
 
-# Try to import Model if it exists (for Conv, Linear, etc.)
-try:
-    from {problem_file.stem} import Model
-    has_model = True
-except ImportError:
-    has_model = False
+        # Load template and render
+        template = self._load_template()
+        wrapper_content = template.render(
+            kernel_file_parent=repr(str(kernel_file.parent)),
+            problem_file_parent=repr(str(problem_file.parent)),
+            kernel_module=kernel_file.stem,
+            problem_module=problem_file.stem,
+            dtype_inference=dtype_inference,
+            model_extraction=model_extraction,
+        )
 
-# Get inputs
-inputs = get_inputs()
-
-# Get additional initialization inputs (e.g., features, eps for RMSNorm)
-init_inputs = get_init_inputs()
-
-# Infer required dtype from kernel function signature/docstring
-required_dtype = None
-try:
-    # Try to get dtype from kernel function docstring or source
-    kernel_source = inspect.getsource(kernel_function)
-    if 'bfloat16' in kernel_source.lower():
-        required_dtype = torch.bfloat16
-    elif 'float16' in kernel_source.lower() or 'half' in kernel_source.lower():
-        required_dtype = torch.float16
-    elif 'float32' in kernel_source.lower():
-        required_dtype = torch.float32
-except:
-    pass
-
-# Prepare inputs: move to CUDA and convert dtype if needed
-# IMPORTANT: Only convert floating-point tensors; preserve integer tensors (e.g., class labels)
-cuda_inputs = []
-for inp in inputs:
-    if isinstance(inp, torch.Tensor):
-        # Move to CUDA if not already
-        if not inp.is_cuda:
-            inp = inp.cuda()
-        # Convert dtype if required, but ONLY for floating-point tensors
-        # Preserve integer/bool tensors (e.g., targets for classification)
-        if required_dtype is not None and inp.is_floating_point() and inp.dtype != required_dtype:
-            inp = inp.to(required_dtype)
-        cuda_inputs.append(inp)
-    else:
-        cuda_inputs.append(inp)
-
-# Check if this is a conv-like kernel that needs a Model to extract weights
-needs_model = False
-try:
-    sig = inspect.signature(kernel_function)
-    params = list(sig.parameters.keys())
-    # Check if kernel expects 'weight' parameter (common for Conv, Linear, etc.)
-    if 'weight' in params:
-        needs_model = True
-except:
-    pass
-
-if needs_model and has_model and init_inputs:
-    # Initialize model to extract weight and bias
-    model = Model(*init_inputs) if init_inputs else Model()
-
-    # Move model to CUDA and convert dtype
-    model = model.cuda()
-    if required_dtype is not None:
-        model = model.to(required_dtype)
-
-    # Extract weight and bias from model
-    # Check various possible attribute names
-    weight = None
-    bias = None
-    layer = None
-    for attr_name in ['conv1', 'conv2', 'conv3', 'conv1d', 'conv2d', 'conv', 'conv3d', 'linear', 'fc']:
-        if hasattr(model, attr_name):
-            layer = getattr(model, attr_name)
-            if hasattr(layer, 'weight'):
-                weight = layer.weight
-                bias = layer.bias if hasattr(layer, 'bias') else None
-                break
-
-    if weight is not None and layer is not None:
-        # Build arguments for kernel_function using keyword arguments
-        # to avoid positional argument misalignment issues
-        kernel_kwargs = {{}}
-
-        # Add conv/linear-specific parameters if they exist
-        if hasattr(layer, 'stride'):
-            stride = layer.stride[0] if isinstance(layer.stride, (tuple, list)) else layer.stride
-            kernel_kwargs['stride'] = stride
-        if hasattr(layer, 'padding'):
-            padding = layer.padding[0] if isinstance(layer.padding, (tuple, list)) else layer.padding
-            kernel_kwargs['padding'] = padding
-        if hasattr(layer, 'dilation'):
-            dilation = layer.dilation[0] if isinstance(layer.dilation, (tuple, list)) else layer.dilation
-            kernel_kwargs['dilation'] = dilation
-        if hasattr(layer, 'groups'):
-            kernel_kwargs['groups'] = layer.groups
-
-        # Call kernel with extracted parameters
-        output = kernel_function(cuda_inputs[0], weight, bias, **kernel_kwargs)
-    else:
-        # Fallback to original behavior
-        output = kernel_function(*cuda_inputs, *init_inputs)
-else:
-    # Run kernel with both tensor inputs and initialization inputs
-    # For example: RMSNorm needs kernel_function(x, features, eps)
-    # For cross-entropy: kernel_function(predictions, targets)
-    # where inputs come from get_inputs() and init_inputs from get_init_inputs()
-    output = kernel_function(*cuda_inputs, *init_inputs)
-
-print("Kernel executed successfully, output shape: " + str(output.shape if hasattr(output, 'shape') else type(output)))
-'''
-
+        # Write wrapper file
         wrapper_file.write_text(wrapper_content)
         self.logger.info(f"Created NCU wrapper: {wrapper_file}")
         return wrapper_file
