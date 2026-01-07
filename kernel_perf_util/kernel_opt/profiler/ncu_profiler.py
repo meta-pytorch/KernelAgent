@@ -64,67 +64,6 @@ METRICS = ",".join(
     ]
 )
 
-# METRICS = ",".join(
-#     [
-#         # Tensor Core (MOST CRITICAL for GEMM)
-#         "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",
-#         # Memory Bandwidth & Cache
-#         "dram__throughput.avg.pct_of_peak_sustained_elapsed",
-#         "l1tex__t_sector_hit_rate.pct",
-#         "lts__t_sector_hit_rate.pct",
-#         # Memory Access Efficiency
-#         "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct",
-#         # Stalls & Bottlenecks (H100-compatible stall metrics)
-#         "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",
-#         "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct",
-#         # Occupancy & Resources
-#         "launch__shared_mem_per_block_allocated",
-#         "sm__warps_active.avg.pct_of_peak_sustained_elapsed",
-#         # SM Utilization
-#         "sm__cycles_active.avg.pct_of_peak_sustained_elapsed",
-#     ]
-# )
-
-# # CRITICAL GEMM Optimization Metrics (Optimized for Matrix Multiplication)
-# METRICS = ",".join(
-#     [
-#         # === Memory Efficiency Metrics (CRITICAL) ===
-#         "dram__throughput.avg.pct_of_peak_sustained_elapsed",  # DRAM bandwidth utilization
-#         "dram__bytes_read.sum",  # Total DRAM reads
-#         "dram__bytes_write.sum",  # Total DRAM writes
-#         "l1tex__t_sector_hit_rate.pct",  # L1 cache hit rate (CRITICAL for data reuse)
-#         "l1tex__throughput.avg.pct_of_peak_sustained_elapsed",  # L1 throughput (fixed from _active)
-#         "lts__t_sector_hit_rate.pct",  # L2 cache hit rate
-#         "lts__throughput.avg.pct_of_peak_sustained_elapsed",  # L2 throughput (fixed from _active)
-#         "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct",  # Memory coalescing (NEW - CRITICAL)
-#         "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum",  # Shared memory loads (NEW)
-#         # === Compute Utilization Metrics (CRITICAL for GEMM) ===
-#         "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",  # Tensor core pipeline (NEW - CRITICAL)
-#         "smsp__inst_executed_pipe_tensor.avg.pct_of_peak_sustained_active",  # Tensor core inst %
-#         "smsp__inst_executed_pipe_tensor.sum",  # Total tensor core instructions (NEW)
-#         "sm__inst_executed_pipe_fp32.avg.pct_of_peak_sustained_active",  # FP32 pipeline
-#         "sm__cycles_active.avg.pct_of_peak_sustained_elapsed",  # SM active cycles (fixed from .avg only)
-#         "sm__inst_executed.sum",  # Total instructions
-#         "smsp__inst_executed.avg.per_cycle_active",  # IPC (NEW)
-#         # === Occupancy & Resource Metrics ===
-#         "sm__warps_active.avg.pct_of_peak_sustained_elapsed",  # Warp occupancy (fixed from _active)
-#         "sm__maximum_warps_per_active_cycle_pct",  # Max achievable occupancy (NEW)
-#         "launch__occupancy_limit_blocks",  # Block limit
-#         "launch__occupancy_limit_registers",  # Register limit
-#         "launch__occupancy_limit_shared_mem",  # Shared memory limit
-#         "launch__registers_per_thread",  # Registers per thread
-#         "launch__shared_mem_per_block_allocated",  # Shared memory usage (NEW - CRITICAL)
-#         # === Stall & Latency Metrics ===
-#         "smsp__warp_issue_stalled_memory_dependency_per_warp_active.pct",  # Memory dependency stalls
-#         "smsp__warp_issue_stalled_mem_throttle_per_warp_active.pct",  # Memory throttle stalls (NEW - CRITICAL)
-#         "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct",  # Short scoreboard stalls
-#         "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",  # Long scoreboard stalls
-#         "smsp__warp_issue_stalled_barrier_per_warp_active.pct",  # Barrier stalls
-#         "smsp__warp_issue_stalled_branch_resolving_per_warp_active.pct",  # Branch stalls
-#     ]
-# )
-
-
 # List version for convenient header selection
 METRIC_COLUMNS: List[str] = [s.strip() for s in METRICS.split(",")]
 
