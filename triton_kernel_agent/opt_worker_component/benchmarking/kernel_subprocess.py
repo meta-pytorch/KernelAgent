@@ -1,22 +1,27 @@
-"""
-kernel_subprocess.py
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+"""
 A task-agnostic, profiling-only benchmark script for Triton kernels.
 This script ONLY benchmarks candidate kernels without correctness checks.
 Assumes correctness has been verified upstream.
 
 Design:
 - Skips correctness verification (assumes already verified)
-- Only runs candidate kernels (not reference)
+- Only runs candidate kernels
 - Fast profiling for iterative optimization loops
-- Uses shared utilities from timing.py (no code duplication)
-
-Usage:
-    python kernel_subprocess.py \\
-        --problem problem.py \\
-        --kernel candidate_kernel.py \\
-        --warmup 25 --repeat 100 \\
-        --device cuda --dtype bfloat16
+- Uses shared utilities from timing.py
 """
 
 from __future__ import annotations
@@ -320,22 +325,20 @@ def main():
             weight = None
             bias = None
             layer = None
-            for attr_name in [
-                "conv1",
-                "conv2",
-                "conv3",
-                "conv1d",
-                "conv2d",
-                "conv",
-                "conv3d",
-                "linear",
-                "fc",
-            ]:
-                if hasattr(extract_model, attr_name):
-                    layer = getattr(extract_model, attr_name)
-                    if hasattr(layer, "weight"):
-                        weight = layer.weight
-                        bias = layer.bias if hasattr(layer, "bias") else None
+            for name, module in extract_model.named_modules():
+                if isinstance(
+                    module,
+                    (
+                        torch.nn.Conv1d,
+                        torch.nn.Conv2d,
+                        torch.nn.Conv3d,
+                        torch.nn.Linear,
+                    ),
+                ):
+                    if hasattr(module, "weight") and module.weight is not None:
+                        layer = module
+                        weight = module.weight
+                        bias = getattr(module, "bias", None)
                         break
 
             if weight is not None and layer is not None:

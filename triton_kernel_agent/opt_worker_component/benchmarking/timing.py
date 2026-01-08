@@ -1,3 +1,17 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Core timing and model loading utilities for kernel benchmarking.
 
 This module consolidates:
@@ -5,7 +19,7 @@ This module consolidates:
 - Model/kernel loading utilities
 - Statistics computation
 
-Inspired by KernelBench's timing.py with improvements for production use.
+Inspired by KernelBench's timing.py
 """
 
 import hashlib
@@ -180,19 +194,8 @@ def prepare_pytorch_model(
     # Default to bfloat16 unless explicitly specified or model is a loss function
     target_dtype = dtype or torch.bfloat16
 
-    # Check if this is actually a loss function (not just a model without parameters)
-    is_loss_function = isinstance(
-        model,
-        (
-            torch.nn.CrossEntropyLoss,
-            torch.nn.MSELoss,
-            torch.nn.BCELoss,
-            torch.nn.BCEWithLogitsLoss,
-            torch.nn.NLLLoss,
-            torch.nn.L1Loss,
-            torch.nn.SmoothL1Loss,
-        ),
-    )
+    # Check if this is actually a loss function
+    is_loss_function = isinstance(model, torch.nn.modules.loss._Loss)
 
     # Handle dtype conversion based on model type
     if has_parameters or not is_loss_function:
