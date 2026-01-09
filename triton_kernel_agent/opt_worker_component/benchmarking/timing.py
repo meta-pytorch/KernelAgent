@@ -206,7 +206,9 @@ def prepare_pytorch_model(
             (
                 inp.cuda().to(target_dtype)
                 if isinstance(inp, torch.Tensor) and inp.is_floating_point()
-                else inp.cuda() if isinstance(inp, torch.Tensor) else inp
+                else inp.cuda()
+                if isinstance(inp, torch.Tensor)
+                else inp
             )
             for inp in inputs
         ]
