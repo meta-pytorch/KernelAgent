@@ -454,7 +454,7 @@ class PipelineUI:
         verify: bool,
         user_api_key: str | None,
         target_platform: str = "cuda",
-    ) -> Tuple[str, str, str, str, str | None]:
+    ) -> tuple[str, str, str, str, str | None]:
         problem_mapping = {label: path for label, path in self.problem_choices}
         selected_path = problem_mapping.get(selected_problem_label, "")
         # Use description override if present; otherwise selected path

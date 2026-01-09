@@ -133,7 +133,7 @@ def _summarize_subgraphs_for_prompt(subgraphs: list[dict[str, Any]]) -> str:
 def _build_composition_prompt(
     problem_code: str,
     subgraphs: list[dict[str, Any]],
-    kernel_items: List[KernelItem],
+    kernel_items: list[KernelItem],
     target_platform: PlatformConfig,
 ) -> str:
     """Create a single user message to instruct composition by the LLM."""

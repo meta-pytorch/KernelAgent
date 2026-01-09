@@ -709,9 +709,9 @@ class FuserAgentUI:
         llm_timeout: int,
         run_timeout: int,
         enable_reasoning: bool,
-        user_api_key: Optional[str],
+        user_api_key: str | None,
         target_platform: str = "cuda",
-    ) -> Tuple[str, str, str, str, str | None]:
+    ) -> tuple[str, str, str, str, str | None]:
         problem_path = custom_problem.strip() or selected_problem
         artifacts = run_fuser_problem(
             problem_path=problem_path,

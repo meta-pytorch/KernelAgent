@@ -329,7 +329,7 @@ class AutoKernelRouter:
         verify: bool = True,
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
-        target_platform: Optional[str] = None,
+        target_platform: str | None = None,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
