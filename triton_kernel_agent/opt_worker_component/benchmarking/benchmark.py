@@ -30,7 +30,6 @@ import torch
 
 from triton_kernel_agent.opt_worker_component.benchmarking.timing import (
     compute_timing_stats,
-    load_kernel_function,
     prepare_pytorch_model,
     time_with_cuda_events,
     time_with_triton_do_bench,

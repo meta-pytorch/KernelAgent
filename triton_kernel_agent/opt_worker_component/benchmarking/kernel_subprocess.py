@@ -33,13 +33,12 @@ from pathlib import Path
 
 # Import shared utilities from timing module (avoid duplication)
 from timing import (
-    CompilationError,
     import_module,
     load_kernel_function,
     load_problem_interface,
     prepare_inputs,
 )
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 import torch
 import triton.testing as tt
@@ -197,7 +196,7 @@ def main():
     try:
         problem_mod = import_module(args.problem, "problem")
         get_benchmark_config = getattr(problem_mod, "get_benchmark_config", None)
-    except:
+    except Exception:
         get_benchmark_config = None
 
     # Override benchmark config if provided by problem
@@ -305,7 +304,7 @@ def main():
         # Check if kernel expects 'weight' parameter (common for Conv, Linear, etc.)
         if "weight" in params:
             needs_model = True
-    except:
+    except Exception:
         pass
 
     # Prepare kernel arguments
@@ -385,7 +384,7 @@ def main():
         except Exception as exc:
             if not args.quiet:
                 print(f"⚠️  Warning: Failed to extract model parameters: {exc}")
-                print(f"   Falling back to direct kernel invocation")
+                print("   Falling back to direct kernel invocation")
 
     # Run once to verify it executes
     try:
