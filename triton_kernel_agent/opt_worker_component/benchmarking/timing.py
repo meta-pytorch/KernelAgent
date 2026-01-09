@@ -25,7 +25,6 @@ Inspired by KernelBench's timing.py
 import hashlib
 import importlib.util
 import sys
-import time
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
@@ -351,6 +350,43 @@ def time_with_cuda_events(
     return elapsed_times
 
 
+def time_with_inductor_benchmarker(
+    kernel_fn: Callable,
+    args: list[Any],
+    num_warmup: int = 25,
+    verbose: bool = False,
+) -> float:
+    """Time using PyTorch Inductor's benchmarker (simplest approach).
+
+    This is a thin wrapper around torch._inductor.runtime.benchmarking.benchmarker,
+    which handles CUDA synchronization and timing internally.
+
+    Args:
+        kernel_fn: Function to time
+        args: Arguments to pass to kernel_fn
+        num_warmup: Number of warmup iterations
+        verbose: Print timing info
+
+    Returns:
+        Elapsed time in milliseconds (single value, not a list)
+
+    Note:
+        This uses a private PyTorch API (_inductor) which may change without notice.
+    """
+    from torch._inductor.runtime.benchmarking import benchmarker
+
+    # Warmup
+    for _ in range(num_warmup):
+        kernel_fn(*args)
+
+    ms = benchmarker.benchmark_gpu(lambda: kernel_fn(*args))
+
+    if verbose:
+        print(f"[Timing] Inductor benchmarker: {ms:.4f} ms")
+
+    return ms
+
+
 def time_with_triton_do_bench(
     kernel_fn: Callable,
     args: list[Any],
@@ -389,7 +425,9 @@ def time_with_triton_do_bench(
                 f"[Timing] Using triton.do_bench on {torch.cuda.get_device_name(device)}"
             )
 
-        wrapped_fn = lambda: kernel_fn(*args)
+        def wrapped_fn():
+            return kernel_fn(*args)
+
         times = triton_testing.do_bench(
             fn=wrapped_fn,
             warmup=warmup,
