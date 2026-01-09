@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Benchmarking infrastructure for kernel performance measurement.
-
-"""
+"""Benchmarking infrastructure for kernel performance measurement."""
 
 # Core benchmarking
 from .benchmark import Benchmark, BenchmarkLockManager
