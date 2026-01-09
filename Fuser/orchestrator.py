@@ -23,7 +23,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from queue import Empty
-from typing import Any, Dict
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -35,7 +35,7 @@ from .logging_utils import redact, setup_file_logger
 
 # Spawn-safe worker entrypoint (top-level function; pass plain payload)
 def _worker_process_main(
-    cfg_payload: Dict[str, Any],
+    cfg_payload: dict[str, Any],
     problem_path: str,
     winner_queue: Any,
     cancel_event: Any,

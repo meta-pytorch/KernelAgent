@@ -14,7 +14,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any
 
 # Prompt rendering for the Fuse orchestrator
 # - Deterministic, stateless per iteration
@@ -66,7 +66,7 @@ def _variant_line(idx: int) -> str:
 def build_user_prompt(
     attempt_index: int,
     problem_file_content: str,
-    error_context: Optional[str],
+    error_context: str | None,
     variant_index: int,
 ) -> str:
     parts: list[str] = []
@@ -89,10 +89,10 @@ def render_prompt(
     problem_path: Path,
     variant_index: int,
     attempt_index: int,
-    error_context: Optional[str],
+    error_context: str | None,
     enable_reasoning_extras: bool,
-    seed: Optional[int] = None,
-    model_name: Optional[str] = None,
+    seed: int | None = None,
+    model_name: str | None = None,
 ) -> RenderedPrompt:
     """Render system+user prompts and extras for the Responses API (deterministic)."""
     content = problem_path.read_text(encoding="utf-8")

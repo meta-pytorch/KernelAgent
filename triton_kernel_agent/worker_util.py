@@ -17,7 +17,7 @@
 import multiprocessing as mp
 import os
 from pathlib import Path
-from typing import Tuple
+
 from logging import Logger
 
 
@@ -102,7 +102,7 @@ def _run_test_process(test_file: Path, workdir: Path, result_queue: mp.Queue) ->
 
 def _run_test_multiprocess(
     logger: Logger, workdir: Path, test_file: Path
-) -> Tuple[bool, str, str]:
+) -> tuple[bool, str, str]:
     """
     Run the test script and capture results using multiprocessing.
 

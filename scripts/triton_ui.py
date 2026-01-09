@@ -20,7 +20,8 @@ import os
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
+
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -44,9 +45,9 @@ KERNELBENCH_LEVEL_LABELS = {
 
 
 def load_kernelbench_problem_map(
-    levels: Tuple[str, ...] = ("level1", "level2"),
-) -> Dict[str, Path]:
-    problem_map: Dict[str, Path] = {}
+    levels: tuple[str, ...] = ("level1", "level2"),
+) -> dict[str, Path]:
+    problem_map: dict[str, Path] = {}
     for level in levels:
         level_dir = KERNELBENCH_BASE_PATH / level
         if not level_dir.is_dir():
@@ -100,13 +101,13 @@ class TritonKernelUI:
     def generate_kernel(
         self,
         problem_description: str,
-        test_code: Optional[str] = None,
+        test_code: str | None = None,
         model_name: str = "o3-2025-04-16",
         provider_class_name: str = "",
         high_reasoning_effort: bool = True,
-        user_api_key: Optional[str] = None,
+        user_api_key: str | None = None,
         target_platform: str = "cuda",
-    ) -> Tuple[str, str, str, str, str, str]:
+    ) -> tuple[str, str, str, str, str, str]:
         """
         Generate a Triton kernel based on the problem description
 
@@ -239,7 +240,7 @@ class TritonKernelUI:
                     if key_env_var in os.environ:
                         del os.environ[key_env_var]
 
-    def _format_logs(self, result: Dict[str, Any], generation_time: float) -> str:
+    def _format_logs(self, result: dict[str, Any], generation_time: float) -> str:
         """Format generation logs for display"""
         logs = f"""## Generation Summary
 
@@ -264,7 +265,7 @@ class TritonKernelUI:
 """
         return logs
 
-    def _format_error_logs(self, result: Dict[str, Any], generation_time: float) -> str:
+    def _format_error_logs(self, result: dict[str, Any], generation_time: float) -> str:
         """Format error logs for display"""
         logs = f"""## Generation Failed
 
@@ -286,7 +287,7 @@ class TritonKernelUI:
 """
         return logs
 
-    def _format_session_info(self, result: Dict[str, Any]) -> str:
+    def _format_session_info(self, result: dict[str, Any]) -> str:
         """Format session information"""
         session_path = result["session_dir"]
         session_name = os.path.basename(session_path)
@@ -317,7 +318,7 @@ You can find all generated files in:
 """
         return info
 
-    def _create_download_info(self, result: Dict[str, Any]) -> str:
+    def _create_download_info(self, result: dict[str, Any]) -> str:
         """Create download information"""
         if not result["success"]:
             return ""
@@ -356,7 +357,7 @@ def _create_app() -> gr.Blocks:
     kernelbench_problem_map = load_kernelbench_problem_map()
 
     # Add external problems (manual entries)
-    extra_problem_map: Dict[str, Path] = {}
+    extra_problem_map: dict[str, Path] = {}
     try:
         external_cf = Path(
             "/home/leyuan/workplace/kernel_fuser/external/control_flow.py"
@@ -375,13 +376,13 @@ def _create_app() -> gr.Blocks:
         pass
 
     # Combine: external first, then KernelBench
-    combined_problem_map: Dict[str, Path] = {
+    combined_problem_map: dict[str, Path] = {
         **extra_problem_map,
         **kernelbench_problem_map,
     }
     problem_choices = list(combined_problem_map.keys())
     default_problem_choice = problem_choices[0] if problem_choices else None
-    problem_cache: Dict[str, str] = {}
+    problem_cache: dict[str, str] = {}
 
     if default_problem_choice:
         try:
@@ -558,7 +559,7 @@ def _create_app() -> gr.Blocks:
 
         # Event handlers
 
-        def update_problem_descriptor(selection: Optional[str]):
+        def update_problem_descriptor(selection: str | None):
             if not selection:
                 return gr.update()
 

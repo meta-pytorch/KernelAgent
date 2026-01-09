@@ -45,7 +45,7 @@ import os
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -79,11 +79,11 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _load_kernels_from_summary(summary_path: Path) -> List[KernelItem]:
+def _load_kernels_from_summary(summary_path: Path) -> list[KernelItem]:
     data = json.loads(_read_text(summary_path))
     if not isinstance(data, list):
         raise SystemExit("kernels summary must be a JSON array (from dispatch step)")
-    items: List[KernelItem] = []
+    items: list[KernelItem] = []
     for it in data:
         if not isinstance(it, dict):
             continue
@@ -104,8 +104,8 @@ def _load_kernels_from_summary(summary_path: Path) -> List[KernelItem]:
     return items
 
 
-def _summarize_subgraphs_for_prompt(subgraphs: List[Dict[str, Any]]) -> str:
-    lines: List[str] = []
+def _summarize_subgraphs_for_prompt(subgraphs: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
     for it in subgraphs:
         sid = str(it.get("id", "unknown"))
         typ = str(it.get("type", ""))
@@ -132,8 +132,8 @@ def _summarize_subgraphs_for_prompt(subgraphs: List[Dict[str, Any]]) -> str:
 
 def _build_composition_prompt(
     problem_code: str,
-    subgraphs: List[Dict[str, Any]],
-    kernel_items: List[KernelItem],
+    subgraphs: list[dict[str, Any]],
+    kernel_items: list[KernelItem],
     target_platform: PlatformConfig,
 ) -> str:
     """Create a single user message to instruct composition by the LLM."""
@@ -142,7 +142,7 @@ def _build_composition_prompt(
 
     # Include only essential snippets from each kernel to keep token usage sane
     # We include full files for now; callers can trim by model limits.
-    kernels_section_parts: List[str] = []
+    kernels_section_parts: list[str] = []
     for ki in kernel_items:
         kernels_section_parts.append(
             f"### Subgraph {ki.subgraph_id}\n```python\n" + ki.code + "\n```\n"
@@ -208,7 +208,7 @@ def _build_composition_prompt(
         """
     ).strip()
 
-    user_lines: List[str] = []
+    user_lines: list[str] = []
     user_lines.append(guidance)
     user_lines.append("")
     user_lines.append("SUBGRAPHS (summary):")
@@ -230,10 +230,10 @@ def _build_composition_prompt(
 
 def _build_refinement_prompt(
     problem_code: str,
-    subgraphs: List[Dict[str, Any]],
-    kernel_items: List[KernelItem],
+    subgraphs: list[dict[str, Any]],
+    kernel_items: list[KernelItem],
     previous_code: str,
-    error_info: Dict[str, str],
+    error_info: dict[str, str],
     target_platform: PlatformConfig,
 ) -> str:
     """Prompt the LLM to refine the previously produced code based on errors."""
@@ -262,7 +262,7 @@ def _build_refinement_prompt(
         """
     ).strip()
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(guidance)
     lines.append("")
     lines.append("ERROR_CONTEXT (stderr tail):\n```\n" + err_tail + "\n```")
@@ -284,7 +284,7 @@ def _build_refinement_prompt(
 
 def _auto_patch_common_triton_issues(
     code: str, target_platform: PlatformConfig
-) -> Tuple[str, bool]:
+) -> tuple[str, bool]:
     """Apply tiny safe textual patches for known Triton pitfalls.
 
     - Replace tl.broadcast(0.0, ...) or tl.broadcast(1.0, ...) with scalar constants.
@@ -336,7 +336,7 @@ def compose(
     verify: bool = False,
     max_iters: int = 5,
     target_platform: str = "cuda",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if get_model_provider is None:
         raise SystemExit(
             "KernelAgent providers unavailable; ensure package import and dependencies"
@@ -360,7 +360,7 @@ def compose(
 
     last_usage = None
     last_code = None
-    verify_info: Dict[str, Any] = {}
+    verify_info: dict[str, Any] = {}
 
     for i in range(1, max_iters + 1):
         if i == 1 or last_code is None:
@@ -441,7 +441,7 @@ def compose(
     composed_path = out_dir / "composed_kernel.py"
     composed_path.write_text(last_code or "", encoding="utf-8")
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "success": bool(verify_info.get("verify_passed", not verify)),
         "composed_path": str(composed_path.resolve()),
         "model": model_name,
@@ -458,7 +458,7 @@ def compose(
     return result
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     p = argparse.ArgumentParser(
         description="Compose end-to-end Triton kernel from subgraphs + generated kernels"

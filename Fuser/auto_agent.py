@@ -50,7 +50,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from dotenv import load_dotenv
 from Fuser.pipeline import run_pipeline
@@ -109,7 +109,7 @@ def _file_sha256_text(txt: str) -> str:
     return hashlib.sha256(txt.encode("utf-8")).hexdigest()
 
 
-def _load_router_cache() -> Dict[str, Any]:
+def _load_router_cache() -> dict[str, Any]:
     try:
         if _ROUTER_CACHE_PATH.is_file():
             return json.loads(_ROUTER_CACHE_PATH.read_text(encoding="utf-8"))
@@ -118,7 +118,7 @@ def _load_router_cache() -> Dict[str, Any]:
     return {}
 
 
-def _save_router_cache(cache: Dict[str, Any]) -> None:
+def _save_router_cache(cache: dict[str, Any]) -> None:
     try:
         _ensure_dir(_ROUTER_CACHE_PATH)
         _ROUTER_CACHE_PATH.write_text(json.dumps(cache, indent=2), encoding="utf-8")
@@ -148,7 +148,7 @@ class Complexity:
     pool_ops: int
     act_ops: int
     chain_len_estimate: int
-    raw_op_names: Dict[str, int]
+    raw_op_names: dict[str, int]
 
     def route_to_fuser(self) -> bool:
         # Primary triggers
@@ -217,7 +217,7 @@ def analyze_problem_code(code: str) -> Complexity:
 
     # AST path: inspect Model.forward for ops and control flow
     has_control_flow = False
-    raw_op_counts: Dict[str, int] = {}
+    raw_op_counts: dict[str, int] = {}
     has_attention_like = False
     has_conv_transpose = False
     has_group_norm = False
@@ -302,19 +302,19 @@ def analyze_problem_code(code: str) -> Complexity:
 class RouteResult:
     route: str  # "kernelagent" or "fuser"
     success: bool
-    details: Dict[str, Any]
-    kernel_code: Optional[str] = None
+    details: dict[str, Any]
+    kernel_code: str | None = None
 
 
 class AutoKernelRouter:
     def __init__(
         self,
-        ka_model: Optional[str] = None,
+        ka_model: str | None = None,
         ka_num_workers: int = 4,
         ka_max_rounds: int = 10,
         ka_high_reasoning: bool = True,
         # Router LLM
-        router_model: Optional[str] = "gpt-5",
+        router_model: str | None = "gpt-5",
         router_high_reasoning: bool = True,
         router_temperature: float = 0.2,
         router_max_tokens: int = 700,
@@ -329,7 +329,7 @@ class AutoKernelRouter:
         verify: bool = True,
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
-        target_platform: Optional[str] = None,
+        target_platform: str | None = None,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -439,7 +439,7 @@ class AutoKernelRouter:
 
         comp = res.get("composition", {}) or {}
         ok = bool(comp.get("verify_passed", not self.verify))
-        kernel_code: Optional[str] = None
+        kernel_code: str | None = None
         try:
             composed_path = comp.get("composed_path")
             if composed_path and Path(composed_path).is_file():
@@ -465,9 +465,9 @@ class AutoKernelRouter:
         cache = _load_router_cache()
         cached = cache.get(code_hash)
 
-        strategy: Optional[str] = None
-        route_conf: Optional[float] = None
-        route_cfg: Dict[str, Any] = {}
+        strategy: str | None = None
+        route_conf: float | None = None
+        route_cfg: dict[str, Any] = {}
 
         if isinstance(cached, dict):
             strategy = (
@@ -553,7 +553,7 @@ class AutoKernelRouter:
     # -------- LLM decision helper --------
     def _llm_decide_route(
         self, problem_path: Path, code: str, cx: Complexity
-    ) -> Tuple[Optional[str], Optional[float], Dict[str, Any]]:
+    ) -> tuple[str | None, float | None, dict[str, Any]]:
         """Ask an LLM to choose a routing STRATEGY and optional budgets.
 
         The LLM must return JSON with keys:
@@ -629,7 +629,7 @@ class AutoKernelRouter:
             f"Features:\n```json\n{json.dumps(feats, indent=2)}\n```\n\n"
             "Problem code:\n```python\n" + code + "\n```\n"
         )
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "max_tokens": self.router_max_tokens,
             "temperature": self.router_temperature,
         }
@@ -644,7 +644,7 @@ class AutoKernelRouter:
         # Best-effort JSON parse
         route = None
         conf = None
-        raw_info: Dict[str, Any] = {"raw": txt}
+        raw_info: dict[str, Any] = {"raw": txt}
         try:
             # If model returned extra text, try to locate JSON object
             first = txt.find("{")
@@ -676,7 +676,7 @@ class AutoKernelRouter:
 # ------------------------
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
     )
@@ -763,7 +763,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "route": res.route,
         "success": res.success,
         "details": res.details,

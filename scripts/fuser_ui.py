@@ -25,7 +25,7 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -49,12 +49,12 @@ class RunArtifacts:
     summary_md: str
     code_text: str
     run_info_md: str
-    zip_path: Optional[Path]
+    zip_path: Path | None
 
 
-def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
+def _list_kernelbench_problems(base: Path) -> list[tuple[str, str]]:
     """Return list of (label, absolute_path) pairs for KernelBench problems."""
-    problems: List[Tuple[str, str]] = []
+    problems: list[tuple[str, str]] = []
     if not base.exists():
         return problems
     for level_dir in sorted(base.glob("level*")):
@@ -81,8 +81,8 @@ def _format_classes_summary(code_text: str) -> str:
         if isinstance(node, ast.Name):
             return node.id
         if isinstance(node, ast.Attribute):
-            parts: List[str] = []
-            cur: Optional[ast.AST] = node
+            parts: list[str] = []
+            cur: ast.AST | None = node
             while isinstance(cur, ast.Attribute):
                 parts.append(cur.attr)
                 cur = cur.value
@@ -92,9 +92,9 @@ def _format_classes_summary(code_text: str) -> str:
             return ".".join(parts)
         return ast.dump(node, include_attributes=False)
 
-    class_lines: List[str] = ["## 🧩 Fusion Module Summary"]
-    classes: List[ast.ClassDef] = [n for n in tree.body if isinstance(n, ast.ClassDef)]
-    functions: List[ast.FunctionDef] = [
+    class_lines: list[str] = ["## 🧩 Fusion Module Summary"]
+    classes: list[ast.ClassDef] = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+    functions: list[ast.FunctionDef] = [
         n for n in tree.body if isinstance(n, ast.FunctionDef)
     ]
 
@@ -135,7 +135,7 @@ def _load_code_from_tar(artifact_path: Path) -> str:
         return extracted.read().decode("utf-8")
 
 
-def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
+def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Path | None:
     if not artifact_path.is_file():
         return None
     with (
@@ -154,7 +154,7 @@ def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
 
 
 def _compose_run_info(
-    run_dir: Path, summary_reason: str, elapsed: float, winner: Optional[str]
+    run_dir: Path, summary_reason: str, elapsed: float, winner: str | None
 ) -> str:
     lines = ["## 📁 Run Information"]
     lines.append(f"- Run directory: `{run_dir}`")
@@ -175,7 +175,7 @@ def run_fuser_problem(
     llm_timeout: int,
     run_timeout: int,
     enable_reasoning: bool,
-    user_api_key: Optional[str] = None,
+    user_api_key: str | None = None,
     target_platform: str = "cuda",
 ) -> RunArtifacts:
     """Execute the Fuser orchestrator and collect artifacts."""
@@ -709,9 +709,9 @@ class FuserAgentUI:
         llm_timeout: int,
         run_timeout: int,
         enable_reasoning: bool,
-        user_api_key: Optional[str],
+        user_api_key: str | None,
         target_platform: str = "cuda",
-    ) -> Tuple[str, str, str, str, Optional[str]]:
+    ) -> tuple[str, str, str, str, str | None]:
         problem_path = custom_problem.strip() or selected_problem
         artifacts = run_fuser_problem(
             problem_path=problem_path,
@@ -856,7 +856,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
             reasoning: bool,
             platform: str,
             strict_compile: bool,
-            api_key: Optional[str],
+            api_key: str | None,
         ):
             selected_path = problem_mapping.get(selected_label, default_problem)
             status, summary, code_text, run_info, zip_path = ui.run(

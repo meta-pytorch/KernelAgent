@@ -38,7 +38,7 @@ import re
 import sys
 import tarfile
 from pathlib import Path
-from typing import Any, Optional, Tuple, Dict
+from typing import Any
 
 from .cli import _load_dotenv_if_present  # reuse env loader
 from .config import OrchestratorConfig, new_run_id
@@ -73,7 +73,7 @@ _JSON_BLOCK_RE = re.compile(
 def _extract_json_block(text: str) -> str:
     """Extract the last fenced JSON block or fallback to best-effort slice."""
     matches = list(_JSON_BLOCK_RE.finditer(text))
-    chosen: Optional[re.Match[str]] = None
+    chosen: re.Match[str] | None = None
     for m in reversed(matches):
         lang = (m.group(1) or "").strip().lower()
         if lang == "json":
@@ -140,7 +140,7 @@ def _dedup_by_shape_signature(items: list[dict[str, Any]]) -> list[dict[str, Any
     return out
 
 
-def _build_llm_prompt_for_shapes(fused_code: str, problem_code: str) -> Tuple[str, str]:
+def _build_llm_prompt_for_shapes(fused_code: str, problem_code: str) -> tuple[str, str]:
     system = "Return a single JSON array only."
     user_lines: list[str] = []
     user_lines.append(
@@ -214,7 +214,7 @@ def extract_subgraphs_to_json(
     llm_timeout_s: int,
     run_timeout_s: int,
     target_platform: str = "cuda",
-) -> Tuple[Path, Path]:
+) -> tuple[Path, Path]:
     """Run Fuser to produce fused code, then use LLM to emit subgraphs JSON.
 
     Returns (run_dir, json_path).
@@ -303,9 +303,9 @@ def extract_subgraphs_to_json(
         raise SystemExit("LLM output JSON is not a list")
 
     # Merge duplicates by signature and sum counts
-    grouped: Dict[str, Dict[str, Any]] = {}
+    grouped: dict[str, dict[str, Any]] = {}
 
-    def sig_of(it: Dict[str, Any]) -> str:
+    def sig_of(it: dict[str, Any]) -> str:
         # Build a robust signature from ops + shapes + weights
         ops = it.get("ops") or []
         # normalize ops by sorting keys of each op dict
@@ -323,7 +323,7 @@ def extract_subgraphs_to_json(
         weights_original = it.get("weights_original") or {}
 
         # sort weight dicts by key for stability
-        def sort_w(obj: Any) -> Dict[str, Any]:
+        def sort_w(obj: Any) -> dict[str, Any]:
             if isinstance(obj, dict):
                 return {k: obj[k] for k in sorted(obj.keys())}
             return {}
@@ -370,7 +370,7 @@ def extract_subgraphs_to_json(
     return dirs["run_dir"], out_path
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     _load_dotenv_if_present()
     p = argparse.ArgumentParser(
         description="Extract unique subgraphs with shapes (JSON)"

@@ -19,7 +19,7 @@ import shutil
 import multiprocessing as mp
 import queue
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 from datetime import datetime
 import logging
 from contextlib import contextmanager
@@ -33,8 +33,8 @@ class WorkerManager:
         num_workers: int = 4,
         max_rounds: int = 10,
         history_size: int = 8,
-        log_dir: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
+        log_dir: str | None = None,
+        openai_api_key: str | None = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
@@ -74,7 +74,7 @@ class WorkerManager:
         # Setup multiprocessing
         self.success_event = mp.Event()  # Shared event to signal success
         self.result_queue = mp.Queue()  # Queue for collecting results
-        self.workers: List[mp.Process] = []
+        self.workers: list[mp.Process] = []
 
         # Setup logger
         self._setup_logging()
@@ -92,7 +92,7 @@ class WorkerManager:
         self.logger = logging.getLogger(__name__)
 
     @contextmanager
-    def temp_workdirs(self) -> List[Path]:
+    def temp_workdirs(self) -> list[Path]:
         """Create temporary working directories for workers."""
         workdirs = []
         try:
@@ -110,11 +110,11 @@ class WorkerManager:
 
     def run_verification(
         self,
-        kernel_seeds: List[str],
+        kernel_seeds: list[str],
         test_code: str,
         problem_description: str,
-        session_log_dir: Optional[Path] = None,
-    ) -> Optional[Dict[str, Any]]:
+        session_log_dir: Path | None = None,
+    ) -> dict[str, Any | None]:
         """
         Run parallel verification on multiple kernel seeds.
 
@@ -224,7 +224,7 @@ def worker_process(
     history_size: int,
     success_event: mp.Event,
     result_queue: mp.Queue,
-    openai_api_key: Optional[str],
+    openai_api_key: str | None,
     openai_model: str,
     high_reasoning_effort: bool,
     target_platform: str,
