@@ -332,6 +332,7 @@ def run(
     agent_model: str | None = None,
     jobs: int = 1,
     target_platform: str = "cuda",
+    max_iters: int = 10,
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -362,10 +363,10 @@ def run(
         sg_dir.mkdir(parents=True, exist_ok=True)
         (sg_dir / "problem.txt").write_text(pdesc, encoding="utf-8")
 
-        # Pin KernelAgent concurrency defaults: 4 workers, 10 rounds
+        # Pin KernelAgent concurrency defaults: 4 workers, max_iters rounds
         local_agent = TritonKernelAgent(
             num_workers=4,
-            max_rounds=10,
+            max_rounds=max_iters,
             model_name=agent_model,
             target_platform=platform,
         )

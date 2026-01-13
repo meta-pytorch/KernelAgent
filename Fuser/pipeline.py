@@ -111,6 +111,7 @@ def run_pipeline(
         agent_model=dispatch_model,
         jobs=jobs_val,
         target_platform=target_platform,
+        max_iters=max_iters,
     )
 
     # Step 3: compose end-to-end
