@@ -29,19 +29,95 @@ Both bottlenecks are selected from NCU hardware profiling categories:
 - occupancy-limited
 - latency-bound
 
-Metric definitions are in metric_schema.py and rendering logic is in section_renderers.py.
+Metric definitions are in metric_schema.py.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .section_renderers import (
-    create_metric_getter,
-    render_gpu_specs,
-    render_kernel_code,
-    render_ncu_metrics,
-    render_problem_description,
-    render_task_instructions,
-)
+from .metric_schema import GPU_MEMORY_FIELDS, GPU_SPEC_FIELDS, NCU_METRIC_SECTIONS
+
+
+
+# =============================================================================
+# Section Renderers
+# =============================================================================
+
+
+def render_problem_description(problem_description: str) -> List[str]:
+    """Render the problem description section."""
+    return ["## Problem Description", "", problem_description]
+
+
+def render_kernel_code(kernel_code: str, language: str = "python") -> List[str]:
+    """Render the kernel code section with syntax highlighting."""
+    return ["", "## Current Kernel Code", "", f"```{language}", kernel_code, "```"]
+
+
+def render_gpu_specs(gpu_specs: Dict[str, Any]) -> List[str]:
+    """Render the GPU hardware specifications section."""
+    lines = ["", "## GPU Hardware Specifications", ""]
+
+    for label, key, unit in GPU_SPEC_FIELDS:
+        value = gpu_specs.get(key, "N/A")
+        lines.append(f"- **{label}:** {value}{unit}")
+
+    for label, size_key, type_key, size_unit in GPU_MEMORY_FIELDS:
+        size_value = gpu_specs.get(size_key, "N/A")
+        type_value = gpu_specs.get(type_key, "")
+        lines.append(f"- **{label}:** {size_value}{size_unit} {type_value}")
+
+    return lines
+
+
+def render_ncu_metrics(
+    ncu_metrics: Dict[str, Any],
+    get_metric_fn: Callable[[str, str], str],
+) -> List[str]:
+    """Render the NCU profiling metrics section."""
+    lines = ["", "## NCU Profiling Metrics"]
+
+    for section_name, metrics in NCU_METRIC_SECTIONS.items():
+        lines.append("")
+        lines.append(f"### {section_name}")
+        for label, key, unit in metrics:
+            value = get_metric_fn(key, "N/A")
+            lines.append(f"- **{label}:** {value}{unit}")
+
+    return lines
+
+
+def render_task_instructions() -> List[str]:
+    """Render the task instructions section for dual-bottleneck analysis."""
+    return [
+        "",
+        "## Your Task",
+        "",
+        "Identify exactly TWO distinct bottlenecks from the NCU profiling metrics above:",
+        "1. **Bottleneck 1 (Primary)**: The highest-impact performance issue",
+        "2. **Bottleneck 2 (Secondary)**: A different category issue that also limits performance",
+        "",
+        "For each bottleneck, cite 3-4 specific metrics that reveal the issue, "
+        "and recommend ONE actionable optimization.",
+        "",
+        "**Be surgical and metrics-driven.** Return JSON in the format specified in the system prompt.",
+    ]
+
+
+def create_metric_getter(kernel_metrics: Dict[str, Any]) -> Callable[[str, str], str]:
+    """Create a metric getter function for a specific kernel's metrics."""
+
+    def get_metric(key: str, default: str = "N/A") -> str:
+        val = kernel_metrics.get(key, default)
+        if isinstance(val, (int, float)):
+            return f"{val:.2f}"
+        return str(val)
+
+    return get_metric
+
+
+# =============================================================================
+# Bottleneck Analysis
+# =============================================================================
 
 
 # System prompt for the Judge LLM (Dual-Bottleneck NCU Analysis)
@@ -228,114 +304,27 @@ def extract_judge_response(response_text: str) -> Optional[Dict[str, Any]]:
 
 
 def validate_judge_response(analysis: Dict[str, Any]) -> bool:
-    """
-    Validate that Judge response contains required fields for dual-bottleneck format.
+    """Validate that Judge response contains required dual-bottleneck fields."""
+    if "bottleneck_1" not in analysis or "bottleneck_2" not in analysis:
+        return False
+    return _validate_bottleneck_entry(
+        analysis["bottleneck_1"]
+    ) and _validate_bottleneck_entry(analysis["bottleneck_2"])
 
-    This function validates the dual-bottleneck format with bottleneck_1 and
-    bottleneck_2 fields. Both bottlenecks use NCU hardware profiling categories.
 
-    Args:
-        analysis: Parsed JSON from Judge response
-
-    Returns:
-        True if response is valid, False otherwise
-
-    Example:
-        >>> if validate_judge_response(analysis):
-        ...     print("Valid dual-bottleneck response!")
-        ... else:
-        ...     print("Invalid response - missing required fields")
-    """
-    # Check for dual-bottleneck format
-    if "bottleneck_1" in analysis and "bottleneck_2" in analysis:
-        return _validate_bottleneck_entry(
-            analysis["bottleneck_1"]
-        ) and _validate_bottleneck_entry(analysis["bottleneck_2"])
-
-    # Backward compatibility: Check for old single-bottleneck format
-    if "bottleneck" in analysis:
-        required_fields = [
-            "bottleneck",
-            "root_cause",
-            "suggestion",
-            "priority_metrics",
-            "expected_improvement",
-        ]
-
-        for field in required_fields:
-            if field not in analysis:
-                return False
-
-        valid_bottlenecks = [
-            "memory-bound",
-            "compute-bound",
-            "occupancy-limited",
-            "latency-bound",
-        ]
-        if analysis["bottleneck"] not in valid_bottlenecks:
-            return False
-
-        if not isinstance(analysis["priority_metrics"], list):
-            return False
-
-        for field in ["root_cause", "suggestion", "expected_improvement"]:
-            if (
-                not isinstance(analysis[field], str)
-                or len(analysis[field].strip()) < 10
-            ):
-                return False
-
-        return True
-
-    return False
+VALID_CATEGORIES = frozenset(["memory-bound", "compute-bound", "occupancy-limited", "latency-bound"])
 
 
 def _validate_bottleneck_entry(bottleneck: Dict[str, Any]) -> bool:
-    """
-    Validate a single bottleneck entry (bottleneck_1 or bottleneck_2).
-
-    Both bottlenecks use NCU hardware profiling categories:
-    memory-bound, compute-bound, occupancy-limited, latency-bound
-
-    Args:
-        bottleneck: Bottleneck dictionary to validate
-
-    Returns:
-        True if valid, False otherwise
-    """
-    required_fields = [
-        "category",
-        "root_cause",
-        "suggestion",
-        "priority_metrics",
-        "expected_improvement",
-    ]
-
-    for field in required_fields:
-        if field not in bottleneck:
-            return False
-
-    # NCU hardware profiling categories only
-    valid_categories = [
-        "memory-bound",
-        "compute-bound",
-        "occupancy-limited",
-        "latency-bound",
-    ]
-
-    if bottleneck["category"] not in valid_categories:
+    """Validate a single bottleneck entry."""
+    required = ["category", "root_cause", "suggestion", "priority_metrics", "expected_improvement"]
+    if not all(f in bottleneck for f in required):
         return False
-
+    if bottleneck["category"] not in VALID_CATEGORIES:
+        return False
     if not isinstance(bottleneck["priority_metrics"], list):
         return False
-
-    for field in ["root_cause", "suggestion", "expected_improvement"]:
-        if not isinstance(bottleneck[field], str) or len(bottleneck[field].strip()) < 5:
+    for f in ["root_cause", "suggestion", "expected_improvement"]:
+        if not isinstance(bottleneck[f], str) or len(bottleneck[f].strip()) < 5:
             return False
-
     return True
-
-
-if __name__ == "__main__":
-    print("Judge Prompts Module")
-    print("=" * 60)
