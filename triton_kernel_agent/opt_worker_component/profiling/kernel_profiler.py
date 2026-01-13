@@ -77,7 +77,6 @@ class ProfilerResults:
 
 
 class KernelProfiler:
-
     def __init__(
         self,
         logger: logging.Logger,
