@@ -24,7 +24,6 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 DEFAULT_PLATFORM = "cuda"
 
@@ -78,7 +77,7 @@ _XPU_CUDA_HACKS = (
 )
 
 # Platform registry
-PLATFORMS: Dict[str, PlatformConfig] = {
+PLATFORMS: dict[str, PlatformConfig] = {
     "cuda": PlatformConfig(
         name="cuda",
         device_string="cuda",
@@ -104,6 +103,6 @@ def get_platform(name: str) -> PlatformConfig:
     return PLATFORMS[name]
 
 
-def get_platform_choices() -> List[str]:
+def get_platform_choices() -> list[str]:
     """Get list of available platform names for CLI choices."""
     return sorted(PLATFORMS.keys())
