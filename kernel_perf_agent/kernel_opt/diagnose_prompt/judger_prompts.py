@@ -28,9 +28,20 @@ Both bottlenecks are selected from NCU hardware profiling categories:
 - compute-bound
 - occupancy-limited
 - latency-bound
+
+Metric definitions are in metric_schema.py and rendering logic is in section_renderers.py.
 """
 
 from typing import Any, Dict, Optional, Tuple
+
+from .section_renderers import (
+    create_metric_getter,
+    render_gpu_specs,
+    render_kernel_code,
+    render_ncu_metrics,
+    render_problem_description,
+    render_task_instructions,
+)
 
 
 # System prompt for the Judge LLM (Dual-Bottleneck NCU Analysis)
@@ -40,12 +51,11 @@ JUDGE_SYSTEM_PROMPT = """You are a senior GPU performance engineer. Analyze the 
 
 Analyze fundamental resource utilization using NCU profiling data:
 
-- **memory-bound**: DRAM throughput >50% of peak, L1 hit rate <60%, L2 hit rate <70%, memory coalescing <80%, long scoreboard stalls >25%
-- **compute-bound**: DRAM throughput <40%, compute/pipe utilization >50%, memory stalls <15%, eligible warps >4/cycle
-- **occupancy-limited**: Achieved occupancy <50%, registers/thread >64, shared memory >48KB/block, check launch__occupancy_limit_* for limiter
-- **latency-bound**: Total stalls >35%, long scoreboard >20%, short scoreboard >15%, eligible warps <2/cycle, BUT DRAM throughput <50% (latency, not bandwidth)
-
-## Rules (STRICT)
+## Bottleneck Categories (Indicators Only)
+- **memory-bound**: High DRAM throughput (>60%), low L1/L2 hit rates (<70%), high memory stalls (>30%)
+- **compute-bound**: Low DRAM throughput (<40%), high compute utilization (>60%), low memory stalls (<20%)
+- **occupancy-limited**: Low warp active (<50%), high register usage (>100/thread), shared memory pressure (>80%)
+- **latency-bound**: High total stalls (>40%), memory dependency stalls dominate, long scoreboard stalls
 
 - Return EXACTLY TWO DISTINCT bottlenecks with DIFFERENT categories
 - Both bottlenecks must be from: {memory-bound, compute-bound, occupancy-limited, latency-bound}
@@ -123,168 +133,19 @@ def build_judge_optimization_prompt(
     if not ncu_metrics:
         raise ValueError("NCU metrics are empty - cannot build judge prompt")
 
+    # Extract first kernel's metrics for the metric getter
     first_kernel = list(ncu_metrics.values())[0] if ncu_metrics else {}
+    get_metric_fn = create_metric_getter(first_kernel)
 
-    def get_metric(key: str, default: str = "N/A") -> str:
-        val = first_kernel.get(key, default)
-        if isinstance(val, (int, float)):
-            return f"{val:.2f}"
-        return str(val)
-
-    # Build user prompt using list-join pattern (similar to Fuser/prompting.py)
+    # Build user prompt using modular section renderers
     parts: list[str] = []
 
-    # Problem Description
-    parts.append("## Problem Description")
-    parts.append("")
-    parts.append(problem_description)
-
-    # Current Kernel Code
-    parts.append("")
-    parts.append("## Current Kernel Code")
-    parts.append("")
-    parts.append("```python")
-    parts.append(kernel_code)
-    parts.append("```")
-
-    # GPU Hardware Specifications
-    parts.append("")
-    parts.append("## GPU Hardware Specifications")
-    parts.append("")
-    parts.append(f"- **Name:** {gpu_specs.get('name', 'Unknown')}")
-    parts.append(f"- **Architecture:** {gpu_specs.get('architecture', 'Unknown')}")
-    parts.append(
-        f"- **Peak Memory Bandwidth:** {gpu_specs.get('peak_memory_bw_gbps', 'N/A')} GB/s"
-    )
-    parts.append(
-        f"- **Peak FP32 Performance:** {gpu_specs.get('peak_fp32_tflops', 'N/A')} TFLOPS"
-    )
-    parts.append(
-        f"- **Peak FP16 Performance:** {gpu_specs.get('peak_fp16_tflops', 'N/A')} TFLOPS"
-    )
-    parts.append(f"- **SM Count:** {gpu_specs.get('sm_count', 'N/A')}")
-    parts.append(
-        f"- **Max Threads per SM:** {gpu_specs.get('max_threads_per_sm', 'N/A')}"
-    )
-    parts.append(f"- **L1 Cache per SM:** {gpu_specs.get('l1_cache_kb', 'N/A')} KB")
-    parts.append(f"- **L2 Cache (Total):** {gpu_specs.get('l2_cache_mb', 'N/A')} MB")
-    parts.append(
-        f"- **Memory Size:** {gpu_specs.get('memory_gb', 'N/A')} GB {gpu_specs.get('memory_type', '')}"
-    )
-
-    # NCU Profiling Metrics
-    parts.append("")
-    parts.append("## NCU Profiling Metrics")
-
-    # SM & Compute Utilization
-    parts.append("")
-    parts.append("### SM & Compute Utilization")
-    parts.append(f"- **SM Cycles Active:** {get_metric('sm__cycles_active.avg')}")
-    parts.append(
-        f"- **Warp Active:** {get_metric('sm__warps_active.avg.pct_of_peak_sustained_active')}%"
-    )
-    parts.append(
-        f"- **Total Instructions Executed:** {get_metric('sm__inst_executed.sum')}"
-    )
-    parts.append(
-        f"- **Tensor Core Utilization:** {get_metric('sm__inst_executed_pipe_tensor.avg.pct_of_peak_sustained_active')}%"
-    )
-    parts.append(
-        f"- **Tensor Core Pipeline Active:** {get_metric('sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed')}%"
-    )
-
-    # Memory Bandwidth & Cache
-    parts.append("")
-    parts.append("### Memory Bandwidth & Cache")
-    parts.append(
-        f"- **DRAM Throughput:** {get_metric('dram__throughput.avg.pct_of_peak_sustained_elapsed')}%"
-    )
-    parts.append(
-        f"- **DRAM Bandwidth:** {get_metric('dram__bytes.sum.per_second')} bytes/sec"
-    )
-    parts.append(
-        f"- **GPU DRAM Throughput:** {get_metric('gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed')}%"
-    )
-    parts.append(f"- **DRAM Bytes Read:** {get_metric('dram__bytes_read.sum')} bytes")
-    parts.append(f"- **DRAM Bytes Write:** {get_metric('dram__bytes_write.sum')} bytes")
-    parts.append(
-        f"- **L1 Cache Hit Rate:** {get_metric('l1tex__t_sector_hit_rate.pct')}%"
-    )
-    parts.append(
-        f"- **L1 Throughput:** {get_metric('l1tex__throughput.avg.pct_of_peak_sustained_active')}%"
-    )
-    parts.append(
-        f"- **L2 Cache Hit Rate:** {get_metric('lts__t_sector_hit_rate.pct')}%"
-    )
-    parts.append(
-        f"- **L2 Throughput:** {get_metric('lts__throughput.avg.pct_of_peak_sustained_active')}%"
-    )
-
-    # Memory Access Patterns
-    parts.append("")
-    parts.append("### Memory Access Patterns")
-    parts.append(
-        f"- **Memory Coalescing:** {get_metric('smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct')}%"
-    )
-    parts.append(
-        f"- **Branch Uniformity:** {get_metric('smsp__sass_average_branch_targets_threads_uniform.pct')}%"
-    )
-
-    # Occupancy & Resources
-    parts.append("")
-    parts.append("### Occupancy & Resources")
-    parts.append(
-        f"- **Occupancy Limited By Blocks:** {get_metric('launch__occupancy_limit_blocks')}"
-    )
-    parts.append(
-        f"- **Occupancy Limited By Registers:** {get_metric('launch__occupancy_limit_registers')}"
-    )
-    parts.append(
-        f"- **Occupancy Limited By Shared Memory:** {get_metric('launch__occupancy_limit_shared_mem')}"
-    )
-    parts.append(
-        f"- **Registers per Thread:** {get_metric('launch__registers_per_thread')}"
-    )
-    parts.append(
-        f"- **Shared Memory per Block:** {get_metric('launch__shared_mem_per_block_allocated')} bytes"
-    )
-
-    # Stall Metrics
-    parts.append("")
-    parts.append("### Stall Metrics (Warp Issue Stalls)")
-    parts.append(
-        f"- **Short Scoreboard Stalls:** {get_metric('smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct')}%"
-    )
-    parts.append(
-        f"- **Long Scoreboard Stalls:** {get_metric('smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct')}%"
-    )
-    parts.append(
-        f"- **Barrier Stalls:** {get_metric('smsp__warp_issue_stalled_barrier_per_warp_active.pct')}%"
-    )
-    parts.append(
-        f"- **Branch Resolving Stalls:** {get_metric('smsp__warp_issue_stalled_branch_resolving_per_warp_active.pct')}%"
-    )
-
-    # Task instructions
-    parts.append("")
-    parts.append("## Your Task")
-    parts.append("")
-    parts.append(
-        "Identify exactly TWO distinct bottlenecks from the NCU profiling metrics above:"
-    )
-    parts.append("1. **Bottleneck 1 (Primary)**: The highest-impact performance issue")
-    parts.append(
-        "2. **Bottleneck 2 (Secondary)**: A different category issue that also limits performance"
-    )
-    parts.append("")
-    parts.append(
-        "For each bottleneck, cite 3-4 specific metrics that reveal the issue, "
-        "and recommend ONE actionable optimization."
-    )
-    parts.append("")
-    parts.append(
-        "**Be surgical and metrics-driven.** Return JSON in the format specified in the system prompt."
-    )
+    # Compose sections using renderers
+    parts.extend(render_problem_description(problem_description))
+    parts.extend(render_kernel_code(kernel_code))
+    parts.extend(render_gpu_specs(gpu_specs))
+    parts.extend(render_ncu_metrics(ncu_metrics, get_metric_fn))
+    parts.extend(render_task_instructions())
 
     user_prompt = "\n".join(parts)
     return JUDGE_SYSTEM_PROMPT, user_prompt
@@ -362,35 +223,7 @@ def extract_judge_response(response_text: str) -> Optional[Dict[str, Any]]:
         except json.JSONDecodeError:
             pass
 
-    # Strategy 4: Backward compatibility - single-bottleneck format
-    match = re.search(r'\{[^}]*"bottleneck"[^}]*\}', response_text, re.DOTALL)
-    if match:
-        try:
-            old_format = json.loads(match.group(0))
-            if "bottleneck" in old_format:
-                # Convert old format to dual-bottleneck format
-                return {
-                    "bottleneck_1": {
-                        "category": old_format.get("bottleneck", "unknown"),
-                        "root_cause": old_format.get("root_cause", ""),
-                        "suggestion": old_format.get("suggestion", ""),
-                        "priority_metrics": old_format.get("priority_metrics", []),
-                        "expected_improvement": old_format.get(
-                            "expected_improvement", ""
-                        ),
-                    },
-                    "bottleneck_2": {
-                        "category": "latency-bound",
-                        "root_cause": "Secondary bottleneck inferred from single-bottleneck response",
-                        "suggestion": "Review stall metrics for additional optimization opportunities",
-                        "priority_metrics": [],
-                        "expected_improvement": "Requires further profiling analysis",
-                    },
-                }
-        except json.JSONDecodeError:
-            pass
-
-    # Strategy 5: Return None if all strategies fail
+    # Return None if all strategies fail
     return None
 
 
@@ -506,47 +339,3 @@ def _validate_bottleneck_entry(bottleneck: Dict[str, Any]) -> bool:
 if __name__ == "__main__":
     print("Judge Prompts Module")
     print("=" * 60)
-    print("\nThis module provides prompt templates for hardware bottleneck analysis.")
-    print("\nExample usage:")
-    print(
-        """
-    from kernel_perf_agent.kernel_opt.diagnose_prompt.judger_prompts import (
-        build_judge_optimization_prompt,
-        extract_judge_response,
-        validate_judge_response,
-    )
-    from kernel_perf_agent.kernel_opt.profiler.gpu_specs import get_gpu_specs
-    from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import (
-        load_ncu_metrics,
-        metrics_to_prompt,
-    )
-    import json
-
-    # Get GPU specs
-    gpu_specs = get_gpu_specs()
-
-    # Load NCU metrics
-    metrics_df = load_ncu_metrics("ncu_baseline.csv")
-    ncu_metrics = json.loads(metrics_to_prompt(metrics_df))
-
-    # Build prompts
-    sys_prompt, user_prompt = build_judge_optimization_prompt(
-        kernel_code=kernel_code,
-        problem_description=problem_description,
-        ncu_metrics=ncu_metrics,
-        gpu_specs=gpu_specs,
-    )
-
-    # Call LLM
-    response = llm.call([
-        {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": user_prompt}
-    ])
-
-    # Extract and validate
-    analysis = extract_judge_response(response)
-    if analysis and validate_judge_response(analysis):
-        print(f"Bottleneck 1: {analysis['bottleneck_1']['category']}")
-        print(f"Bottleneck 2: {analysis['bottleneck_2']['category']}")
-    """
-    )
