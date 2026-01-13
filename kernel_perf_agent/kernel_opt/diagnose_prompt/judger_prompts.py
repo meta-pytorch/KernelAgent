@@ -37,7 +37,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .metric_schema import GPU_MEMORY_FIELDS, GPU_SPEC_FIELDS, NCU_METRIC_SECTIONS
 
 
-
 # =============================================================================
 # Section Renderers
 # =============================================================================
@@ -312,12 +311,20 @@ def validate_judge_response(analysis: Dict[str, Any]) -> bool:
     ) and _validate_bottleneck_entry(analysis["bottleneck_2"])
 
 
-VALID_CATEGORIES = frozenset(["memory-bound", "compute-bound", "occupancy-limited", "latency-bound"])
+VALID_CATEGORIES = frozenset(
+    ["memory-bound", "compute-bound", "occupancy-limited", "latency-bound"]
+)
 
 
 def _validate_bottleneck_entry(bottleneck: Dict[str, Any]) -> bool:
     """Validate a single bottleneck entry."""
-    required = ["category", "root_cause", "suggestion", "priority_metrics", "expected_improvement"]
+    required = [
+        "category",
+        "root_cause",
+        "suggestion",
+        "priority_metrics",
+        "expected_improvement",
+    ]
     if not all(f in bottleneck for f in required):
         return False
     if bottleneck["category"] not in VALID_CATEGORIES:
