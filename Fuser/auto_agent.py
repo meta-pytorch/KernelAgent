@@ -330,6 +330,7 @@ class AutoKernelRouter:
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
         target_platform: str | None = None,
+        use_router_cache: bool = True,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -352,6 +353,7 @@ class AutoKernelRouter:
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
         self.platform_config = get_platform(target_platform)
+        self.use_router_cache = use_router_cache
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -469,7 +471,7 @@ class AutoKernelRouter:
         route_conf: float | None = None
         route_cfg: dict[str, Any] = {}
 
-        if isinstance(cached, dict):
+        if self.use_router_cache and isinstance(cached, dict):
             strategy = (
                 str(cached.get("route_strategy") or cached.get("route") or "") or None
             )
@@ -483,11 +485,12 @@ class AutoKernelRouter:
                     problem_path, code, cx
                 )
                 # Persist in cache for future runs
-                cache[code_hash] = info.get("parsed") or {
-                    "route_strategy": strategy,
-                    "confidence": route_conf,
-                }
-                _save_router_cache(cache)
+                if self.use_router_cache:
+                    cache[code_hash] = info.get("parsed") or {
+                        "route_strategy": strategy,
+                        "confidence": route_conf,
+                    }
+                    _save_router_cache(cache)
             except Exception:
                 # No provider or failure; fall back later
                 pass
@@ -705,6 +708,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
     p.add_argument(
+        "--no-router-cache",
+        action="store_true",
+        help="Disable router cache (do not read from or write to cache)",
+    )
+    p.add_argument(
         "--target-platform",
         default="cuda",
         choices=get_platform_choices(),
@@ -741,6 +749,7 @@ def main(argv: list[str] | None = None) -> int:
         dispatch_jobs=args.dispatch_jobs,
         allow_fallback=(not args.no_fallback),
         target_platform=args.target_platform,
+        use_router_cache=(not args.no_router_cache),
     )
 
     try:
