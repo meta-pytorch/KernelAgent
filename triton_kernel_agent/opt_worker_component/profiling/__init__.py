@@ -15,6 +15,6 @@
 """Profiling infrastructure for NCU-based kernel analysis."""
 
 from .kernel_profiler import KernelProfiler
-from .ncu_wrapper_generator import NCUWrapperGenerator
+from .ncu_wrapper_factory import NCUWrapperFactory
 
-__all__ = ["NCUWrapperGenerator", "KernelProfiler"]
+__all__ = ["NCUWrapperFactory", "KernelProfiler"]

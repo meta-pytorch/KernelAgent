@@ -15,58 +15,38 @@
 """NCU wrapper script generation for kernel profiling."""
 
 import logging
+from functools import cached_property
 from pathlib import Path
-from typing import Optional
 
-try:
-    from jinja2 import Template
-
-    HAS_JINJA2 = True
-except ImportError:
-    HAS_JINJA2 = False
+from jinja2 import Template
 
 
-class NCUWrapperGenerator:
-    """Generates NCU wrapper scripts for profiling Triton kernels."""
+class NCUWrapperFactory:
+    """Factory for creating NCU wrapper scripts for profiling Triton kernels."""
 
     # Template file path (relative to this file)
     WRAPPER_TEMPLATE = Path(__file__).parent / "ncu_wrapper_template.j2"
 
     def __init__(self, logger: logging.Logger):
         """
-        Initialize the NCU wrapper generator.
+        Initialize the NCU wrapper factory.
 
         Args:
             logger: Logger instance
         """
         self.logger = logger
-        self._template_cache: Optional[Template] = None
 
-    def _load_template(self) -> Template:
+    @cached_property
+    def template(self) -> Template:
         """
-        Load the Jinja2 template (cached).
-
-        Returns:
-            Jinja2 Template object
+        Jinja2 template for wrapper script generation.
 
         Raises:
-            ImportError: If Jinja2 is not installed
             FileNotFoundError: If template file doesn't exist
         """
-        if self._template_cache is not None:
-            return self._template_cache
-
-        if not HAS_JINJA2:
-            raise ImportError(
-                "Jinja2 is required for wrapper generation. "
-                "Install it with: pip install jinja2"
-            )
-
         if not self.WRAPPER_TEMPLATE.exists():
             raise FileNotFoundError(f"Template not found: {self.WRAPPER_TEMPLATE}")
-
-        self._template_cache = Template(self.WRAPPER_TEMPLATE.read_text())
-        return self._template_cache
+        return Template(self.WRAPPER_TEMPLATE.read_text())
 
     def create_ncu_wrapper(
         self,
@@ -75,7 +55,6 @@ class NCUWrapperGenerator:
         output_dir: Path,
         dtype_inference: bool = True,
         model_extraction: bool = True,
-        use_cache: bool = True,
     ) -> Path:
         """
         Create NCU wrapper script for profiling.
@@ -91,7 +70,6 @@ class NCUWrapperGenerator:
             output_dir: Directory to write wrapper script
             dtype_inference: Enable automatic dtype inference from kernel source (default: True)
             model_extraction: Enable model weight extraction for Conv/Linear kernels (default: True)
-            use_cache: Reuse existing wrapper if files haven't changed (default: True)
 
         Returns:
             Path to created wrapper script
@@ -112,21 +90,8 @@ class NCUWrapperGenerator:
 
         wrapper_file = output_dir / "ncu_wrapper.py"
 
-        # Check cache: reuse wrapper if it's fresh
-        if use_cache and wrapper_file.exists():
-            wrapper_mtime = wrapper_file.stat().st_mtime
-            kernel_mtime = kernel_file.stat().st_mtime
-            problem_mtime = problem_file.stat().st_mtime
-
-            if wrapper_mtime > kernel_mtime and wrapper_mtime > problem_mtime:
-                self.logger.info(
-                    f"Reusing cached NCU wrapper (fresher than source files): {wrapper_file}"
-                )
-                return wrapper_file
-
-        # Load template and render
-        template = self._load_template()
-        wrapper_content = template.render(
+        # Render template
+        wrapper_content = self.template.render(
             kernel_file_parent=repr(str(kernel_file.parent)),
             problem_file_parent=repr(str(problem_file.parent)),
             kernel_module=kernel_file.stem,

@@ -16,9 +16,10 @@
 NCU Profiling Module for Triton Kernels
 
 This module wraps three tasks:
-1) Collect core metrics for Triton CUDA kernels with Nsight Compute into CSV (`profile_triton_kernel`).
+1) Collect core metrics for Triton kernels with Nsight Compute into CSV (`profile_triton_kernel`).
 2) Extract and clean those metrics into a DataFrame from the CSV (`load_ncu_metrics`).
 3) Convert the metrics table into a string suitable for inclusion in an LLM prompt (`metrics_to_prompt`).
+
 
 """
 
@@ -28,20 +29,14 @@ import os
 import shutil
 import subprocess
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import pandas as pd
 
-
-__all__ = [
-    "METRICS",
-    "METRIC_COLUMNS",
-    "profile_triton_kernel",
-    "load_ncu_metrics",
-    "metrics_to_prompt",
-]
+# This selection of metrics is inspried by the CudaForge team (https://github.com/OptimAI-Lab/CudaForge/tree/main)
 
 METRICS = ",".join(
     [
@@ -77,6 +72,14 @@ METRICS = ",".join(
 
 # List version for convenient header selection
 METRIC_COLUMNS: List[str] = [s.strip() for s in METRICS.split(",")]
+
+
+class MetricSelectionPolicy(Enum):
+    """Policy for selecting rows when multiple rows exist for a kernel."""
+
+    FIRST = "first"
+    LAST = "last"
+    MAX_CYCLES = "max_cycles"
 
 
 def profile_triton_kernel(
@@ -203,13 +206,83 @@ def profile_triton_kernel(
         raise RuntimeError(f"NCU profiling failed: {e}")
 
 
+def _apply_selection_policy(
+    df: pd.DataFrame,
+    policy: MetricSelectionPolicy,
+) -> pd.DataFrame:
+    """
+    Apply selection policy to choose a single row from a DataFrame.
+
+    Args:
+        df: DataFrame with one or more rows
+        policy: Selection policy to apply
+
+    Returns:
+        DataFrame with a single row based on the policy
+    """
+    if df.empty:
+        return df
+
+    if len(df) == 1:
+        return df
+
+    if policy == MetricSelectionPolicy.FIRST:
+        return df.iloc[[0]]
+    elif policy == MetricSelectionPolicy.LAST:
+        return df.iloc[[-1]]
+    elif policy == MetricSelectionPolicy.MAX_CYCLES:
+        if "sm__cycles_active.avg" in df.columns:
+            return df.sort_values("sm__cycles_active.avg", ascending=False).head(1)
+        # Fallback to last if cycles column not available
+        return df.iloc[[-1]]
+    else:
+        # Fallback to last for unknown policies
+        return df.iloc[[-1]]
+
+
+def _filter_by_kernel_names(
+    df: pd.DataFrame,
+    name_list: Sequence[str],
+    policy: MetricSelectionPolicy,
+    keep_cols: List[str],
+) -> pd.DataFrame:
+    """
+    Filter DataFrame by kernel names with substring matching.
+
+    Args:
+        df: DataFrame with NCU metrics
+        name_list: List of kernel name substrings to match
+        policy: Selection policy when multiple rows match
+        keep_cols: Columns to preserve in empty result
+
+    Returns:
+        Filtered DataFrame with one row per matched kernel name
+    """
+    results = []
+    for name in name_list:
+        # Use contains match instead of exact equality (for Triton's long kernel names)
+        matched = df[
+            df["Kernel Name"].astype(str).str.contains(name, regex=False, na=False)
+        ]
+        if matched.empty:
+            continue
+
+        row = _apply_selection_policy(matched, policy)
+        results.append(row)
+
+    if results:
+        return pd.concat(results, ignore_index=True)
+    else:
+        return pd.DataFrame(columns=keep_cols)
+
+
 def load_ncu_metrics(
     csv_path: Union[str, Path],
     columns: Optional[Sequence[str]] = None,
     extra_keep: Optional[Sequence[str]] = ("Kernel Name",),
     coerce_numeric: bool = True,
     name_list: Optional[Sequence[str]] = None,
-    select: str = "last",
+    select: Union[str, MetricSelectionPolicy] = MetricSelectionPolicy.LAST,
 ) -> pd.DataFrame:
     """
     Load and parse NCU metrics from CSV file.
@@ -220,19 +293,31 @@ def load_ncu_metrics(
         extra_keep: Additional columns to keep (e.g., "Kernel Name")
         coerce_numeric: Convert metric values to numeric
         name_list: Filter by kernel names (substring match)
-        select: Selection policy when multiple rows per name:
-               "first", "last", "max_cycles"
+        select: Selection policy when multiple rows per name.
+                Can be MetricSelectionPolicy enum or string ("first", "last", "max_cycles")
 
     Returns:
         DataFrame with parsed metrics
 
     Raises:
         FileNotFoundError: If CSV file not found
-        ValueError: If no requested columns found in CSV
+        ValueError: If no requested columns found in CSV or invalid select value
     """
     csv_path = Path(csv_path)
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
+
+    # Convert string to enum if needed
+    if isinstance(select, str):
+        try:
+            policy = MetricSelectionPolicy(select)
+        except ValueError:
+            raise ValueError(
+                f"Invalid select value: {select}. "
+                f"Must be one of: {[p.value for p in MetricSelectionPolicy]}"
+            )
+    else:
+        policy = select
 
     df = pd.read_csv(csv_path, comment="=", low_memory=False)
 
@@ -265,45 +350,10 @@ def load_ncu_metrics(
 
     # Filter by kernel name list if provided
     if name_list:
-        results = []
-        for name in name_list:
-            # Use contains match instead of exact equality (for Triton's long kernel names)
-            matched = sub[
-                sub["Kernel Name"].astype(str).str.contains(name, regex=False, na=False)
-            ]
-            if matched.empty:
-                continue
-            if len(matched) > 1:
-                if select == "first":
-                    row = matched.iloc[[0]]
-                elif select == "last":
-                    row = matched.iloc[[-1]]
-                elif (
-                    select == "max_cycles"
-                    and "sm__cycles_active.avg" in matched.columns
-                ):
-                    row = matched.sort_values(
-                        "sm__cycles_active.avg", ascending=False
-                    ).head(1)
-                else:
-                    row = matched.iloc[[-1]]  # fallback
-            else:
-                row = matched
-            results.append(row)
-
-        if results:
-            sub = pd.concat(results, ignore_index=True)
-        else:
-            sub = pd.DataFrame(columns=keep_cols)
-    elif select in ("first", "last", "max_cycles"):
+        sub = _filter_by_kernel_names(sub, name_list, policy, keep_cols)
+    else:
         # Apply selection to all rows if no name filter
-        if len(sub) > 0:
-            if select == "first":
-                sub = sub.iloc[[0]]
-            elif select == "last":
-                sub = sub.iloc[[-1]]
-            elif select == "max_cycles" and "sm__cycles_active.avg" in sub.columns:
-                sub = sub.sort_values("sm__cycles_active.avg", ascending=False).head(1)
+        sub = _apply_selection_policy(sub, policy)
 
     return sub
 
