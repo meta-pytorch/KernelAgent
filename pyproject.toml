@@ -32,6 +32,7 @@ dependencies = [
     "python-dotenv",
     "gradio>=5.5.0",
     "requests",
+
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,12 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov",
 ]
+
+# Add BackendBench as optional (requires Python >=3.10)
+backendbench = [
+    "backendbench @ git+https://git@github.com/meta-pytorch/BackendBench.git ; python_version >= '3.10'",
+]
+
 
 [project.scripts]
 fuser-ui = "scripts.fuser_ui:main"
