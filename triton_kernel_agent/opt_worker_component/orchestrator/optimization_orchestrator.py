@@ -230,7 +230,7 @@ class OptimizationOrchestrator:
             self.logger.info(f"📊 Using known kernel time: {best_time:.4f} ms")
         else:
             self.file_writer.write_kernel(kernel_code)
-            kernel_file_round = self.artifact_dir / f"kernel_round_0.py"
+            kernel_file_round = self.artifact_dir / "kernel_round_0.py"
             kernel_file_round.write_text(kernel_code)
 
             baseline_results = self.benchmarker.benchmark_kernel(
@@ -411,13 +411,10 @@ class OptimizationOrchestrator:
             * 100
         )
 
-        self.logger.info(f"📊 Final Results:")
+        self.logger.info("📊 Final Results:")
 
         if pytorch_baseline_time and pytorch_baseline_time != float("inf"):
             pytorch_speedup = pytorch_baseline_time / best_time
-            pytorch_improvement = (
-                (pytorch_baseline_time - best_time) / pytorch_baseline_time * 100
-            )
             self.logger.info(f"   PyTorch baseline: {pytorch_baseline_time:.4f} ms")
             self.logger.info(
                 f"   Baseline time:    {baseline_results['time_ms']:.4f} ms"
