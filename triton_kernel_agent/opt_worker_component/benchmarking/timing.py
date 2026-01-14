@@ -130,9 +130,7 @@ def prepare_inputs(
     converted_inputs = []
     for inp in inputs:
         if isinstance(inp, torch.Tensor):
-            # Move to device
             inp = inp.to(device=device)
-            # Convert dtype ONLY for floating-point tensors
             # Preserve integer/bool tensors (e.g., targets for classification)
             if inp.is_floating_point():
                 inp = inp.to(dtype=dtype)
@@ -162,41 +160,25 @@ def prepare_pytorch_model(
     Returns:
         Tuple of (model, inputs) ready for benchmarking
     """
-    # Load problem interface
     Model, get_inputs, get_init_inputs = load_problem_interface(problem_file)
 
     # Get initialization inputs (e.g., features, eps for RMSNorm)
-    init_inputs = []
-    if get_init_inputs is not None:
-        init_inputs = get_init_inputs()
-        if not isinstance(init_inputs, (tuple, list)):
-            init_inputs = [init_inputs]
+    init_inputs = get_init_inputs() if get_init_inputs is not None else []
+    if not isinstance(init_inputs, (tuple, list)):
+        init_inputs = [init_inputs]
 
-    # Initialize model
-    if init_inputs:
-        model = Model(*init_inputs)
-    else:
-        model = Model()
-
-    # Move model to CUDA
+    model = Model(*init_inputs) if init_inputs else Model()
     model = model.cuda()
-
-    # Check if model has trainable parameters
     has_parameters = any(p.numel() > 0 for p in model.parameters())
 
-    # Get inputs
     inputs = get_inputs()
     if not isinstance(inputs, (tuple, list)):
         inputs = (inputs,)
 
-    # Determine target dtype
     # Default to bfloat16 unless explicitly specified or model is a loss function
     target_dtype = dtype or torch.bfloat16
-
-    # Check if this is actually a loss function
     is_loss_function = isinstance(model, torch.nn.modules.loss._Loss)
 
-    # Handle dtype conversion based on model type
     if has_parameters or not is_loss_function:
         # Models with parameters (Conv, Linear, etc.) OR compute operations (matmul, etc.)
         # → use bfloat16 (or user-specified dtype)
@@ -416,10 +398,7 @@ def time_with_triton_do_bench(
     if device is None:
         device = torch.cuda.current_device()
 
-    try:
-        from triton import testing as triton_testing
-    except ImportError:
-        raise ImportError("Triton is required for time_with_triton_do_bench")
+    import triton.testing as triton_testing
 
     with torch.cuda.device(device):
         if verbose:

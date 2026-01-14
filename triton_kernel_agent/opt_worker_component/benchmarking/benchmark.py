@@ -24,7 +24,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import torch
 
@@ -39,11 +39,11 @@ from triton_kernel_agent.opt_worker_component.benchmarking.timing import (
 class BenchmarkLockManager:
     """Manages GPU benchmarking locks to prevent resource contention."""
 
-    def __init__(self, lock: Optional[Any], worker_id: int, logger: logging.Logger):
+    def __init__(self, lock: Any, worker_id: int, logger: logging.Logger):
         """Initialize the lock manager.
 
         Args:
-            lock: Shared multiprocessing lock (or None if no locking needed)
+            lock: Shared multiprocessing lock for serializing GPU access
             worker_id: Worker ID for logging
             logger: Logger instance
         """
@@ -53,24 +53,18 @@ class BenchmarkLockManager:
 
     def __enter__(self):
         """Acquire the benchmarking lock."""
-        if self.lock:
-            self.logger.info(
-                f"⏳ Waiting for benchmark lock (worker {self.worker_id})..."
-            )
-            self.lock.acquire()
-            self.logger.info(f"🔓 Acquired benchmark lock (worker {self.worker_id})")
+        self.logger.info(f"⏳ Waiting for benchmark lock (worker {self.worker_id})...")
+        self.lock.acquire()
+        self.logger.info(f"🔓 Acquired benchmark lock (worker {self.worker_id})")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Release the benchmarking lock."""
-        if self.lock:
-            try:
-                self.lock.release()
-                self.logger.info(
-                    f"🔒 Released benchmark lock (worker {self.worker_id})"
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to release benchmark lock: {e}")
+        try:
+            self.lock.release()
+            self.logger.info(f"🔒 Released benchmark lock (worker {self.worker_id})")
+        except Exception as e:
+            self.logger.warning(f"Failed to release benchmark lock: {e}")
         return False
 
 
@@ -85,8 +79,8 @@ class Benchmark:
     def __init__(
         self,
         logger: logging.Logger,
-        temp_dir: Path,
-        benchmark_lock: Optional[Any] = None,
+        artifacts_dir: Path,
+        benchmark_lock: Any,
         worker_id: int = 0,
         warmup: int = 25,
         repeat: int = 100,
@@ -96,7 +90,7 @@ class Benchmark:
 
         Args:
             logger: Logger instance
-            temp_dir: Temporary directory for benchmark artifacts
+            artifacts_dir: Directory for benchmark artifacts
             benchmark_lock: Shared lock to serialize GPU benchmarking
             worker_id: Worker ID
             warmup: Number of warmup iterations (or warmup time in ms for do_bench)
@@ -104,7 +98,7 @@ class Benchmark:
             timing_method: Timing method ("cuda_event", "do_bench", "host_time")
         """
         self.logger = logger
-        self.temp_dir = temp_dir
+        self.artifacts_dir = artifacts_dir
         self.lock_manager = BenchmarkLockManager(benchmark_lock, worker_id, logger)
         self.warmup = warmup
         self.repeat = repeat
@@ -118,7 +112,7 @@ class Benchmark:
     ) -> dict[str, Any]:
         """Benchmark Triton kernel performance using subprocess isolation.
 
-        Always uses subprocess for crash protection of potentially buggy kernels.
+        Uses subprocess for crash protection of potentially buggy kernels.
 
         Args:
             kernel_file: Path to kernel file
@@ -127,25 +121,12 @@ class Benchmark:
 
         Returns:
             Dictionary with benchmark results:
-                - time_ms: Mean time (for backward compatibility)
+                - time_ms: Mean time in ms
                 - speedup: Speedup vs baseline
         """
-        return self._benchmark_kernel_subprocess(
-            kernel_file, problem_file, baseline_file
-        )
-
-    def _benchmark_kernel_subprocess(
-        self,
-        kernel_file: Path,
-        problem_file: Path,
-        baseline_file: Optional[Path] = None,
-    ) -> dict[str, Any]:
-        """Benchmark kernel using subprocess (existing workflow)."""
         try:
             with self.lock_manager:
-                results_json = self.temp_dir / "benchmark_results.json"
-
-                # Use kernel_subprocess.py for subprocess isolation
+                results_json = self.artifacts_dir / "benchmark_results.json"
                 benchmark_script = Path(__file__).parent / "kernel_subprocess.py"
 
                 cmd = [
@@ -218,14 +199,12 @@ class Benchmark:
         """
         try:
             with self.lock_manager:
-                # Load model and inputs
                 model, inputs = prepare_pytorch_model(
                     problem_file=problem_file,
                     device="cuda",
                     dtype=dtype,
                 )
 
-                # Time using configured method
                 if self.timing_method == "do_bench":
                     times = time_with_triton_do_bench(
                         lambda: model(*inputs),
@@ -254,59 +233,4 @@ class Benchmark:
         except Exception as e:
             self.logger.error(f"PyTorch baseline benchmark failed: {e}")
             self.logger.error(traceback.format_exc())
-            return {"time_ms": float("inf")}
-
-    def benchmark_function(
-        self,
-        fn: Callable,
-        args: list[Any],
-        name: str = "function",
-    ) -> dict[str, Any]:
-        """Benchmark an arbitrary function with lock protection.
-
-        Args:
-            fn: Function to benchmark
-            args: Arguments to pass to function
-            name: Name for logging
-
-        Returns:
-            Dictionary with timing statistics
-        """
-        try:
-            with self.lock_manager:
-                self.logger.info(f"Benchmarking {name}...")
-
-                # Time using configured method
-                if self.timing_method == "do_bench":
-                    times = time_with_triton_do_bench(
-                        fn,
-                        args,
-                        warmup=self.warmup,
-                        rep=self.repeat,
-                        verbose=False,
-                    )
-                else:  # cuda_event
-                    times = time_with_cuda_events(
-                        fn,
-                        args,
-                        num_warmup=self.warmup,
-                        num_trials=self.repeat,
-                        clear_cache=True,
-                        verbose=False,
-                    )
-
-                stats = compute_timing_stats(times)
-
-                self.logger.info(
-                    f"{name}: {stats['mean']:.3f} ± {stats['std']:.3f} ms "
-                    f"(min={stats['min']:.3f}, max={stats['max']:.3f})"
-                )
-
-                return {
-                    "time_ms": stats["mean"],
-                    "stats": stats,
-                }
-
-        except Exception as e:
-            self.logger.error(f"Benchmark failed for {name}: {e}")
             return {"time_ms": float("inf")}

@@ -14,39 +14,6 @@
 
 """Benchmarking infrastructure for kernel performance measurement."""
 
-# Core benchmarking
-from .benchmark import Benchmark, BenchmarkLockManager
+from .benchmark import Benchmark
 
-# All utilities from timing module
-from .timing import (
-    # Timing functions
-    clear_l2_cache,
-    # Model/kernel loading
-    CompilationError,
-    compute_timing_stats,
-    import_module,
-    load_kernel_function,
-    load_problem_interface,
-    prepare_inputs,
-    prepare_pytorch_model,
-    time_with_cuda_events,
-    time_with_triton_do_bench,
-)
-
-__all__ = [
-    # Core benchmarking
-    "Benchmark",
-    "BenchmarkLockManager",
-    # Model/kernel loading
-    "CompilationError",
-    "import_module",
-    "load_kernel_function",
-    "load_problem_interface",
-    "prepare_inputs",
-    "prepare_pytorch_model",
-    # Timing utilities
-    "clear_l2_cache",
-    "compute_timing_stats",
-    "time_with_cuda_events",
-    "time_with_triton_do_bench",
-]
+__all__ = ["Benchmark"]

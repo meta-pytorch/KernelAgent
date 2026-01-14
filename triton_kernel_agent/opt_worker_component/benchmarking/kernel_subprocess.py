@@ -27,49 +27,82 @@ Design:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 from pathlib import Path
 
-# Import shared utilities from timing module (avoid duplication)
 from timing import (
     import_module,
     load_kernel_function,
     load_problem_interface,
     prepare_inputs,
 )
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Tuple
 
 import torch
 import triton.testing as tt
 
 
+def _extract_model_params(
+    model: torch.nn.Module,
+) -> tuple[torch.Tensor | None, torch.Tensor | None, dict[str, Any]]:
+    """Extract weight, bias, and layer parameters from a PyTorch model.
+
+    Searches for Conv or Linear layers and extracts their parameters.
+
+    Args:
+        model: PyTorch model to extract parameters from
+
+    Returns:
+        Tuple of (weight, bias, layer_kwargs) where layer_kwargs contains
+        stride, padding, dilation, groups if applicable
+    """
+    for _, module in model.named_modules():
+        if isinstance(
+            module,
+            (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear),
+        ):
+            if hasattr(module, "weight") and module.weight is not None:
+                weight = module.weight
+                bias = getattr(module, "bias", None)
+
+                layer_kwargs: dict[str, Any] = {}
+                if hasattr(module, "stride"):
+                    stride = module.stride
+                    layer_kwargs["stride"] = (
+                        stride[0] if isinstance(stride, (tuple, list)) else stride
+                    )
+                if hasattr(module, "padding"):
+                    padding = module.padding
+                    layer_kwargs["padding"] = (
+                        padding[0] if isinstance(padding, (tuple, list)) else padding
+                    )
+                if hasattr(module, "dilation"):
+                    dilation = module.dilation
+                    layer_kwargs["dilation"] = (
+                        dilation[0] if isinstance(dilation, (tuple, list)) else dilation
+                    )
+                if hasattr(module, "groups"):
+                    layer_kwargs["groups"] = module.groups
+
+                return weight, bias, layer_kwargs
+
+    return None, None, {}
+
+
 def _run_once(
     fn: Callable, inputs: Tuple[torch.Tensor, ...], init_inputs: list, name: str
 ) -> torch.Tensor:
-    """Run kernel once to get output shape/dtype info.
-
-    Args:
-        fn: Kernel function
-        inputs: Input tensors
-        init_inputs: Initialization inputs (e.g., features, eps)
-        name: Name for logging
-
-    Returns:
-        Output tensor
-
-    Raises:
-        Exception if kernel fails to run
-    """
+    """Run kernel once to verify execution and get output shape/dtype."""
     try:
         with torch.inference_mode():
-            out = fn(*inputs, *init_inputs)
-        return out
+            return fn(*inputs, *init_inputs)
     except Exception as exc:
         raise RuntimeError(f"{name} failed to execute: {exc}") from exc
 
 
-def benchmark(
+def _benchmark(
     fn: Callable,
     inputs: Tuple[torch.Tensor, ...],
     init_inputs: list,
@@ -77,19 +110,7 @@ def benchmark(
     warmup: int = 25,
     rep: int = 100,
 ) -> float:
-    """Benchmark a kernel function using triton.testing.do_bench.
-
-    Args:
-        fn: Kernel function to benchmark
-        inputs: Input tensors
-        init_inputs: Initialization inputs (e.g., features, eps)
-        name: Name for logging
-        warmup: Number of warmup iterations
-        rep: Number of measurement iterations
-
-    Returns:
-        Mean latency in milliseconds
-    """
+    """Benchmark a kernel function using triton.testing.do_bench."""
     try:
         ms = tt.do_bench(
             lambda: fn(*inputs, *init_inputs),
@@ -104,14 +125,14 @@ def benchmark(
         return float("inf")
 
 
-def main():
+def _parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Task-agnostic Triton kernel benchmark",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
 
-    # File paths
     parser.add_argument(
         "--problem",
         type=Path,
@@ -129,43 +150,143 @@ def main():
         action="store_true",
         help="Include PyTorch reference model in benchmark",
     )
-
-    # Benchmark configuration
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--repeat", type=int, default=100)
-
-    # Problem configuration
     parser.add_argument("--size", type=int, default=4096, help="Problem size N")
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to use",
-    )
+    parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     parser.add_argument(
         "--dtype",
         type=str,
         default="bfloat16",
         choices=["float32", "float16", "bfloat16"],
-        help="Data type",
     )
-
-    # Output options
     parser.add_argument("--json", type=Path, help="Save results to JSON file")
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress non-essential output",
-    )
+    parser.add_argument("--quiet", action="store_true")
 
     args = parser.parse_args()
-
-    # Resolve paths
     args.problem = args.problem.resolve()
     args.kernel = args.kernel.resolve()
+    return args
 
-    # Setup device and dtype
+
+def _load_problem(
+    args: argparse.Namespace,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[type, tuple, list, torch.nn.Module | None]:
+    """Load problem interface, prepare inputs, and optionally create baseline model.
+
+    Returns:
+        Tuple of (Model class, inputs, init_inputs, baseline_model or None)
+    """
+    Model, get_inputs, get_init_inputs = load_problem_interface(args.problem)
+
+    # Check for optional benchmark config override
+    try:
+        problem_mod = import_module(args.problem, "problem")
+        get_benchmark_config = getattr(problem_mod, "get_benchmark_config", None)
+        if get_benchmark_config is not None:
+            config = get_benchmark_config()
+            args.warmup = config.get("warmup", args.warmup)
+            args.repeat = config.get("repeat", args.repeat)
+            if not args.quiet:
+                print(
+                    f"Using problem-specific config: "
+                    f"warmup={args.warmup}, repeat={args.repeat}"
+                )
+    except Exception:
+        pass
+
+    inputs = prepare_inputs(get_inputs, device=device, dtype=dtype)
+
+    init_inputs = get_init_inputs() if get_init_inputs is not None else []
+    if not isinstance(init_inputs, (tuple, list)):
+        init_inputs = [init_inputs]
+
+    # Create baseline model if requested
+    baseline_model = None
+    if args.baseline:
+        baseline_model = (
+            Model(*init_inputs).to(device=device, dtype=dtype)
+            if init_inputs
+            else Model().to(device=device, dtype=dtype)
+        )
+        baseline_model.eval()
+        out = _run_once(baseline_model, inputs, [], "Reference")
+        if not args.quiet:
+            print(f"Reference output shape: {out.shape}, dtype: {out.dtype}")
+            print()
+
+    return Model, inputs, init_inputs, baseline_model
+
+
+def _prepare_kernel(
+    kernel_file: Path,
+    Model: type,
+    baseline_model: torch.nn.Module | None,
+    init_inputs: list,
+    device: torch.device,
+    dtype: torch.dtype,
+    quiet: bool = False,
+) -> tuple[Callable, tuple, list]:
+    """Load kernel and wrap it with model parameters if needed.
+
+    Returns:
+        Tuple of (kernel_function, kernel_args, kernel_init_args)
+    """
+    kernel_function = load_kernel_function(kernel_file)
+
+    # Check if kernel expects weight/bias parameters
+    needs_model = False
+    try:
+        sig = inspect.signature(kernel_function)
+        if "weight" in sig.parameters:
+            needs_model = True
+    except Exception:
+        pass
+
+    kernel_init_args = init_inputs
+
+    if needs_model and Model is not None:
+        try:
+            # Reuse baseline model if available
+            extract_model = baseline_model
+            if extract_model is None:
+                extract_model = (
+                    Model(*init_inputs).to(device=device, dtype=dtype)
+                    if init_inputs
+                    else Model().to(device=device, dtype=dtype)
+                )
+
+            weight, bias, kernel_kwargs = _extract_model_params(extract_model)
+
+            if weight is not None:
+                original_fn = kernel_function
+
+                def kernel_with_model(*args, **kwargs):
+                    return original_fn(args[0], weight, bias, **kernel_kwargs)
+
+                kernel_function = kernel_with_model
+                kernel_init_args = []
+        except Exception as exc:
+            if not quiet:
+                print(f"⚠️  Warning: Failed to extract model parameters: {exc}")
+                print("   Falling back to direct kernel invocation")
+
+    return kernel_function, kernel_init_args
+
+
+def _save_results(results: dict[str, Any], path: Path) -> None:
+    """Save benchmark results to JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved to: {path}")
+
+
+def main():
+    args = _parse_args()
+
     device = torch.device(args.device)
     dtype_map = {
         "float32": torch.float32,
@@ -180,72 +301,18 @@ def main():
         print("=" * 80)
         print(f"Problem: {args.problem.name}")
         print(f"Size: {args.size}")
-        print(f"Device: {device}")
-        print(f"Dtype: {dtype}")
+        print(f"Device: {device}, Dtype: {dtype}")
         print(f"Warmup: {args.warmup}, Repeat: {args.repeat}")
         print()
 
-    # Import problem module using shared utility
+    # Load problem and prepare inputs
     try:
-        Model, get_inputs, get_init_inputs = load_problem_interface(args.problem)
+        Model, inputs, init_inputs, baseline_model = _load_problem(args, device, dtype)
     except Exception as exc:
-        print(f"❌ Failed to import problem file: {exc}")
+        print(f"❌ Failed to load problem: {exc}")
         sys.exit(1)
 
-    # Check for optional benchmark config
-    try:
-        problem_mod = import_module(args.problem, "problem")
-        get_benchmark_config = getattr(problem_mod, "get_benchmark_config", None)
-    except Exception:
-        get_benchmark_config = None
-
-    # Override benchmark config if provided by problem
-    if get_benchmark_config is not None:
-        config = get_benchmark_config()
-        args.warmup = config.get("warmup", args.warmup)
-        args.repeat = config.get("repeat", args.repeat)
-        if not args.quiet:
-            cfg_msg = (
-                f"Using problem-specific config: "
-                f"warmup={args.warmup}, repeat={args.repeat}"
-            )
-            print(cfg_msg)
-
-    # Generate inputs using shared utility
-    try:
-        inputs = prepare_inputs(get_inputs, device=device, dtype=dtype)
-
-        # Get initialization inputs (e.g., features, eps for RMSNorm)
-        init_inputs = []
-        if get_init_inputs is not None:
-            init_inputs = get_init_inputs()
-            if not isinstance(init_inputs, (tuple, list)):
-                init_inputs = [init_inputs]
-    except Exception as exc:
-        print(f"❌ Failed to generate inputs: {exc}")
-        sys.exit(1)
-
-    # Create reference model only if baseline is requested
-    model = None
-    if args.baseline:
-        try:
-            # Initialize model with init_inputs if provided
-            if init_inputs:
-                model = Model(*init_inputs).to(device=device, dtype=dtype)
-            else:
-                model = Model().to(device=device, dtype=dtype)
-            model.eval()
-            # Run once to get output shape
-            out = _run_once(model, inputs, [], "Reference")
-            if not args.quiet:
-                print(f"Reference output shape: {out.shape}, dtype: {out.dtype}")
-                print()
-        except Exception as exc:
-            print(f"❌ Failed to create reference model: {exc}")
-            sys.exit(1)
-
-    # Results tracking
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "problem": str(args.problem),
         "size": args.size,
         "device": str(device),
@@ -255,14 +322,13 @@ def main():
         "kernels": {},
     }
 
+    # Benchmark baseline (if requested)
     baseline_time = None
-
-    # Benchmark PyTorch baseline if requested
-    if args.baseline and model is not None:
+    if baseline_model is not None:
         if not args.quiet:
             print("1. PyTorch Reference")
-        baseline_time = benchmark(
-            model, inputs, [], "PyTorch", args.warmup, args.repeat
+        baseline_time = _benchmark(
+            baseline_model, inputs, [], "PyTorch", args.warmup, args.repeat
         )
         results["kernels"]["pytorch_reference"] = {
             "time_ms": baseline_time,
@@ -271,166 +337,51 @@ def main():
         if not args.quiet:
             print()
 
-    # Benchmark candidate kernel
+    # Load and prepare kernel
     kernel_name = args.kernel.stem
-
     if not args.quiet:
         idx = 2 if args.baseline else 1
         print(f"{idx}. Candidate: {kernel_name}")
 
-    # Import kernel using shared utility
     try:
-        kernel_function = load_kernel_function(args.kernel)
+        kernel_fn, kernel_init_args = _prepare_kernel(
+            args.kernel, Model, baseline_model, init_inputs, device, dtype, args.quiet
+        )
     except Exception as exc:
-        print(f"❌ Failed to import {kernel_name}: {exc}")
-        results["kernels"][kernel_name] = {
-            "time_ms": float("inf"),
-            "error": str(exc),
-        }
+        print(f"❌ Failed to load kernel: {exc}")
+        results["kernels"][kernel_name] = {"time_ms": float("inf"), "error": str(exc)}
         if args.json:
-            args.json.parent.mkdir(parents=True, exist_ok=True)
-            with open(args.json, "w") as f:
-                json.dump(results, f, indent=2)
+            _save_results(results, args.json)
         sys.exit(1)
 
-    # Check if kernel expects weight/bias parameters (e.g., Conv, Linear)
-    # If so, extract them from a Model instance
-    import inspect
-
-    needs_model = False
+    # Verify kernel executes
     try:
-        sig = inspect.signature(kernel_function)
-        params = list(sig.parameters.keys())
-        # Check if kernel expects 'weight' parameter (common for Conv, Linear, etc.)
-        if "weight" in params:
-            needs_model = True
-    except Exception:
-        pass
-
-    # Prepare kernel arguments
-    kernel_args = inputs
-    kernel_init_args = init_inputs
-
-    if needs_model and Model is not None:
-        try:
-            # Initialize model to extract weight and bias
-            if init_inputs:
-                extract_model = Model(*init_inputs).to(device=device, dtype=dtype)
-            else:
-                extract_model = Model().to(device=device, dtype=dtype)
-
-            # Extract weight and bias from model layer
-            # Check various possible attribute names
-            weight = None
-            bias = None
-            layer = None
-            for name, module in extract_model.named_modules():
-                if isinstance(
-                    module,
-                    (
-                        torch.nn.Conv1d,
-                        torch.nn.Conv2d,
-                        torch.nn.Conv3d,
-                        torch.nn.Linear,
-                    ),
-                ):
-                    if hasattr(module, "weight") and module.weight is not None:
-                        layer = module
-                        weight = module.weight
-                        bias = getattr(module, "bias", None)
-                        break
-
-            if weight is not None and layer is not None:
-                # Build kwargs for kernel_function
-                kernel_kwargs = {}
-
-                # Add conv/linear-specific parameters if they exist
-                if hasattr(layer, "stride"):
-                    stride = (
-                        layer.stride[0]
-                        if isinstance(layer.stride, (tuple, list))
-                        else layer.stride
-                    )
-                    kernel_kwargs["stride"] = stride
-                if hasattr(layer, "padding"):
-                    padding = (
-                        layer.padding[0]
-                        if isinstance(layer.padding, (tuple, list))
-                        else layer.padding
-                    )
-                    kernel_kwargs["padding"] = padding
-                if hasattr(layer, "dilation"):
-                    dilation = (
-                        layer.dilation[0]
-                        if isinstance(layer.dilation, (tuple, list))
-                        else layer.dilation
-                    )
-                    kernel_kwargs["dilation"] = dilation
-                if hasattr(layer, "groups"):
-                    kernel_kwargs["groups"] = layer.groups
-
-                # Capture original kernel function to avoid recursion
-                original_kernel_function = kernel_function
-
-                # Prepare wrapper function that passes weight/bias
-                def kernel_with_model(*args, **kwargs):
-                    return original_kernel_function(
-                        args[0], weight, bias, **kernel_kwargs
-                    )
-
-                # Update kernel function and clear init_inputs (already handled)
-                kernel_function = kernel_with_model
-                kernel_init_args = []
-        except Exception as exc:
-            if not args.quiet:
-                print(f"⚠️  Warning: Failed to extract model parameters: {exc}")
-                print("   Falling back to direct kernel invocation")
-
-    # Run once to verify it executes
-    try:
-        out = _run_once(kernel_function, kernel_args, kernel_init_args, kernel_name)
+        out = _run_once(kernel_fn, inputs, kernel_init_args, kernel_name)
         if not args.quiet:
             print(f"✓ {kernel_name} executes successfully")
             print(f"  Output shape: {out.shape}, dtype: {out.dtype}")
     except Exception as exc:
         print(f"❌ {kernel_name} failed: {exc}")
-        results["kernels"][kernel_name] = {
-            "time_ms": float("inf"),
-            "error": str(exc),
-        }
+        results["kernels"][kernel_name] = {"time_ms": float("inf"), "error": str(exc)}
         if args.json:
-            args.json.parent.mkdir(parents=True, exist_ok=True)
-            with open(args.json, "w") as f:
-                json.dump(results, f, indent=2)
+            _save_results(results, args.json)
         sys.exit(1)
 
-    # Benchmark
-    kernel_time = benchmark(
-        kernel_function,
-        kernel_args,
-        kernel_init_args,
-        kernel_name,
-        args.warmup,
-        args.repeat,
+    # Benchmark kernel
+    kernel_time = _benchmark(
+        kernel_fn, inputs, kernel_init_args, kernel_name, args.warmup, args.repeat
     )
+    results["kernels"][kernel_name] = {"time_ms": kernel_time, "path": str(args.kernel)}
 
-    results["kernels"][kernel_name] = {
-        "time_ms": kernel_time,
-        "path": str(args.kernel),
-    }
-
+    # Calculate speedup
     if baseline_time is not None and kernel_time != float("inf"):
         speedup = baseline_time / kernel_time
         results["kernels"][kernel_name]["speedup"] = speedup
         if not args.quiet:
             print(f"Speedup vs PyTorch: {speedup:.2f}x")
 
-    # Save JSON results
     if args.json:
-        args.json.parent.mkdir(parents=True, exist_ok=True)
-        with open(args.json, "w") as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to: {args.json}")
+        _save_results(results, args.json)
 
 
 if __name__ == "__main__":
