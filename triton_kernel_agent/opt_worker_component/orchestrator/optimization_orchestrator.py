@@ -184,7 +184,9 @@ class OptimizationOrchestrator:
                 optimized_kernel, test_code, problem_description, round_num
             )
             if not success:
-                error_feedback = verify_error or "Previous attempt failed correctness check."
+                error_feedback = (
+                    verify_error or "Previous attempt failed correctness check."
+                )
                 continue
 
             error_feedback = ""

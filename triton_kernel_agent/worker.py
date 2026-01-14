@@ -566,9 +566,7 @@ class VerificationWorker:
         # Refinement loop
         for attempt in range(1, max_refine_attempts + 1):
             error_output = stderr if stderr.strip() else stdout
-            self.logger.info(
-                f"Refinement attempt {attempt}/{max_refine_attempts}..."
-            )
+            self.logger.info(f"Refinement attempt {attempt}/{max_refine_attempts}...")
 
             error_info = {
                 "stdout": stdout,
