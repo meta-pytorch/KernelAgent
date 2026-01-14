@@ -518,3 +518,88 @@ class VerificationWorker:
             "rounds": self.max_rounds,
             "history": list(self.history),
         }
+
+    def verify_with_refinement(
+        self,
+        kernel_code: str,
+        test_code: str,
+        problem_description: str,
+        max_refine_attempts: int = 3,
+    ) -> tuple[bool, str, str]:
+        """
+        Verify kernel correctness with refinement attempts.
+
+        This is a simpler API for single-pass verification with refinement,
+        useful for optimization loops that manage their own iteration.
+
+        Args:
+            kernel_code: Kernel code to verify
+            test_code: Test code for verification
+            problem_description: Problem description for refinement context
+            max_refine_attempts: Maximum refinement attempts if verification fails
+
+        Returns:
+            Tuple of (success, final_kernel_code, error_feedback)
+            - success: Whether the kernel passed verification
+            - final_kernel_code: The verified (possibly refined) kernel
+            - error_feedback: Error message if failed, empty string if success
+        """
+        current_kernel = kernel_code
+
+        # Write files for testing
+        self._write_files(current_kernel, test_code)
+
+        # Check for disallowed PyTorch patterns
+        violation = self._detect_pytorch_compute(current_kernel)
+        if violation:
+            message = f"Disallowed PyTorch usage detected: {violation}"
+            self.logger.error(message)
+            return False, current_kernel, message
+
+        # Initial verification
+        success, stdout, stderr = self._run_test()
+
+        if success:
+            self.logger.info("✅ Verification passed on first attempt")
+            return True, current_kernel, ""
+
+        # Refinement loop
+        for attempt in range(1, max_refine_attempts + 1):
+            error_output = stderr if stderr.strip() else stdout
+            self.logger.info(
+                f"Refinement attempt {attempt}/{max_refine_attempts}..."
+            )
+
+            error_info = {
+                "stdout": stdout,
+                "stderr": stderr,
+                "error_type": (
+                    "compilation"
+                    if "CompilationError" in error_output
+                    or "SyntaxError" in error_output
+                    else "runtime"
+                ),
+            }
+
+            # Refine kernel
+            refined_kernel = self._refine_kernel(
+                current_kernel, error_info, problem_description, test_code
+            )
+
+            # Write and test refined kernel
+            self._write_kernel(refined_kernel)
+            success, stdout, stderr = self._run_test()
+
+            if success:
+                self.logger.info(
+                    f"✅ Verification passed after refinement (attempt {attempt})"
+                )
+                return True, refined_kernel, ""
+
+            current_kernel = refined_kernel
+
+        # All attempts exhausted
+        error_output = stderr if stderr.strip() else stdout
+        error_feedback = f"Verification failed after {max_refine_attempts} refinement attempts:\n{error_output[:2000]}"
+        self.logger.warning(f"❌ {error_feedback[:200]}...")
+        return False, current_kernel, error_feedback
