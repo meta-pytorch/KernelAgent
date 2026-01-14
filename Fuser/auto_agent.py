@@ -463,20 +463,23 @@ class AutoKernelRouter:
         heuristic_prefers_fuser = cx.route_to_fuser()
 
         # Cache lookup by content hash to avoid repeated router calls
+        cache = {}
         code_hash = _file_sha256_text(code)
-        cache = _load_router_cache()
-        cached = cache.get(code_hash)
-
         strategy: str | None = None
         route_conf: float | None = None
         route_cfg: dict[str, Any] = {}
 
-        if self.use_router_cache and isinstance(cached, dict):
-            strategy = (
-                str(cached.get("route_strategy") or cached.get("route") or "") or None
-            )
-            route_conf = cached.get("confidence")
-            route_cfg = cached.get("config") or {}
+        if self.use_router_cache:
+            cache = _load_router_cache()
+            cached = cache.get(code_hash)
+
+            if isinstance(cached, dict):
+                strategy = (
+                    str(cached.get("route_strategy") or cached.get("route") or "")
+                    or None
+                )
+                route_conf = cached.get("confidence")
+                route_cfg = cached.get("config") or {}
 
         if strategy is None:
             # Try LLM-driven decision
