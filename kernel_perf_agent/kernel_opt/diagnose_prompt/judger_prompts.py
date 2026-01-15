@@ -315,7 +315,10 @@ def validate_judge_response(analysis: dict[str, Any]) -> bool:
 
 
 VALID_CATEGORIES = {
-    "memory-bound", "compute-bound", "occupancy-limited", "latency-bound"
+    "memory-bound",
+    "compute-bound",
+    "occupancy-limited",
+    "latency-bound",
 }
 
 
