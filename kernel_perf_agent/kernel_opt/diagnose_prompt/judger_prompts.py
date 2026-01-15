@@ -32,7 +32,7 @@ Both bottlenecks are selected from NCU hardware profiling categories:
 Metric definitions are in metric_schema.py.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable
 
 from .metric_schema import GPU_MEMORY_FIELDS, GPU_SPEC_FIELDS, NCU_METRIC_SECTIONS
 
@@ -42,23 +42,26 @@ from .metric_schema import GPU_MEMORY_FIELDS, GPU_SPEC_FIELDS, NCU_METRIC_SECTIO
 # =============================================================================
 
 
-def render_problem_description(problem_description: str) -> List[str]:
+def render_problem_description(problem_description: str) -> list[str]:
     """Render the problem description section."""
     return ["## Problem Description", "", problem_description]
 
 
-def render_kernel_code(kernel_code: str, language: str = "python") -> List[str]:
+def render_kernel_code(kernel_code: str, language: str = "python") -> list[str]:
     """Render the kernel code section with syntax highlighting."""
     return ["", "## Current Kernel Code", "", f"```{language}", kernel_code, "```"]
 
 
-def render_gpu_specs(gpu_specs: Dict[str, Any]) -> List[str]:
+def render_gpu_specs(gpu_specs: dict[str, Any]) -> list[str]:
     """Render the GPU hardware specifications section."""
     lines = ["", "## GPU Hardware Specifications", ""]
 
     for label, key, unit in GPU_SPEC_FIELDS:
         value = gpu_specs.get(key, "N/A")
-        lines.append(f"- **{label}:** {value}{unit}")
+        if value == "N/A":
+            lines.append(f"- **{label}:** N/A")
+        else:
+            lines.append(f"- **{label}:** {value}{unit}")
 
     for label, size_key, type_key, size_unit in GPU_MEMORY_FIELDS:
         size_value = gpu_specs.get(size_key, "N/A")
@@ -69,9 +72,9 @@ def render_gpu_specs(gpu_specs: Dict[str, Any]) -> List[str]:
 
 
 def render_ncu_metrics(
-    ncu_metrics: Dict[str, Any],
+    ncu_metrics: dict[str, Any],
     get_metric_fn: Callable[[str, str], str],
-) -> List[str]:
+) -> list[str]:
     """Render the NCU profiling metrics section."""
     lines = ["", "## NCU Profiling Metrics"]
 
@@ -85,7 +88,7 @@ def render_ncu_metrics(
     return lines
 
 
-def render_task_instructions() -> List[str]:
+def render_task_instructions() -> list[str]:
     """Render the task instructions section for dual-bottleneck analysis."""
     return [
         "",
@@ -102,7 +105,7 @@ def render_task_instructions() -> List[str]:
     ]
 
 
-def create_metric_getter(kernel_metrics: Dict[str, Any]) -> Callable[[str, str], str]:
+def create_metric_getter(kernel_metrics: dict[str, Any]) -> Callable[[str, str], str]:
     """Create a metric getter function for a specific kernel's metrics."""
 
     def get_metric(key: str, default: str = "N/A") -> str:
@@ -172,9 +175,9 @@ Follow the Rules exactly. Return JSON in the specified format.
 def build_judge_optimization_prompt(
     kernel_code: str,
     problem_description: str,
-    ncu_metrics: Dict[str, Any],
-    gpu_specs: Dict[str, Any],
-) -> Tuple[str, str]:
+    ncu_metrics: dict[str, Any],
+    gpu_specs: dict[str, Any],
+) -> tuple[str, str]:
     """
     Build system and user prompts for Judge to analyze bottleneck.
 
@@ -209,7 +212,7 @@ def build_judge_optimization_prompt(
         raise ValueError("NCU metrics are empty - cannot build judge prompt")
 
     # Extract first kernel's metrics for the metric getter
-    first_kernel = list(ncu_metrics.values())[0] if ncu_metrics else {}
+    first_kernel = list(ncu_metrics.values())[0]
     get_metric_fn = create_metric_getter(first_kernel)
 
     # Build user prompt using modular section renderers
@@ -226,7 +229,7 @@ def build_judge_optimization_prompt(
     return JUDGE_SYSTEM_PROMPT, user_prompt
 
 
-def extract_judge_response(response_text: str) -> Optional[Dict[str, Any]]:
+def extract_judge_response(response_text: str) -> dict[str, Any] | None:
     """
     Extract and parse JSON from Judge LLM response.
 
@@ -302,7 +305,7 @@ def extract_judge_response(response_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def validate_judge_response(analysis: Dict[str, Any]) -> bool:
+def validate_judge_response(analysis: dict[str, Any]) -> bool:
     """Validate that Judge response contains required dual-bottleneck fields."""
     if "bottleneck_1" not in analysis or "bottleneck_2" not in analysis:
         return False
@@ -311,12 +314,12 @@ def validate_judge_response(analysis: Dict[str, Any]) -> bool:
     ) and _validate_bottleneck_entry(analysis["bottleneck_2"])
 
 
-VALID_CATEGORIES = frozenset(
-    ["memory-bound", "compute-bound", "occupancy-limited", "latency-bound"]
-)
+VALID_CATEGORIES = {
+    "memory-bound", "compute-bound", "occupancy-limited", "latency-bound"
+}
 
 
-def _validate_bottleneck_entry(bottleneck: Dict[str, Any]) -> bool:
+def _validate_bottleneck_entry(bottleneck: dict[str, Any]) -> bool:
     """Validate a single bottleneck entry."""
     required = [
         "category",
