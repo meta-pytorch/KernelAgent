@@ -380,7 +380,7 @@ class OptimizationOrchestrator:
 
             if divergence > self.divergence_threshold:
                 self.logger.warning(
-                    f"[{round_num}] ⚠️  EXCESSIVE DIVERGENCE: {new_time:.4f} ms is {divergence:.1f}% worse"
+                    f"[{round_num}] ⚠️  EGREGIOUS DIVERGENCE: {new_time:.4f} ms is {divergence:.1f}% worse"
                 )
                 self.logger.warning(f"[{round_num}] 🔄 REVERTING to best kernel")
                 return best_kernel, best_time, best_kernel, best_time
@@ -412,22 +412,16 @@ class OptimizationOrchestrator:
         )
 
         self.logger.info("📊 Final Results:")
+        self.logger.info(f"   Best time:     {best_time:.4f} ms")
+        self.logger.info(f"   Baseline time: {baseline_results['time_ms']:.4f} ms")
+        self.logger.info(f"   Speedup vs baseline: {baseline_speedup:.2f}x")
 
         if pytorch_baseline_time and pytorch_baseline_time != float("inf"):
             pytorch_speedup = pytorch_baseline_time / best_time
             self.logger.info(f"   PyTorch baseline: {pytorch_baseline_time:.4f} ms")
-            self.logger.info(
-                f"   Baseline time:    {baseline_results['time_ms']:.4f} ms"
-            )
-            self.logger.info(f"   Best time:        {best_time:.4f} ms")
-            self.logger.info(f"   Speedup vs PyTorch:  {pytorch_speedup:.2f}x")
-            self.logger.info(f"   Speedup vs baseline: {baseline_speedup:.2f}x")
-            self.logger.info(f"   Improvement:         {improvement_percent:.1f}%")
-        else:
-            self.logger.info(f"   Baseline time: {baseline_results['time_ms']:.4f} ms")
-            self.logger.info(f"   Best time:     {best_time:.4f} ms")
-            self.logger.info(f"   Speedup:       {baseline_speedup:.2f}x")
-            self.logger.info(f"   Improvement:   {improvement_percent:.1f}%")
+            self.logger.info(f"   Speedup vs PyTorch: {pytorch_speedup:.2f}x")
+
+        self.logger.info(f"   Improvement: {improvement_percent:.1f}%")
 
         # Save best kernel
         best_kernel_file = self.output_dir / "best_kernel.py"

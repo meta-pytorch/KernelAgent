@@ -417,6 +417,35 @@ class VerificationWorker:
         # Add to history
         self.history.append(round_data)
 
+    def _single_verification_pass(
+        self, kernel_code: str
+    ) -> tuple[bool, str, str, str | None]:
+        """
+        Run a single verification pass on the kernel.
+
+        Args:
+            kernel_code: Kernel code to verify
+
+        Returns:
+            Tuple of (success, stdout, stderr, violation_message)
+            - violation_message is set if disallowed PyTorch usage detected, None otherwise
+        """
+        # Check for disallowed PyTorch patterns
+        violation = self._detect_pytorch_compute(kernel_code)
+        if violation:
+            message = f"Disallowed PyTorch usage detected: {violation}"
+            self.logger.error(message)
+            return False, "", message, message
+
+        # Run test
+        success, stdout, stderr = (
+            self._run_test()
+            if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
+            else _run_test_multiprocess(self.logger, self.workdir, self.test_file)
+        )
+
+        return success, stdout, stderr, None
+
     def run(
         self,
         kernel_code: str,
@@ -461,30 +490,24 @@ class VerificationWorker:
                 # Subsequent rounds: only update kernel, test remains unchanged
                 self._write_kernel(current_kernel)
 
-            violation = self._detect_pytorch_compute(current_kernel)
+            # Run single verification pass
+            success, stdout, stderr, violation = self._single_verification_pass(
+                current_kernel
+            )
+
+            # Log round
+            self._log_round(round_num + 1, success, current_kernel, stdout, stderr)
+
             if violation:
-                message = f"Disallowed PyTorch usage detected: {violation}"
-                self.logger.error(message)
-                self._log_round(round_num + 1, False, current_kernel, "", message)
                 error_info = {
                     "stdout": "",
-                    "stderr": message,
+                    "stderr": violation,
                     "history": list(self.history),
                 }
                 current_kernel = self._refine_kernel(
                     current_kernel, error_info, problem_description, test_code
                 )
                 continue
-
-            # Run test
-            success, stdout, stderr = (
-                self._run_test()
-                if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
-                else _run_test_multiprocess(self.logger, self.workdir, self.test_file)
-            )
-
-            # Log round
-            self._log_round(round_num + 1, success, current_kernel, stdout, stderr)
 
             if success:
                 self.logger.info(
@@ -549,15 +572,13 @@ class VerificationWorker:
         # Write files for testing
         self._write_files(current_kernel, test_code)
 
-        # Check for disallowed PyTorch patterns
-        violation = self._detect_pytorch_compute(current_kernel)
-        if violation:
-            message = f"Disallowed PyTorch usage detected: {violation}"
-            self.logger.error(message)
-            return False, current_kernel, message
-
         # Initial verification
-        success, stdout, stderr = self._run_test()
+        success, stdout, stderr, violation = self._single_verification_pass(
+            current_kernel
+        )
+
+        if violation:
+            return False, current_kernel, violation
 
         if success:
             self.logger.info("✅ Verification passed on first attempt")
@@ -586,7 +607,13 @@ class VerificationWorker:
 
             # Write and test refined kernel
             self._write_kernel(refined_kernel)
-            success, stdout, stderr = self._run_test()
+            success, stdout, stderr, violation = self._single_verification_pass(
+                refined_kernel
+            )
+
+            if violation:
+                current_kernel = refined_kernel
+                continue
 
             if success:
                 self.logger.info(
