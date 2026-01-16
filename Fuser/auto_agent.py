@@ -330,7 +330,7 @@ class AutoKernelRouter:
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
         target_platform: str | None = None,
-        override_router_config: bool = False,
+        ignore_router_config: bool = False,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -353,7 +353,7 @@ class AutoKernelRouter:
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
         self.platform_config = get_platform(target_platform)
-        self.override_router_config = override_router_config
+        self.ignore_router_config = ignore_router_config
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -505,8 +505,8 @@ class AutoKernelRouter:
             # Confidence too low or invalid JSON; resort to heuristic
             strategy = "fuser" if heuristic_prefers_fuser else "kernelagent"
 
-        # Apply optional dynamic config from router (skip if override requested)
-        if isinstance(route_cfg, dict) and not self.override_router_config:
+        # Apply optional dynamic config from router (skip if ignore requested)
+        if isinstance(route_cfg, dict) and not self.ignore_router_config:
             # KernelAgent tuning
             self.ka_max_rounds = int(route_cfg.get("ka_max_rounds", self.ka_max_rounds))
             self.ka_num_workers = int(
@@ -707,9 +707,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
     p.add_argument(
-        "--override-router-config",
+        "--ignore-router-config",
         action="store_true",
-        help="Ignore cached router config and use CLI-provided model/config arguments",
+        help="Ignore router config. Use CLI-provided model/config arguments",
     )
     p.add_argument(
         "--target-platform",
@@ -748,7 +748,7 @@ def main(argv: list[str] | None = None) -> int:
         dispatch_jobs=args.dispatch_jobs,
         allow_fallback=(not args.no_fallback),
         target_platform=args.target_platform,
-        override_router_config=args.override_router_config,
+        ignore_router_config=args.ignore_router_config,
     )
 
     try:
