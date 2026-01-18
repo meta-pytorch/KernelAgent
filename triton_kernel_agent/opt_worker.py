@@ -29,14 +29,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from kernel_perf_agent.kernel_opt.diagnose_prompt import (
-    build_judge_optimization_prompt,
-    extract_judge_response,
-    get_gpu_specs,
-)
+from kernel_perf_agent.kernel_opt.diagnose_prompt import get_gpu_specs
 from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import Benchmark
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
     OptimizationOrchestrator,
+)
+from triton_kernel_agent.opt_worker_component.prescribing.bottleneck_analyzer import (
+    BottleneckAnalyzer,
 )
 from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
     KernelProfiler,
@@ -44,199 +43,7 @@ from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
 from triton_kernel_agent.platform_config import get_platform
 from triton_kernel_agent.prompt_manager import PromptManager
 from triton_kernel_agent.worker import VerificationWorker
-from triton_kernel_agent.worker_util import (
-    _call_llm,
-    _extract_code_from_response,
-    _save_debug_file,
-    _write_kernel_file,
-)
 from utils.providers import get_model_provider
-from utils.providers.base import BaseProvider
-
-
-class PyTorchBenchmark:
-    """Wrapper for PyTorch baseline benchmarking."""
-
-    def __init__(self, benchmark: Benchmark, logger: logging.Logger | None = None):
-        self.benchmark = benchmark
-        self.logger = logger or logging.getLogger(__name__)
-
-    def benchmark_pytorch_baseline(self, problem_file: Path) -> float:
-        """Benchmark PyTorch baseline and return time in ms."""
-        try:
-            results = self.benchmark.benchmark_pytorch(problem_file)
-            return results.get("time_ms", float("inf"))
-        except Exception as e:
-            self.logger.error(f"PyTorch benchmark failed: {e}")
-            return float("inf")
-
-
-class BottleneckAnalyzer:
-    """Analyzes NCU metrics to identify performance bottlenecks using LLM.
-
-    This class wraps the Judge LLM workflow:
-    1. Build prompt from kernel code, problem description, NCU metrics, GPU specs
-    2. Call LLM to analyze bottlenecks
-    3. Parse response to extract dual-bottleneck analysis
-    """
-
-    def __init__(
-        self,
-        provider: BaseProvider,
-        model: str,
-        gpu_specs: dict[str, Any],
-        high_reasoning_effort: bool = True,
-        logs_dir: Path | None = None,
-        logger: logging.Logger | None = None,
-    ):
-        self.provider = provider
-        self.model = model
-        self.gpu_specs = gpu_specs
-        self.high_reasoning_effort = high_reasoning_effort
-        self.logs_dir = logs_dir
-        self.logger = logger or logging.getLogger(__name__)
-
-    def analyze_bottleneck(
-        self,
-        kernel_code: str,
-        problem_description: str,
-        ncu_metrics: dict[str, Any],
-        round_num: int,
-    ) -> dict[str, Any] | None:
-        """
-        Analyze kernel bottlenecks using NCU metrics and Judge LLM.
-
-        Args:
-            kernel_code: Current kernel code
-            problem_description: Problem description
-            ncu_metrics: NCU profiling metrics dictionary
-            round_num: Current optimization round number
-
-        Returns:
-            Dual-bottleneck analysis dict with bottleneck_1 and bottleneck_2,
-            or None if analysis fails
-        """
-        try:
-            # Build the judge prompt
-            system_prompt, user_prompt = build_judge_optimization_prompt(
-                kernel_code=kernel_code,
-                problem_description=problem_description,
-                ncu_metrics=ncu_metrics,
-                gpu_specs=self.gpu_specs,
-            )
-
-            # Save prompt for debugging
-            if self.logs_dir:
-                prompt_content = (
-                    "=== SYSTEM PROMPT ===\n"
-                    + system_prompt
-                    + "\n\n=== USER PROMPT ===\n"
-                    + user_prompt
-                )
-                _save_debug_file(
-                    self.logs_dir / f"round{round_num:03d}_judge_prompt.txt",
-                    prompt_content,
-                    self.logger,
-                )
-
-            # Call LLM using shared utility
-            # Note: GPT-5 uses reasoning tokens from max_tokens budget, so we need
-            # a higher limit to leave room for both reasoning and response content
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-            response_text = _call_llm(
-                provider=self.provider,
-                model=self.model,
-                messages=messages,
-                high_reasoning_effort=self.high_reasoning_effort,
-                logger=self.logger,
-                max_tokens=40960 if self.model.startswith("gpt-5") else 12288,
-            )
-
-            # Save response for debugging
-            if self.logs_dir:
-                _save_debug_file(
-                    self.logs_dir / f"round{round_num:03d}_judge_response.txt",
-                    response_text,
-                    self.logger,
-                )
-
-            # Parse response
-            analysis = extract_judge_response(response_text)
-            if analysis:
-                self.logger.info(
-                    f"[{round_num}] Bottleneck analysis complete: "
-                    f"primary={analysis.get('bottleneck_1', {}).get('category', 'unknown')}"
-                )
-                return analysis
-            else:
-                self.logger.warning(
-                    f"[{round_num}] Failed to parse bottleneck analysis. "
-                    f"Response saved to: {self.logs_dir / f'round{round_num:03d}_judge_response.txt'}"
-                )
-                return None
-
-        except Exception as e:
-            self.logger.error(f"[{round_num}] Bottleneck analysis failed: {e}")
-            return None
-
-
-class LLMClientAdapter:
-    """Adapter class to provide call_llm interface expected by OptimizationOrchestrator."""
-
-    def __init__(
-        self,
-        provider: BaseProvider,
-        model: str,
-        high_reasoning_effort: bool = True,
-        logger: logging.Logger | None = None,
-    ):
-        self.provider = provider
-        self.model = model
-        self.high_reasoning_effort = high_reasoning_effort
-        self.logger = logger or logging.getLogger(__name__)
-
-    def call_llm(self, messages: list[dict[str, str]], **kwargs) -> str:
-        """Call LLM using the shared utility function."""
-        return _call_llm(
-            provider=self.provider,
-            model=self.model,
-            messages=messages,
-            high_reasoning_effort=self.high_reasoning_effort,
-            logger=self.logger,
-            **kwargs,
-        )
-
-
-class CodeExtractorAdapter:
-    """Adapter class to provide extract_code_from_response interface."""
-
-    def __init__(self, logger: logging.Logger | None = None):
-        self.logger = logger or logging.getLogger(__name__)
-
-    def extract_code_from_response(
-        self, response_text: str, language: str = "python"
-    ) -> str | None:
-        """Extract code from LLM response text using shared utility."""
-        return _extract_code_from_response(
-            response_text=response_text,
-            language=language,
-            logger=self.logger,
-        )
-
-
-class KernelFileWriterAdapter:
-    """Adapter class to provide write_kernel interface."""
-
-    def __init__(self, kernel_file: Path, logger: logging.Logger | None = None):
-        self.kernel_file = kernel_file
-        self.logger = logger or logging.getLogger(__name__)
-
-    def write_kernel(self, kernel_code: str) -> None:
-        """Write kernel code to file using shared utility."""
-        _write_kernel_file(self.kernel_file, kernel_code, self.logger)
 
 
 class OptimizationWorker:
@@ -372,20 +179,6 @@ class OptimizationWorker:
         platform_config = get_platform(self.target_platform)
         self.prompt_manager = PromptManager(target_platform=platform_config)
 
-        # LLM client adapter (for components that expect object.call_llm())
-        self.llm_client = LLMClientAdapter(
-            provider=self.provider,
-            model=self.openai_model,
-            high_reasoning_effort=self.high_reasoning_effort,
-            logger=self.logger,
-        )
-
-        # Code extractor adapter
-        self.code_extractor = CodeExtractorAdapter(logger=self.logger)
-
-        # File writer adapter
-        self.file_writer = KernelFileWriterAdapter(self.kernel_file, logger=self.logger)
-
         # Benchmarking
         self.benchmarker = Benchmark(
             logger=self.logger,
@@ -394,11 +187,6 @@ class OptimizationWorker:
             worker_id=self.worker_id,
             warmup=self.benchmark_warmup,
             repeat=self.benchmark_repeat,
-        )
-
-        self.pytorch_benchmarker = PyTorchBenchmark(
-            benchmark=self.benchmarker,
-            logger=self.logger,
         )
 
         # Profiler
@@ -462,13 +250,15 @@ class OptimizationWorker:
             # Components
             profiler=self.profiler,
             benchmarker=self.benchmarker,
-            pytorch_benchmarker=self.pytorch_benchmarker,
             bottleneck_analyzer=self.bottleneck_analyzer,
             verification_worker=self.verification_worker,
-            llm_client=self.llm_client,
-            code_extractor=self.code_extractor,
-            file_writer=self.file_writer,
             prompt_manager=self.prompt_manager,
+            # LLM configuration
+            provider=self.provider,
+            model=self.openai_model,
+            high_reasoning_effort=self.high_reasoning_effort,
+            # File configuration
+            kernel_file=self.kernel_file,
             # Configuration
             gpu_specs=self.gpu_specs,
             enable_ncu_profiling=self.enable_ncu_profiling,

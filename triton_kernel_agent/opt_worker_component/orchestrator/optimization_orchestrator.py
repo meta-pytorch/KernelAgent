@@ -22,6 +22,12 @@ from typing import Any
 
 from triton_kernel_agent.prompt_manager import PromptManager
 from triton_kernel_agent.worker import VerificationWorker
+from triton_kernel_agent.worker_util import (
+    _call_llm,
+    _extract_code_from_response,
+    _write_kernel_file,
+)
+from utils.providers.base import BaseProvider
 
 
 class OptimizationOrchestrator:
@@ -31,14 +37,16 @@ class OptimizationOrchestrator:
         self,
         # Components
         profiler: Any,  # KernelProfiler
-        benchmarker: Any,  # KernelBenchmark
-        pytorch_benchmarker: Any,  # PyTorchBenchmark
+        benchmarker: Any,  # Benchmark (handles both kernel and PyTorch benchmarking)
         bottleneck_analyzer: Any,  # BottleneckAnalyzer
         verification_worker: VerificationWorker,  # For verify + refine
-        llm_client: Any,  # LLMClient
-        code_extractor: Any,  # CodeExtractor
-        file_writer: Any,  # KernelFileWriter
         prompt_manager: PromptManager,  # PromptManager for building prompts
+        # LLM configuration (replaces llm_client, code_extractor adapters)
+        provider: BaseProvider,
+        model: str,
+        high_reasoning_effort: bool,
+        # File configuration (replaces file_writer adapter)
+        kernel_file: Path,
         # Configuration
         gpu_specs: dict[str, Any] | None,
         enable_ncu_profiling: bool,
@@ -56,14 +64,14 @@ class OptimizationOrchestrator:
 
         Args:
             profiler: KernelProfiler instance
-            benchmarker: KernelBenchmark instance
-            pytorch_benchmarker: PyTorchBenchmark instance
+            benchmarker: Benchmark instance (handles both kernel and PyTorch benchmarking)
             bottleneck_analyzer: BottleneckAnalyzer instance
             verification_worker: VerificationWorker for verify + refine
-            llm_client: LLMClient instance
-            code_extractor: CodeExtractor instance
-            file_writer: KernelFileWriter instance
             prompt_manager: PromptManager for building optimization prompts
+            provider: LLM provider instance
+            model: Model name for LLM calls
+            high_reasoning_effort: Whether to use high reasoning effort
+            kernel_file: Path to kernel file for writing
             gpu_specs: GPU specifications for optimization prompt
             enable_ncu_profiling: Enable NCU profiling
             bottleneck_id: Which bottleneck to explore (1 or 2)
@@ -76,13 +84,17 @@ class OptimizationOrchestrator:
         # Components
         self.profiler = profiler
         self.benchmarker = benchmarker
-        self.pytorch_benchmarker = pytorch_benchmarker
         self.bottleneck_analyzer = bottleneck_analyzer
         self.verification_worker = verification_worker
-        self.llm_client = llm_client
-        self.code_extractor = code_extractor
-        self.file_writer = file_writer
         self.prompt_manager = prompt_manager
+
+        # LLM configuration
+        self.provider = provider
+        self.model = model
+        self.high_reasoning_effort = high_reasoning_effort
+
+        # File configuration
+        self.kernel_file = kernel_file
 
         # Configuration
         self.gpu_specs = gpu_specs
@@ -229,7 +241,7 @@ class OptimizationOrchestrator:
             baseline_results = {"time_ms": known_kernel_time, "speedup": 1.0}
             self.logger.info(f"📊 Using known kernel time: {best_time:.4f} ms")
         else:
-            self.file_writer.write_kernel(kernel_code)
+            _write_kernel_file(self.kernel_file, kernel_code, self.logger)
             kernel_file_round = self.artifact_dir / "kernel_round_0.py"
             kernel_file_round.write_text(kernel_code)
 
@@ -249,9 +261,8 @@ class OptimizationOrchestrator:
             else:
                 pytorch_baseline_time = None
         else:
-            pytorch_baseline_time = self.pytorch_benchmarker.benchmark_pytorch_baseline(
-                problem_file
-            )
+            pytorch_results = self.benchmarker.benchmark_pytorch(problem_file)
+            pytorch_baseline_time = pytorch_results.get("time_ms", float("inf"))
             if pytorch_baseline_time != float("inf"):
                 self.logger.info(f"📊 PyTorch baseline: {pytorch_baseline_time:.4f} ms")
             else:
@@ -306,7 +317,14 @@ class OptimizationOrchestrator:
         self.logger.info(f"[{round_num}] Generating optimized kernel...")
         try:
             messages = [{"role": "user", "content": opt_prompt}]
-            response_text = self.llm_client.call_llm(messages, max_tokens=24576)
+            response_text = _call_llm(
+                provider=self.provider,
+                model=self.model,
+                messages=messages,
+                high_reasoning_effort=self.high_reasoning_effort,
+                logger=self.logger,
+                max_tokens=24576,
+            )
 
             # Save response
             response_file = self.artifact_dir / f"round{round_num:03d}_opt_reply.txt"
@@ -314,8 +332,9 @@ class OptimizationOrchestrator:
                 f.write(response_text)
 
             # Extract code
-            optimized_kernel = self.code_extractor.extract_code_from_response(
-                response_text
+            optimized_kernel = _extract_code_from_response(
+                response_text=response_text,
+                logger=self.logger,
             )
 
             if not optimized_kernel or len(optimized_kernel) < 100:
