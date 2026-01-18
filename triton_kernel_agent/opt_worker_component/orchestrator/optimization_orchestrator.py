@@ -275,9 +275,15 @@ class OptimizationOrchestrator:
         kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
         kernel_file_round.write_text(current_kernel)
 
-        metrics_df, ncu_metrics = self.profiler.profile_kernel(
+        profiler_results = self.profiler.profile_kernel(
             kernel_file_round, problem_file, round_num
         )
+
+        if profiler_results is None:
+            self.logger.warning(f"[{round_num}] Profiling failed")
+            return None
+
+        ncu_metrics = profiler_results.metrics
 
         if ncu_metrics:
             self.logger.info(f"[{round_num}] Analyzing bottleneck...")
