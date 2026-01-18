@@ -45,12 +45,12 @@ from triton_kernel_agent.platform_config import get_platform
 from triton_kernel_agent.prompt_manager import PromptManager
 from triton_kernel_agent.worker import VerificationWorker
 from triton_kernel_agent.worker_util import (
-    call_llm,
-    create_llm_provider,
-    extract_code_from_response,
-    save_debug_file,
-    write_kernel_file,
+    _call_llm,
+    _extract_code_from_response,
+    _save_debug_file,
+    _write_kernel_file,
 )
+from utils.providers import get_model_provider
 from utils.providers.base import BaseProvider
 
 
@@ -133,7 +133,7 @@ class BottleneckAnalyzer:
                     + "\n\n=== USER PROMPT ===\n"
                     + user_prompt
                 )
-                save_debug_file(
+                _save_debug_file(
                     self.logs_dir / f"round{round_num:03d}_judge_prompt.txt",
                     prompt_content,
                     self.logger,
@@ -146,7 +146,7 @@ class BottleneckAnalyzer:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
-            response_text = call_llm(
+            response_text = _call_llm(
                 provider=self.provider,
                 model=self.model,
                 messages=messages,
@@ -157,7 +157,7 @@ class BottleneckAnalyzer:
 
             # Save response for debugging
             if self.logs_dir:
-                save_debug_file(
+                _save_debug_file(
                     self.logs_dir / f"round{round_num:03d}_judge_response.txt",
                     response_text,
                     self.logger,
@@ -200,7 +200,7 @@ class LLMClientAdapter:
 
     def call_llm(self, messages: list[dict[str, str]], **kwargs) -> str:
         """Call LLM using the shared utility function."""
-        return call_llm(
+        return _call_llm(
             provider=self.provider,
             model=self.model,
             messages=messages,
@@ -220,7 +220,7 @@ class CodeExtractorAdapter:
         self, response_text: str, language: str = "python"
     ) -> str | None:
         """Extract code from LLM response text using shared utility."""
-        return extract_code_from_response(
+        return _extract_code_from_response(
             response_text=response_text,
             language=language,
             logger=self.logger,
@@ -236,7 +236,7 @@ class KernelFileWriterAdapter:
 
     def write_kernel(self, kernel_code: str) -> None:
         """Write kernel code to file using shared utility."""
-        write_kernel_file(self.kernel_file, kernel_code, self.logger)
+        _write_kernel_file(self.kernel_file, kernel_code, self.logger)
 
 
 class OptimizationWorker:
@@ -345,8 +345,8 @@ class OptimizationWorker:
             f"Initialized for GPU: {self.gpu_specs.get('name', 'unknown')}"
         )
 
-        # Initialize LLM provider using shared utility
-        self.provider, self.model = create_llm_provider(self.openai_model, self.logger)
+        # Initialize LLM provider (like worker.py)
+        self.provider = get_model_provider(self.openai_model)
 
         # Initialize components
         self._init_components()
@@ -375,7 +375,7 @@ class OptimizationWorker:
         # LLM client adapter (for components that expect object.call_llm())
         self.llm_client = LLMClientAdapter(
             provider=self.provider,
-            model=self.model,
+            model=self.openai_model,
             high_reasoning_effort=self.high_reasoning_effort,
             logger=self.logger,
         )
@@ -412,7 +412,7 @@ class OptimizationWorker:
         # Bottleneck analyzer
         self.bottleneck_analyzer = BottleneckAnalyzer(
             provider=self.provider,
-            model=self.model,
+            model=self.openai_model,
             gpu_specs=self.gpu_specs,
             high_reasoning_effort=self.high_reasoning_effort,
             logs_dir=self.log_dir,

@@ -18,108 +18,44 @@ import logging
 import multiprocessing as mp
 import os
 import re
-from pathlib import Path
-from typing import Any
-
 from logging import Logger
+from pathlib import Path
 
-from utils.providers import get_model_provider
 from utils.providers.base import BaseProvider
 
-
-# =============================================================================
+# ------------------------
 # LLM Utilities
-# =============================================================================
+# ------------------------
 
 
-def call_llm(
-    provider: BaseProvider,
-    model: str,
-    messages: list[dict[str, str]],
-    high_reasoning_effort: bool = True,
-    logger: Logger | None = None,
-    **kwargs,
-) -> str:
+def _call_llm(self, messages: list, **kwargs) -> str:
     """
-    Call the LLM provider and return response text.
+    Call the LLM provider for the configured model.
 
     Args:
-        provider: The LLM provider instance
-        model: Model name to use
         messages: List of message dicts with 'role' and 'content'
-        high_reasoning_effort: Whether to use high reasoning effort
-        logger: Optional logger for debugging
         **kwargs: Additional parameters for the API call
 
     Returns:
-        Generated response text (empty string if None)
-
-    Raises:
-        RuntimeError: If provider is not available
+        Generated response text
     """
-    if not provider:
-        raise RuntimeError(f"No provider available for model {model}")
-
-    log = logger or logging.getLogger(__name__)
+    if not self.provider:
+        raise RuntimeError(f"No provider available for model {self.openai_model}")
 
     # Add high_reasoning_effort to kwargs if set
-    if high_reasoning_effort:
+    if self.high_reasoning_effort:
         kwargs["high_reasoning_effort"] = True
 
-    try:
-        log.info(f"Calling LLM: model={model}, provider={provider.name}, messages={len(messages)}")
-        response = provider.get_response(model, messages, **kwargs)
-
-        # Log raw response for debugging
-        log.info(f"LLM response object: {response}")
-
-        content = response.content
-        if content is None:
-            log.warning(f"LLM returned None content. Full response: {response}")
-            # Try to get more info from the response
-            if hasattr(response, '__dict__'):
-                log.warning(f"Response attributes: {response.__dict__}")
-            return ""
-
-        if len(content) == 0:
-            log.warning("LLM returned empty string content")
-            return ""
-
-        log.info(f"LLM response received: {len(content)} chars")
-        return content
-
-    except Exception as e:
-        log.error(f"LLM call failed: {e}")
-        import traceback
-        log.error(f"Traceback: {traceback.format_exc()}")
-        raise
+    response = self.provider.get_response(self.openai_model, messages, **kwargs)
+    return response.content
 
 
-def create_llm_provider(
-    model: str, logger: Logger | None = None
-) -> tuple[BaseProvider, str]:
-    """
-    Create an LLM provider for the given model.
-
-    Args:
-        model: Model name
-        logger: Optional logger
-
-    Returns:
-        Tuple of (provider, model_name)
-    """
-    log = logger or logging.getLogger(__name__)
-    provider = get_model_provider(model)
-    log.info(f"Created LLM provider: model={model}, provider={provider.name}")
-    return provider, model
-
-
-# =============================================================================
+# ------------------------
 # Code Extraction Utilities
-# =============================================================================
+# ------------------------
 
 
-def extract_code_from_response(
+def _extract_code_from_response(
     response_text: str,
     language: str = "python",
     logger: Logger | None = None,
@@ -176,19 +112,21 @@ def extract_code_from_response(
     return None
 
 
-# =============================================================================
+# ------------------------
 # File I/O Utilities
-# =============================================================================
+# ------------------------
 
 
-def write_kernel_file(kernel_file: Path, kernel_code: str, logger: Logger | None = None) -> None:
+def _write_kernel_file(
+    kernel_file: Path, kernel_code: str, logger: Logger | None = None
+) -> None:
     """Write kernel code to file."""
     kernel_file.write_text(kernel_code)
     if logger:
         logger.debug(f"Wrote kernel to {kernel_file}")
 
 
-def save_debug_file(
+def _save_debug_file(
     filepath: Path,
     content: str,
     logger: Logger | None = None,
@@ -203,9 +141,9 @@ def save_debug_file(
             logger.warning(f"Failed to save debug file {filepath}: {e}")
 
 
-# =============================================================================
+# ------------------------
 # Test Execution Utilities
-# =============================================================================
+# ------------------------
 
 
 def _run_test_process(test_file: Path, workdir: Path, result_queue: mp.Queue) -> None:
