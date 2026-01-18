@@ -15,6 +15,7 @@
 """Prompt Manager for handling Jinja2 templates."""
 
 from pathlib import Path
+from typing import Any
 
 from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
@@ -88,6 +89,7 @@ class PromptManager:
             "test_generation": "test_generation.j2",
             "kernel_generation": "kernel_generation.j2",
             "kernel_refinement": "kernel_refinement.j2",
+            "kernel_optimization": "kernel_optimization.j2",
             "triton_guidelines": "triton_guidelines.j2",
         }
 
@@ -186,6 +188,59 @@ class PromptManager:
             history_context=history_context,
             triton_guidelines=triton_guidelines,
             kernel_guidance=self.target_platform.kernel_guidance,
+        )
+
+    def render_kernel_optimization_prompt(
+        self,
+        kernel_code: str,
+        problem_description: str,
+        bottleneck_analysis: dict[str, Any],
+        bottleneck_id: int = 1,
+        gpu_specs: dict[str, Any] | None = None,
+        pytorch_baseline_ms: float | None = None,
+        error_feedback: str | None = None,
+    ) -> str:
+        """
+        Render the kernel optimization prompt based on bottleneck analysis.
+
+        Args:
+            kernel_code: Current kernel code to optimize
+            problem_description: Problem description
+            bottleneck_analysis: Dual-bottleneck analysis with bottleneck_1 and bottleneck_2
+            bottleneck_id: Which bottleneck to focus on (1 or 2)
+            gpu_specs: GPU specifications dict
+            pytorch_baseline_ms: PyTorch baseline time in ms
+            error_feedback: Error feedback from previous failed attempt
+
+        Returns:
+            Rendered prompt string
+        """
+        template = self.templates["kernel_optimization"]
+
+        # Select bottleneck
+        if bottleneck_id == 2:
+            bottleneck = bottleneck_analysis.get("bottleneck_2", {})
+            bottleneck_label = "Bottleneck 2 (Secondary)"
+        else:
+            bottleneck = bottleneck_analysis.get("bottleneck_1", {})
+            bottleneck_label = "Bottleneck 1 (Primary)"
+
+        # Calculate target time if baseline provided
+        target_ms = None
+        if pytorch_baseline_ms and pytorch_baseline_ms != float("inf"):
+            target_ms = pytorch_baseline_ms * 0.8
+
+        return template.render(
+            kernel_code=kernel_code,
+            problem_description=problem_description,
+            bottleneck=bottleneck,
+            bottleneck_label=bottleneck_label,
+            gpu_specs=gpu_specs,
+            pytorch_baseline_ms=pytorch_baseline_ms
+            if pytorch_baseline_ms != float("inf")
+            else None,
+            target_ms=target_ms,
+            error_feedback=error_feedback,
         )
 
     def render_triton_guidelines(self) -> str:
