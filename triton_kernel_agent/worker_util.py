@@ -28,25 +28,35 @@ from utils.providers.base import BaseProvider
 # ------------------------
 
 
-def _call_llm(self, messages: list, **kwargs) -> str:
+def _call_llm(
+    provider: BaseProvider,
+    model: str,
+    messages: list[dict[str, str]],
+    high_reasoning_effort: bool = True,
+    logger: Logger | None = None,
+    **kwargs,
+) -> str:
     """
     Call the LLM provider for the configured model.
 
     Args:
+        provider: LLM provider instance
+        model: Model name
         messages: List of message dicts with 'role' and 'content'
+        high_reasoning_effort: Whether to use high reasoning effort
+        logger: Optional logger
         **kwargs: Additional parameters for the API call
 
     Returns:
         Generated response text
     """
-    if not self.provider:
-        raise RuntimeError(f"No provider available for model {self.openai_model}")
+    if not provider:
+        raise RuntimeError(f"No provider available for model {model}")
 
-    # Add high_reasoning_effort to kwargs if set
-    if self.high_reasoning_effort:
+    if high_reasoning_effort:
         kwargs["high_reasoning_effort"] = True
 
-    response = self.provider.get_response(self.openai_model, messages, **kwargs)
+    response = provider.get_response(model, messages, **kwargs)
     return response.content
 
 
