@@ -56,6 +56,12 @@ for inp in inputs:
     else:
         cuda_inputs.append(inp)
 
+# ============================================================================
+# WARM-UP: Run kernel once BEFORE profiling to trigger JIT compilation
+# and ensure data movement kernels are not captured by NCU
+# ============================================================================
+torch.cuda.synchronize()  # Ensure all data is on GPU
+
 {% if model_extraction %}
 # Check if this is a conv-like kernel that needs a Model to extract weights
 needs_model = False
@@ -112,13 +118,25 @@ if needs_model and has_model and init_inputs:
         if hasattr(layer, 'groups'):
             kernel_kwargs['groups'] = layer.groups
 
-        # Call kernel with extracted parameters
+        # Warm-up run (triggers JIT, captured but we'll skip it)
+        _ = kernel_function(cuda_inputs[0], weight, bias, **kernel_kwargs)
+        torch.cuda.synchronize()
+
+        # Actual profiled run
         output = kernel_function(cuda_inputs[0], weight, bias, **kernel_kwargs)
     else:
-        # Fallback to original behavior
+        # Warm-up run
+        _ = kernel_function(*cuda_inputs, *init_inputs)
+        torch.cuda.synchronize()
+        # Actual profiled run
         output = kernel_function(*cuda_inputs, *init_inputs)
 else:
 {% endif %}
+    # Warm-up run: triggers Triton JIT compilation and CUDA allocations
+    # This ensures data movement kernels happen BEFORE the profiled launches
+    _ = kernel_function(*cuda_inputs, *init_inputs)
+    torch.cuda.synchronize()
+
     # Run kernel with both tensor inputs and initialization inputs
     # For example: RMSNorm needs kernel_function(x, features, eps)
     # For cross-entropy: kernel_function(predictions, targets)

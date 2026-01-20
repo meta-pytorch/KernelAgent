@@ -40,6 +40,7 @@ import pandas as pd
 
 METRICS = ",".join(
     [
+        # SM & Compute
         "sm__cycles_active.avg",
         "sm__warps_active.avg.pct_of_peak_sustained_active",
         "launch__occupancy_limit_blocks",
@@ -49,24 +50,43 @@ METRICS = ",".join(
         "sm__inst_executed.sum",
         "sm__inst_executed_pipe_fp32.avg.pct_of_peak_sustained_active",
         "sm__inst_executed_pipe_tensor.avg.pct_of_peak_sustained_active",
+        # Memory
         "dram__bytes_read.sum",
         "dram__bytes_write.sum",
         "dram__throughput.avg.pct_of_peak_sustained_elapsed",
         "dram__bytes.sum.per_second",
         "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
         "launch__shared_mem_per_block_allocated",
+        # Cache
         "l1tex__t_sector_hit_rate.pct",
         "l1tex__throughput.avg.pct_of_peak_sustained_active",
         "lts__t_sector_hit_rate.pct",
         "lts__throughput.avg.pct_of_peak_sustained_active",
+        # Tensor pipeline
         "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",
+        # Memory access patterns
         "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct",
+        # Stalls
         "smsp__warp_issue_stalled_memory_dependency_per_warp_active.pct",
         "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct",
         "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",
         "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
         "smsp__warp_issue_stalled_branch_resolving_per_warp_active.pct",
         "smsp__sass_average_branch_targets_threads_uniform.pct",
+        # === Roofline analysis metrics ===
+        # SOL (Speed of Light) metrics
+        "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+        # Timing (prefer over external timing)
+        "gpu__time_duration.sum",
+        # Tensor core detection
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active",
+        "sm__inst_executed_pipe_tensor.sum",
+        # FP16 pipe (for non-TC FP16)
+        "sm__inst_executed_pipe_fp16.avg.pct_of_peak_sustained_active",
+        # Cache hierarchy bytes (for hierarchical roofline)
+        "lts__t_bytes.sum",
+        "l1tex__t_bytes.sum",
     ]
 )
 
@@ -145,7 +165,9 @@ def profile_triton_kernel(
         ]
     )
 
-    # Build NCU command
+    # Build NCU command: We skip the first launch (--launch-skip=1) to avoid capturing
+    # data movement kernels (cuda memcpy, fill, etc.) that happen during warmup.
+    # We also set --profile-from-start=off to give the application time to warm up.
     cmd = [
         "sudo",
         "-E",
@@ -159,7 +181,7 @@ def profile_triton_kernel(
         "--profile-from-start=on",
         f"--log-file={str(csv_path)}",
         f"--metrics={METRICS}",
-        "--launch-skip=0",
+        "--launch-skip=1",  # Skip first launch (warmup) to avoid fill/copy kernels
         f"--launch-count={launch_count}",
         python_executable,
         str(benchmark_script),

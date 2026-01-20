@@ -25,13 +25,11 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
-
 from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import (
     load_ncu_metrics,
     metrics_to_prompt,
     profile_triton_kernel,
 )
-
 from triton_kernel_agent.opt_worker_component.profiling.ncu_wrapper_factory import (
     NCUWrapperFactory,
 )
@@ -195,7 +193,42 @@ class KernelProfiler:
                 )
 
                 # Load and parse metrics
-                metrics_df = load_ncu_metrics(csv_path, select="last")
+                # Filter by Triton kernel names to exclude PyTorch fill/copy kernels
+                # Triton kernels typically have names like "_matmul_kernel", "kernel_", etc.
+                metrics_df = load_ncu_metrics(
+                    csv_path,
+                    select="last",
+                    name_list=None,  # Load all kernels first
+                )
+
+                # If we got a fill kernel (PyTorch auxiliary), try to find the actual Triton kernel
+                if not metrics_df.empty and "Kernel Name" in metrics_df.columns:
+                    kernel_names = metrics_df["Kernel Name"].tolist()
+                    # Filter out PyTorch auxiliary kernels
+                    triton_kernel_names = [
+                        name
+                        for name in kernel_names
+                        if not any(
+                            exclude in str(name).lower()
+                            for exclude in [
+                                "vectorized_elementwise",
+                                "fillkernel",
+                                "copykernel",
+                                "memcpy",
+                                "memset",
+                            ]
+                        )
+                    ]
+                    if triton_kernel_names:
+                        # Re-load with only Triton kernels
+                        metrics_df = load_ncu_metrics(
+                            csv_path,
+                            select="last",
+                            name_list=triton_kernel_names[
+                                :1
+                            ],  # Take first non-PyTorch kernel
+                        )
+
                 metrics = json.loads(metrics_to_prompt(metrics_df))
 
                 # Build ProfilerResults
