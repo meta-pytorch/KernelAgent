@@ -76,6 +76,7 @@ import cutlass  # noqa: E402
 import cutlass.cute as cute  # noqa: E402
 from cutlass import Float32, Int32, const_expr  # noqa: E402
 from cutlass.cute import runtime as rt  # noqa: E402
+from cutlass.cute.runtime import from_dlpack  # noqa: E402
 
 # Simple compile cache declared early so direct execution works
 _PTR_COMPILE_CACHE = {}
@@ -113,6 +114,14 @@ _ENABLE_CLUSTER_ILP_UNSAFE = _env_flag(
 )
 _ENABLE_TPR256 = _env_flag("OINK_RMSNORM_ENABLE_TPR256", default=False)
 _ENABLE_STAGE2 = _env_flag("OINK_RMSNORM_ENABLE_STAGE2", default=False)
+
+# Forward dispatch control:
+# - Default behavior: use the pointer-based path when safe, otherwise fall back
+#   to the stage-2 module (then the torch reference).
+# - If you want to force stage-2 even when the pointer path is available (for
+#   experimentation / A-B testing), set this env var **before** importing this
+#   module.
+_FORCE_RMSNORM_STAGE2_FWD = _env_flag("KERNELAGENT_OINK_FORCE_RMSNORM_STAGE2", default=False)
 
 # CuTeDSL stability probe for the experimental cluster_n>1 + direct-GMEM schedule.
 #
@@ -918,7 +927,13 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
 # NOTE: Avoid `from . import ...` imports here: CuTeDSL's AST preprocessor may
 # mishandle that form (module=None in the AST). Use fully-qualified imports.
 from kernelagent_oink.blackwell import lite_quack as qutils  # noqa: E402
-from kernelagent_oink.blackwell.lite_quack import TORCH2CUTE_DTYPE, row_reduce  # noqa: E402
+from kernelagent_oink.blackwell.lite_quack import (  # noqa: E402
+    TORCH2CUTE_DTYPE,
+    RMSNormBackward as BaseRMSNormBackward,
+    convert_from_dlpack as convert_from_dlpack_cute,
+    get_sm_count,
+    row_reduce,
+)
 
 
 # -------------------------
@@ -2720,51 +2735,56 @@ def rmsnorm_forward(
     assert x.dim() == 2, "Use (M, N) tensor; flatten batch/seq beforehand."
     M, N = x.shape
 
-    # For DSv3 big-M outliers on SM100, keep using the dedicated
-    # stage-2 K-loop implementation, which is already tuned and
-    # parity-checked against the reference.
-    use_stage2_big_dsv3 = bool(
-        M >= 65536 and N in (6144, 8192) and x.dtype in (torch.float16, torch.bfloat16)
-    )
-    if use_stage2_big_dsv3:
-        try:
-            import rmsnorm_with_stage2 as rms2  # type: ignore[import-not-found]
-        except Exception:
-            rms2 = None  # type: ignore[assignment]
-        if rms2 is not None:
-            y, rstd, residual_out = rms2.rmsnorm_forward_with_stage2(
-                x,
-                weight=weight,
-                bias=bias,
-                residual=residual,
-                eps=eps,
-                store_rstd=store_rstd,
-            )
-            # Preserve stride contracts for torch.compile consistency, even
-            # when using the optional stage-2 implementation.
-            if y.stride() != x.stride():
-                y_strided = torch.empty_strided(
-                    x.shape, x.stride(), device=x.device, dtype=x.dtype
-                )
-                y_strided.copy_(y)
-                y = y_strided
-            if residual is not None and residual_out is not None:
-                if residual_out.stride() != residual.stride():
-                    residual_out_strided = torch.empty_strided(
-                        residual.shape,
-                        residual.stride(),
-                        device=residual.device,
-                        dtype=residual.dtype,
-                    )
-                    residual_out_strided.copy_(residual_out)
-                    residual_out = residual_out_strided
-            return y, rstd, residual_out
+    # Fast path: use the pointer-based entry whenever we can represent the
+    # inputs as a row-major [M, N] view with stride(1) == 1 and dtype contracts
+    # are satisfied (vLLM uses this in inference).
+    #
+    # When the pointer path can't be used (e.g. float32 weights for Quack-style
+    # APIs, or non-standard layouts), fall back to the CuTeDSL stage-2 module
+    # before using the slow torch reference implementation.
+    force_stage2 = _FORCE_RMSNORM_STAGE2_FWD
 
-    # Default: use the pointer-based entry whenever we can represent the
-    # inputs as a row-major [M, N] view with stride(1) == 1. For rare layouts
-    # we can't safely express without DLPack, fall back to a torch reference.
-    if _can_use_ptr_path(x, weight, bias, residual):
+    if not force_stage2 and _can_use_ptr_path(x, weight, bias, residual):
         return _rmsnorm_forward_ptr(x, weight, bias, residual, eps, store_rstd)
+
+    # CuTeDSL fallback for cases that aren't safe for the pointer path.
+    # Import lazily to keep vLLM plugin startup and common inference fast paths
+    # lightweight.
+    try:
+        import importlib
+
+        rms2 = importlib.import_module(
+            ".rmsnorm_with_stage2",
+            package=__package__ or "kernelagent_oink.blackwell",
+        )
+    except Exception:
+        rms2 = None  # type: ignore[assignment]
+    if rms2 is not None:
+        y, rstd, residual_out = rms2.rmsnorm_forward_with_stage2(
+            x,
+            weight=weight,
+            bias=bias,
+            residual=residual,
+            eps=eps,
+            store_rstd=store_rstd,
+        )
+        # Preserve stride contracts for torch.compile consistency, even
+        # when using the optional stage-2 implementation.
+        if y.stride() != x.stride():
+            y_strided = torch.empty_strided(x.shape, x.stride(), device=x.device, dtype=x.dtype)
+            y_strided.copy_(y)
+            y = y_strided
+        if residual is not None and residual_out is not None:
+            if residual_out.stride() != residual.stride():
+                residual_out_strided = torch.empty_strided(
+                    residual.shape,
+                    residual.stride(),
+                    device=residual.device,
+                    dtype=residual.dtype,
+                )
+                residual_out_strided.copy_(residual_out)
+                residual_out = residual_out_strided
+        return y, rstd, residual_out
 
     # Safe fallback (correctness-first). This is expected to be rare in vLLM.
     y = rmsnorm_ref(x, weight, bias, residual, eps)
@@ -2908,6 +2928,363 @@ def fused_add_rmsnorm_inplace_(
     x.copy_(y)
     residual.copy_(z)
     return None
+
+
+# -------------------------
+# Backward kernel (SM100)
+# -------------------------
+
+
+class RMSNormBackwardSM100(BaseRMSNormBackward):
+    """SM100-tuned RMSNorm backward.
+
+    This is a thin wrapper around the generic `lite_quack.RMSNormBackward`
+    base implementation, with SM100-friendly tiling heuristics that mirror
+    the forward policy used by Oink.
+    """
+
+    def __init__(self, dtype: cutlass.Numeric, N: int):
+        super().__init__(dtype, N)
+
+    def _get_num_threads(self) -> int:
+        # Keep 128 threads only up to N=4k; use 256 for larger rows to ensure
+        # threads_per_row <= num_threads across buckets.
+        try:
+            return self._nt_override  # type: ignore[attr-defined]
+        except Exception:
+            return 128 if self.N <= 4096 else 256
+
+    def _calculate_threads_per_row(self) -> int:
+        # Mirror RMSNormSM100 forward's tiling.
+        N = self.N
+        if N <= 64:
+            return 8
+        if N <= 128:
+            return 16
+        if N <= 1024:
+            return 32
+        if N <= 4096:
+            return 128
+        if N <= 8192:
+            try:
+                return self._tpr_override  # type: ignore[attr-defined]
+            except Exception:
+                return 128
+        if N <= 16384:
+            return 256
+        return 256
+
+    def _set_cluster_n(self) -> None:
+        # Reuse the SM100 forward cluster growth policy so large-N shapes can
+        # fan out across multiple CTAs in the same row.
+        try:
+            self.cluster_n = self._cluster_n_override  # type: ignore[attr-defined]
+            return
+        except Exception:
+            pass
+
+        N = self.N
+        if N <= 8192:
+            cluster_n = 1
+        elif self.dtype.width == 16:
+            if N <= 16 * 1024:
+                cluster_n = 2
+            elif N <= 32 * 1024:
+                cluster_n = 2
+            elif N <= 64 * 1024:
+                cluster_n = 4
+            elif N <= 128 * 1024:
+                cluster_n = 8
+            else:
+                cluster_n = 16
+        else:
+            if N <= 32 * 1024:
+                cluster_n = 1
+            elif N <= 64 * 1024:
+                cluster_n = 2
+            elif N <= 128 * 1024:
+                cluster_n = 4
+            elif N <= 256 * 1024:
+                cluster_n = 8
+            else:
+                cluster_n = 16
+        self.cluster_n = cluster_n
+
+    @cute.jit
+    def __call__(
+        self,
+        mX: cute.Tensor,
+        mW: Optional[cute.Tensor],
+        mdO: cute.Tensor,
+        mdResO: Optional[cute.Tensor],
+        mRstd: cute.Tensor,
+        mdX: cute.Tensor,
+        mdW: Optional[cute.Tensor],
+        mdRes: Optional[cute.Tensor],
+        mdB: Optional[cute.Tensor],
+        sm_count: Int32,
+        stream: cuda.CUstream,
+    ):
+        # Match forward's 32B alignment on the leading dimension to unlock
+        # wider vectorization when legal.
+        semistatic_shape = (*mX.shape[:-1], self.N)
+
+        def new_stride(t):
+            return (
+                cute.assume(t.stride[0], divby=256 // t.element_type.width),
+                t.stride[1],
+            )
+
+        mX, mdO, mdResO, mdX, mdRes = [
+            cute.make_tensor(t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t)))
+            if const_expr(t is not None)
+            else None
+            for t in (mX, mdO, mdResO, mdX, mdRes)
+        ]
+
+        self._set_cluster_n()
+        largest_dtype_width = const_expr(
+            max(
+                mX.element_type.width,
+                mdO.element_type.width,
+                mdX.element_type.width,
+                mdResO.element_type.width if mdResO is not None else 0,
+                mdRes.element_type.width if mdRes is not None else 0,
+            )
+        )
+        tiler_mn, tv_layout = self._get_tv_layout(
+            num_copy_bits=128 // largest_dtype_width * mX.element_type.width
+        )
+        num_threads = (
+            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+        )
+        num_warps = num_threads // cute.arch.WARP_SIZE
+        if const_expr(mW is not None):
+            mW_expanded_layout = cute.prepend(
+                mW.layout, cute.make_layout((tiler_mn[0],), stride=(0,))
+            )
+            mW = cute.make_tensor(mW.iterator, mW_expanded_layout)
+
+        num_blocks = sm_count
+        kernel = (
+            self.kernel(mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes, tv_layout, tiler_mn)
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self.kernel(mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes)
+        )
+        kernel.launch(
+            grid=[num_blocks, self.cluster_n, 1],
+            block=[num_threads, 1, 1],
+            cluster=[1, self.cluster_n, 1] if self.cluster_n > 1 else None,
+            smem=self._smem_size_in_bytes(tiler_mn, num_warps, do_dtype=mdO.element_type),
+            stream=stream,
+        )
+
+
+_BWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
+
+
+def _rmsnorm_bwd_sm100(
+    x: Tensor,
+    weight: Optional[Tensor],
+    dout: Tensor,
+    rstd: Tensor,
+    dx: Tensor,
+    dw_partial: Optional[Tensor],
+    db_partial: Optional[Tensor] = None,
+    dresidual_out: Optional[Tensor] = None,
+    dresidual: Optional[Tensor] = None,
+    sm_count: Optional[int] = None,
+) -> None:
+    """SM100-specific RMSNorm backward dispatch.
+
+    Mirrors Quack's `quack.rmsnorm._rmsnorm_bwd`, but instantiates
+    `RMSNormBackwardSM100` (SM100-tuned heuristics).
+    """
+    assert x.dim() == 2, "Input must be 2D"
+    assert x.is_cuda, "Input tensor must be on CUDA device"
+    assert x.dtype in (torch.float16, torch.bfloat16, torch.float32)
+
+    if weight is not None:
+        assert weight.dim() == 1
+        assert x.shape[-1] == weight.shape[0]
+        assert weight.is_cuda
+        assert weight.dtype in (torch.float32, torch.bfloat16, torch.float16)
+    if dresidual_out is not None:
+        assert dresidual_out.shape == x.shape
+        assert dresidual_out.is_cuda
+        assert dresidual_out.dtype in (torch.float16, torch.bfloat16, torch.float32)
+    if dresidual is not None:
+        assert dresidual.shape == x.shape
+        assert dresidual.is_cuda
+        assert dresidual.dtype in (torch.float16, torch.bfloat16, torch.float32)
+
+    M, N = x.size(0), x.size(1)
+    device = x.device
+    if dw_partial is None and db_partial is None:
+        assert sm_count is not None
+    else:
+        sm_count = (
+            dw_partial.shape[0] if dw_partial is not None else db_partial.shape[0]
+        )
+
+    # Match Quack's conversion strategy for activations/gradients: keep the
+    # (M, N) layout dynamic without enforcing additional compact-shape
+    # constraints. This reduces per-call Python overhead for small-M shapes.
+    convert_from_dlpack = lambda t: from_dlpack(  # type: ignore[assignment]
+        t.detach(),
+        assumed_align=16,
+    ).mark_layout_dynamic(leading_dim=1)
+    x_tensor, dout_tensor, dres_out_tensor, dx_tensor, dres_tensor = [
+        convert_from_dlpack(t) if t is not None else None
+        for t in (x, dout, dresidual_out, dx, dresidual)
+    ]
+
+    if weight is not None:
+        weight_dtype = TORCH2CUTE_DTYPE[weight.dtype]
+        weight_tensor = convert_from_dlpack_cute(
+            weight.detach(),
+            leading_dim=0,
+            divisibility=128 // weight_dtype.width,
+        )
+    else:
+        weight_tensor = None
+
+    dw_partial_tensor = (
+        from_dlpack(dw_partial, assumed_align=16).mark_compact_shape_dynamic(mode=0)
+        if dw_partial is not None
+        else None
+    )
+    db_partial_tensor = (
+        from_dlpack(db_partial, assumed_align=16).mark_compact_shape_dynamic(mode=0)
+        if db_partial is not None
+        else None
+    )
+    rstd_tensor = (
+        from_dlpack(rstd.detach(), assumed_align=4).mark_layout_dynamic(leading_dim=0)
+    )
+
+    current_stream = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
+
+    compile_key = (
+        M,
+        N,
+        x_tensor.element_type,
+        weight_tensor.element_type if weight is not None else None,
+        db_partial.dtype if db_partial is not None else None,
+        dresidual.dtype if dresidual is not None else None,
+        dresidual_out.dtype if dresidual_out is not None else None,
+    )
+    kernel = _BWD_COMPILE_CACHE.get(compile_key)
+    if kernel is None:
+        op = RMSNormBackwardSM100(x_tensor.element_type, N)
+
+        # Shape-specific tuning overrides for DSv3-style N=8192 rows.
+        if isinstance(op, RMSNormBackwardSM100) and N == 8192:
+            if M >= 65536:
+                op._tpr_override = 256  # type: ignore[attr-defined]
+                op._nt_override = 256  # type: ignore[attr-defined]
+            elif M >= 16384:
+                op._tpr_override = 256  # type: ignore[attr-defined]
+
+        kernel = cute.compile(
+            op,
+            x_tensor,
+            weight_tensor,
+            dout_tensor,
+            dres_out_tensor,
+            rstd_tensor,
+            dx_tensor,
+            dw_partial_tensor,
+            dres_tensor,
+            db_partial_tensor,
+            Int32(sm_count if sm_count is not None else 0),
+            current_stream,
+        )
+        _BWD_COMPILE_CACHE[compile_key] = kernel
+
+    kernel(
+        x_tensor,
+        weight_tensor,
+        dout_tensor,
+        dres_out_tensor,
+        rstd_tensor,
+        dx_tensor,
+        dw_partial_tensor,
+        dres_tensor,
+        db_partial_tensor,
+        Int32(sm_count if sm_count is not None else 0),
+        current_stream,
+    )
+
+
+def rmsnorm_backward(
+    x: Tensor,
+    weight: Optional[Tensor],
+    dout: Tensor,
+    rstd: Tensor,
+    dresidual_out: Optional[Tensor] = None,
+    has_bias: bool = False,
+    has_residual: bool = False,
+) -> Tuple[Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
+    """Public SM100 RMSNorm backward entry point.
+
+    Signature mirrors `quack.rmsnorm.rmsnorm_bwd` for easy comparisons.
+    """
+    device = x.device
+    M, N = x.size(0), x.size(1)
+    dx = torch.empty_like(x)
+    if dresidual_out is not None and dresidual_out.dtype != dx.dtype:
+        dresidual = torch.empty_like(x, dtype=dresidual_out.dtype)
+    else:
+        dresidual = None
+
+    # Shared SM100 tuning policy (used by both RMSNorm and LayerNorm).
+    sm_count = get_sm_count(N, device, M=M, dtype=x.dtype)
+
+    # Quack-suite smallest case (M=8192, N=4096) is extremely sensitive to
+    # Python/allocator overhead because the kernel itself is very fast.
+    #
+    # The default `lite_quack.get_sm_count` adds a small-M occupancy boost for
+    # N=4096, which increases `dw_partial` size and can amplify allocator
+    # pressure in benchmark/verify loops. Clamp to Quack's baseline policy
+    # (`sm_count = num_sms * 2` for N=4096) for this regime.
+    if N == 4096 and M <= 8192 and x.dtype in (torch.float16, torch.bfloat16):
+        try:
+            num_sms = torch.cuda.get_device_properties(device).multi_processor_count
+            sm_count = min(int(sm_count), int(num_sms) * 2)
+        except Exception:
+            pass
+
+    if weight is not None:
+        dw_partial = torch.empty(sm_count, N, device=device, dtype=torch.float32)
+    else:
+        dw_partial = None
+    db_partial = (
+        torch.empty(sm_count, N, device=device, dtype=torch.float32) if has_bias else None
+    )
+
+    _rmsnorm_bwd_sm100(
+        x,
+        weight,
+        dout,
+        rstd,
+        dx,
+        dw_partial,
+        db_partial,
+        dresidual_out,
+        dresidual,
+        sm_count,
+    )
+
+    dw = dw_partial.sum(dim=0).to(weight.dtype) if weight is not None else None
+    db = db_partial.sum(dim=0).to(weight.dtype) if has_bias else None
+    if has_residual and dresidual is None:
+        dresidual = dx
+    return dx, dw, db, dresidual
+
+
+# Quack-style alias for benchmarks
+rmsnorm_bwd = rmsnorm_backward
 
 
 if __name__ == "__main__":

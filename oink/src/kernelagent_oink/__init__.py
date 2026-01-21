@@ -12,6 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+KernelAgent-Oink: SM100 CuTeDSL kernels + optional vLLM plugin.
+
+This package can be loaded as a vLLM "general plugin" (entrypoint group
+`vllm.general_plugins`). In that mode it registers Oink custom ops only when
+explicitly enabled via an environment variable (so installing the package does
+not change behavior by default).
+
+For standalone usage (outside vLLM), call `kernelagent_oink.register(force=True)`
+to register the custom ops explicitly.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -48,11 +60,14 @@ def _compute_cutedsl_arch(major: int, minor: int) -> str:
     return f"sm_{major}{minor}{suffix}"
 
 
-def register() -> None:
-    """vLLM plugin entrypoint.
+def register(*, force: bool = False) -> None:
+    """Register Oink torch custom ops.
 
-    This function must be safe to call multiple times and must not raise.
-    vLLM executes it in multiple processes (engine + workers).
+    - vLLM plugin mode (default): no-op unless `VLLM_USE_OINK_RMSNORM` is truthy.
+    - Standalone mode: pass `force=True` to register explicitly.
+
+    This function must be safe to call multiple times and must not raise. vLLM
+    executes it in multiple processes (engine + workers).
     """
     global _OPS_REGISTERED
 
@@ -60,8 +75,9 @@ def register() -> None:
         return
 
     # Gate on the vLLM integration flag so installing the package does not
-    # change behavior unless explicitly enabled.
-    if not _env_truthy("VLLM_USE_OINK_RMSNORM"):
+    # change behavior unless explicitly enabled. For standalone usage (outside
+    # vLLM), callers can pass force=True to register the ops explicitly.
+    if not force and not _env_truthy("VLLM_USE_OINK_RMSNORM"):
         return
 
     try:
