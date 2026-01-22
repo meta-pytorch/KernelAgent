@@ -55,11 +55,12 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
 - DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
+- DO NOT rely on cuSolver/cuBLAS libraries to satisfy the requirements
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
 - Use tl.load() and tl.store() for memory access
-- Use tl.sum(), tl.max(), tl.min() etc. for reductions  
+- Use tl.sum(), tl.max(), tl.min() etc. for reductions
 - Use proper Triton indexing with tl.program_id(), tl.arange(), etc.
 - Implement the algorithm step-by-step in Triton operations, not PyTorch shortcuts
 
@@ -86,14 +87,14 @@ def _actual_kernel(ptr_a, ptr_b, ptr_out, n_elements, BLOCK_SIZE: tl.constexpr):
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
-    
+
     # Load using Triton
     a = tl.load(ptr_a + offsets, mask=mask)
     b = tl.load(ptr_b + offsets, mask=mask)
-    
+
     # Compute using Triton operations (NOT torch.add!)
     result = a + b
-    
+
     # Store using Triton
     tl.store(ptr_out + offsets, result, mask=mask)
 
@@ -102,7 +103,7 @@ def kernel_function(tensor_a, tensor_b):
     # PyTorch operations allowed here for setup
     output = torch.empty_like(tensor_a)
     n_elements = tensor_a.numel()
-    
+
     # Calculate grid and launch Triton kernel
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
