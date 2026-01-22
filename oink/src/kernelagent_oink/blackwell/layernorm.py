@@ -80,7 +80,7 @@ _BWD_PARAM_COMPILE_CACHE: dict[Tuple[int, Type[cutlass.Numeric], bool], object] 
 
 # Local helpers cloned from Quack via lite_quack so that this kernel does
 # not depend on `quack` at runtime.
-from kernelagent_oink.blackwell.lite_quack import (
+from kernelagent_oink.blackwell.lite_quack import (  # noqa: E402
     _KERNEL_ACCEPTS_LAYOUT_ARGS,
     TORCH2CUTE_DTYPE,
     ReductionBase as _ReductionBase,

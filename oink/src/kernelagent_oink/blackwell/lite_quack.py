@@ -39,7 +39,7 @@ import cutlass.cute as cute
 from cutlass import Float32, Int32, const_expr
 from cutlass.cute.runtime import from_dlpack
 from cutlass.cutlass_dsl import T, dsl_user_op
-from cutlass._mlir.dialects import llvm, nvvm, vector
+from cutlass._mlir.dialects import llvm, vector
 
 
 def _parse_version_tuple(version: str) -> tuple[int, int, int]:

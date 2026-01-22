@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Benchmark fused_add_rmsnorm (in-place) on SM100.
 
@@ -21,9 +19,11 @@ DSv3 suite (Oink vs Quack, multi-shape):
     --json /tmp/kernelagent_oink_sm100_suite_bf16/fused_add_rmsnorm_dsv3.json
 """
 
+from __future__ import annotations
+
 import argparse
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 
@@ -165,7 +165,9 @@ def bench_one(
 
     bytes_io = bytes_io_model_fused_add_rmsnorm_inplace(M, N, dtype)
 
-    fn = lambda: oink_rmsnorm.fused_add_rmsnorm_inplace_(x, residual, w, eps=1e-6)
+    def fn():
+        oink_rmsnorm.fused_add_rmsnorm_inplace_(x, residual, w, eps=1e-6)
+
     ms = do_bench_triton(fn, warmup_ms=warmup_ms, rep_ms=iters_ms)
 
     gbps = bytes_io / (ms * 1e-3) / 1e9
@@ -187,18 +189,20 @@ def bench_one(
         out_q = torch.empty_like(x)
         res_out_q = torch.empty_like(residual)
 
-        fn_q = lambda: quack_rmsnorm_fwd_mut(
-            x,
-            w,
-            out_q,
-            None,  # bias
-            None,  # rstd
-            None,  # mean
-            residual,
-            res_out_q,
-            1e-6,
-            False,  # is_layernorm
-        )
+        def fn_q():
+            quack_rmsnorm_fwd_mut(
+                x,
+                w,
+                out_q,
+                None,  # bias
+                None,  # rstd
+                None,  # mean
+                residual,
+                res_out_q,
+                1e-6,
+                False,  # is_layernorm
+            )
+
         ms_q = do_bench_triton(fn_q, warmup_ms=warmup_ms, rep_ms=iters_ms)
         gbps_q = bytes_io / (ms_q * 1e-3) / 1e9
         row.update(

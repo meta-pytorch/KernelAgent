@@ -244,27 +244,31 @@ def bench_single(
         weight_dtype=w.dtype,
     )
 
-    fn_oink = lambda: oink_ln.layernorm(
-        x,
-        w,
-        bias=b,
-        eps=eps,
-        return_rstd=return_rstd,
-        return_mean=return_mean,
-    )
+    def fn_oink():
+        return oink_ln.layernorm(
+            x,
+            w,
+            bias=b,
+            eps=eps,
+            return_rstd=return_rstd,
+            return_mean=return_mean,
+        )
+
     ms_oink = do_bench_triton(fn_oink, warmup_ms=warmup_ms, rep_ms=iters_ms)
     gbps_oink = bytes_io / (ms_oink * 1e-3) / 1e9
 
     if quack_layernorm is None or has_bias:
         return (ms_oink, gbps_oink), None, stats
 
-    fn_quack = lambda: quack_layernorm(
-        x,
-        w,
-        eps=eps,
-        return_rstd=return_rstd,
-        return_mean=return_mean,
-    )
+    def fn_quack():
+        return quack_layernorm(
+            x,
+            w,
+            eps=eps,
+            return_rstd=return_rstd,
+            return_mean=return_mean,
+        )
+
     ms_quack = do_bench_triton(fn_quack, warmup_ms=warmup_ms, rep_ms=iters_ms)
     gbps_quack = bytes_io / (ms_quack * 1e-3) / 1e9
     return (ms_oink, gbps_oink), (ms_quack, gbps_quack), stats

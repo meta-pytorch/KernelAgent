@@ -183,30 +183,34 @@ def bench_single(
 
     bytes_io = bytes_io_model_fwd(M, N, dtype, weight_dtype=w.dtype)
 
-    fn_oink = lambda: oink_rmsnorm.rmsnorm_forward(
-        x,
-        weight=w,
-        bias=None,
-        residual=None,
-        eps=eps,
-        store_rstd=store_rstd,
-    )
+    def fn_oink():
+        return oink_rmsnorm.rmsnorm_forward(
+            x,
+            weight=w,
+            bias=None,
+            residual=None,
+            eps=eps,
+            store_rstd=store_rstd,
+        )
+
     ms_oink = do_bench_triton(fn_oink, warmup_ms=warmup_ms, rep_ms=iters_ms)
     gbps_oink = bytes_io / (ms_oink * 1e-3) / 1e9
 
     if quack_rmsnorm_fwd is None:
         return (ms_oink, gbps_oink), None, stats
 
-    fn_quack = lambda: quack_rmsnorm_fwd(
-        x,
-        w,
-        bias=None,
-        residual=None,
-        out_dtype=None,
-        residual_dtype=None,
-        eps=eps,
-        store_rstd=store_rstd,
-    )
+    def fn_quack():
+        return quack_rmsnorm_fwd(
+            x,
+            w,
+            bias=None,
+            residual=None,
+            out_dtype=None,
+            residual_dtype=None,
+            eps=eps,
+            store_rstd=store_rstd,
+        )
+
     ms_quack = do_bench_triton(fn_quack, warmup_ms=warmup_ms, rep_ms=iters_ms)
     gbps_quack = bytes_io / (ms_quack * 1e-3) / 1e9
     return (ms_oink, gbps_oink), (ms_quack, gbps_quack), stats

@@ -3119,7 +3119,6 @@ def _rmsnorm_bwd_sm100(
         assert dresidual.dtype in (torch.float16, torch.bfloat16, torch.float32)
 
     M, N = x.size(0), x.size(1)
-    device = x.device
     if dw_partial is None and db_partial is None:
         assert sm_count is not None
     else:
@@ -3130,12 +3129,14 @@ def _rmsnorm_bwd_sm100(
     # Match Quack's conversion strategy for activations/gradients: keep the
     # (M, N) layout dynamic without enforcing additional compact-shape
     # constraints. This reduces per-call Python overhead for small-M shapes.
-    convert_from_dlpack = lambda t: from_dlpack(  # type: ignore[assignment]
-        t.detach(),
-        assumed_align=16,
-    ).mark_layout_dynamic(leading_dim=1)
+    def _convert_mx(t: Tensor) -> cute.Tensor:
+        return from_dlpack(
+            t.detach(),
+            assumed_align=16,
+        ).mark_layout_dynamic(leading_dim=1)
+
     x_tensor, dout_tensor, dres_out_tensor, dx_tensor, dres_tensor = [
-        convert_from_dlpack(t) if t is not None else None
+        _convert_mx(t) if t is not None else None
         for t in (x, dout, dresidual_out, dx, dresidual)
     ]
 

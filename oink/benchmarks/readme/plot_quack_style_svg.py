@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Generate Quack-style SVG performance plots (Oink vs Quack) from the SM100 suite
 JSON artifacts under `/tmp/kernelagent_oink_sm100_suite_{bf16,fp16}`.
@@ -41,6 +39,8 @@ Note on DSv3 suite:
 - The RMSNorm panel uses the real block primitive (fused residual-add + RMSNorm)
   when available: `fused_add_rmsnorm_dsv3.json`.
 """
+
+from __future__ import annotations
 
 import argparse
 import json

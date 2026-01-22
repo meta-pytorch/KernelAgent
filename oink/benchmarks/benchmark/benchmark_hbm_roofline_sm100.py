@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 HBM roofline microbenchmark for SM100 (GB200 / Blackwell).
 
@@ -17,9 +15,11 @@ Example:
   CUDA_VISIBLE_DEVICES=0 python oink/benchmarks/benchmark/benchmark_hbm_roofline_sm100.py --dtype fp16 --op triad --gb 2
 """
 
+from __future__ import annotations
+
 import argparse
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch
 import triton
@@ -95,23 +95,27 @@ def bench_one(
     grid = (triton.cdiv(n_elements, block),)
 
     if op == "copy":
-        launch = lambda: _copy_kernel[grid](
-            x,
-            y,
-            n_elements,
-            BLOCK=block,
-            num_warps=num_warps,
-            num_stages=4,
-        )
+        def launch():
+            _copy_kernel[grid](
+                x,
+                y,
+                n_elements,
+                BLOCK=block,
+                num_warps=num_warps,
+                num_stages=4,
+            )
+
     elif op == "triad":
-        launch = lambda: _triad_kernel[grid](
-            x,
-            y,
-            n_elements,
-            BLOCK=block,
-            num_warps=num_warps,
-            num_stages=4,
-        )
+        def launch():
+            _triad_kernel[grid](
+                x,
+                y,
+                n_elements,
+                BLOCK=block,
+                num_warps=num_warps,
+                num_stages=4,
+            )
+
     else:
         raise ValueError(f"Unsupported op: {op}")
 
