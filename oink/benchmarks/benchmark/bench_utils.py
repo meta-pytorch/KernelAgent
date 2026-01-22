@@ -67,7 +67,9 @@ def detect_hbm_peak_gbps(device: Optional[torch.device] = None) -> float:
     return 2000.0
 
 
-def do_bench_triton(fn: Callable[[], Any], *, warmup_ms: int = 25, rep_ms: int = 100) -> float:
+def do_bench_triton(
+    fn: Callable[[], Any], *, warmup_ms: int = 25, rep_ms: int = 100
+) -> float:
     """Kernel-only timing consistent with the Oink benchmark harnesses."""
     return float(triton_do_bench(fn, warmup=warmup_ms, rep=rep_ms, return_mode="mean"))
 
@@ -127,7 +129,13 @@ def write_csv(path: str, rows: Sequence[Dict[str, Any]]) -> None:
             writer.writerow(row)
 
 
-def write_json(path: str, meta: DeviceMeta, rows: Sequence[Dict[str, Any]], *, extra: Dict[str, Any] | None = None) -> None:
+def write_json(
+    path: str,
+    meta: DeviceMeta,
+    rows: Sequence[Dict[str, Any]],
+    *,
+    extra: Dict[str, Any] | None = None,
+) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     payload: Dict[str, Any] = {
         "meta": {**asdict(meta), **(extra or {})},
@@ -179,7 +187,9 @@ class ErrorStatsAccumulator:
         if total_elems <= 0:
             raise ValueError(f"total_elems must be > 0, got {total_elems}")
         if p99_target_samples <= 0:
-            raise ValueError(f"p99_target_samples must be > 0, got {p99_target_samples}")
+            raise ValueError(
+                f"p99_target_samples must be > 0, got {p99_target_samples}"
+            )
         self.total_elems = int(total_elems)
         self.p99_target_samples = int(p99_target_samples)
         # Deterministic strided sampling across the flattened tensor order.
@@ -193,7 +203,9 @@ class ErrorStatsAccumulator:
 
     def update(self, out: torch.Tensor, ref: torch.Tensor) -> None:
         if out.shape != ref.shape:
-            raise ValueError(f"shape mismatch: out={tuple(out.shape)} ref={tuple(ref.shape)}")
+            raise ValueError(
+                f"shape mismatch: out={tuple(out.shape)} ref={tuple(ref.shape)}"
+            )
 
         # Compute error in float32 for stable reductions.
         err_f32 = (out - ref).to(torch.float32)
@@ -214,9 +226,13 @@ class ErrorStatsAccumulator:
         stride = int(self.sample_stride)
         first = (-int(self._global_offset)) % stride
         if first < block_elems:
-            idx = torch.arange(first, block_elems, step=stride, device=flat.device, dtype=torch.int64)
+            idx = torch.arange(
+                first, block_elems, step=stride, device=flat.device, dtype=torch.int64
+            )
             # Gather a modest number of values (≈ block_elems/stride).
-            vals = flat.index_select(0, idx).detach().to(device="cpu", dtype=torch.float32)
+            vals = (
+                flat.index_select(0, idx).detach().to(device="cpu", dtype=torch.float32)
+            )
             self._abs_err_samples.append(vals)
 
         self._global_offset += block_elems
@@ -226,7 +242,11 @@ class ErrorStatsAccumulator:
             samples = torch.cat(self._abs_err_samples, dim=0)
             if samples.numel() > self.p99_target_samples:
                 samples = samples[: self.p99_target_samples]
-            p99 = float(torch.quantile(samples, 0.99).item()) if samples.numel() > 0 else 0.0
+            p99 = (
+                float(torch.quantile(samples, 0.99).item())
+                if samples.numel() > 0
+                else 0.0
+            )
             sample_elems = int(samples.numel())
         else:
             p99 = 0.0

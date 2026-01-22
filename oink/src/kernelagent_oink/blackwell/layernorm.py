@@ -138,7 +138,11 @@ class LayerNormSM100(_ReductionBase):
             else (
                 16
                 if N <= 128
-                else (32 if N <= 3072 else (64 if N <= 6144 else (128 if N <= 16384 else 256)))
+                else (
+                    32
+                    if N <= 3072
+                    else (64 if N <= 6144 else (128 if N <= 16384 else 256))
+                )
             )
         )
 
@@ -186,7 +190,9 @@ class LayerNormSM100(_ReductionBase):
         self._set_cluster_n()
         tiler_mn, tv_layout = self._get_tv_layout()
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         num_warps = num_threads // cute.arch.WARP_SIZE
 
@@ -281,7 +287,9 @@ class LayerNormSM100(_ReductionBase):
         mX = cute.make_tensor(ptr_x, layout_mn)
         mO = cute.make_tensor(ptr_out, layout_mn)
         mW = cute.make_tensor(ptr_w, layout_n)
-        mB = cute.make_tensor(ptr_b, layout_n) if const_expr(ptr_b is not None) else None
+        mB = (
+            cute.make_tensor(ptr_b, layout_n) if const_expr(ptr_b is not None) else None
+        )
         mRstd = (
             cute.make_tensor(ptr_rstd, layout_m)
             if const_expr(ptr_rstd is not None)
@@ -323,15 +331,15 @@ class LayerNormSM100(_ReductionBase):
             cute.make_ordered_layout(tiler_mn, order=(1, 0)),
             byte_alignment=16,
         )
-        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(smem, tv_layout)
+        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(
+            smem, tv_layout
+        )
 
         shape = mX.shape
         idX = cute.make_identity_tensor(shape)
 
         # Slice for CTAs: use domain_offset_i64 to handle >2^31 elements.
-        mX, mO = [
-            domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mX, mO)
-        ]
+        mX, mO = [domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mX, mO)]
         gX, gO = [cute.local_tile(mT, tiler_mn, (0, cluster_y)) for mT in (mX, mO)]
         cX = cute.local_tile(idX, tiler_mn, (bidx, cluster_y))
         gW = cute.local_tile(mW, tiler_mn, (0, cluster_y))
@@ -390,39 +398,23 @@ class LayerNormSM100(_ReductionBase):
         ).get_slice(tidx)
 
         tWgW = thr_copy_WB.partition_S(gW)
-        tBgB = (
-            thr_copy_WB.partition_S(gB)
-            if const_expr(gB is not None)
-            else None
-        )
+        tBgB = thr_copy_WB.partition_S(gB) if const_expr(gB is not None) else None
         tXgX = thr_copy_X.partition_S(gX)
         tXsX = thr_copy_X.partition_D(sX)
         tXgO = thr_copy_O.partition_D(gO)
         tXrRstd = (
-            thr_copy_O.partition_D(gRstd)
-            if const_expr(mRstd is not None)
-            else None
+            thr_copy_O.partition_D(gRstd) if const_expr(mRstd is not None) else None
         )
         tXrMean = (
-            thr_copy_O.partition_D(gMean)
-            if const_expr(mMean is not None)
-            else None
+            thr_copy_O.partition_D(gMean) if const_expr(mMean is not None) else None
         )
         tXcX = thr_copy_X.partition_S(cX)[(0, None), None, None]
 
         # Fragments for gmem->rmem.
         tWrW = cute.make_fragment_like(tWgW)
-        tBrB = (
-            cute.make_fragment_like(tBgB)
-            if const_expr(mB is not None)
-            else None
-        )
+        tBrB = cute.make_fragment_like(tBgB) if const_expr(mB is not None) else None
         tXrW = thr_copy_X.retile(tWrW)
-        tXrB = (
-            thr_copy_X.retile(tBrB)
-            if const_expr(mB is not None)
-            else None
-        )
+        tXrB = thr_copy_X.retile(tBrB) if const_expr(mB is not None) else None
         tXrX, tXrO = [cute.make_fragment_like(thr) for thr in (tXgX, tXgO)]
 
         num_warps = cute.size(tv_layout, mode=[0]) // cute.arch.WARP_SIZE
@@ -458,9 +450,7 @@ class LayerNormSM100(_ReductionBase):
             mbar_ptr + 0 if const_expr(self.cluster_n > 1) else None,
             init_val=0.0,
             hook_fn=(
-                cute.arch.cluster_wait
-                if const_expr(self.cluster_n > 1)
-                else None
+                cute.arch.cluster_wait if const_expr(self.cluster_n > 1) else None
             ),
         )
         mean = sum_x / shape[1]
@@ -486,10 +476,7 @@ class LayerNormSM100(_ReductionBase):
             if (
                 tXcX[0][1] == 0
                 and row < shape[0]
-                and (
-                    self.cluster_n == 1
-                    or cute.arch.block_idx_in_cluster() == 0
-                )
+                and (self.cluster_n == 1 or cute.arch.block_idx_in_cluster() == 0)
             ):
                 tXrRstd[0] = rstd
 
@@ -497,10 +484,7 @@ class LayerNormSM100(_ReductionBase):
             if (
                 tXcX[0][1] == 0
                 and row < shape[0]
-                and (
-                    self.cluster_n == 1
-                    or cute.arch.block_idx_in_cluster() == 0
-                )
+                and (self.cluster_n == 1 or cute.arch.block_idx_in_cluster() == 0)
             ):
                 tXrMean[0] = mean
 
@@ -861,7 +845,9 @@ def _layernorm_forward_ptr_into(
         )
         _PTR_COMPILE_CACHE[key] = compiled
 
-    ptr_x = rt.make_ptr(dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+    ptr_x = rt.make_ptr(
+        dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
     ptr_out = rt.make_ptr(
         dtype_x, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
     )
@@ -978,8 +964,12 @@ def _layernorm_backward_dx_kernel(
         smem = cutlass.utils.SmemAllocator()
         num_warps = const_expr(block_threads // cute.arch.WARP_SIZE)
         warp_sums_layout = cute.make_layout((num_warps,), stride=(1,))
-        warp_sums_wdy = smem.allocate_tensor(Float32, warp_sums_layout, byte_alignment=4)
-        warp_sums_xhatwdy = smem.allocate_tensor(Float32, warp_sums_layout, byte_alignment=4)
+        warp_sums_wdy = smem.allocate_tensor(
+            Float32, warp_sums_layout, byte_alignment=4
+        )
+        warp_sums_xhatwdy = smem.allocate_tensor(
+            Float32, warp_sums_layout, byte_alignment=4
+        )
 
         lane = cute.arch.lane_idx()
         warp_idx = cute.arch.warp_idx()
@@ -1177,8 +1167,12 @@ def _layernorm_backward_dx_sm100(
         alignment=16,
         divisibility=128 // cutlass.Float32.width,
     )
-    mRstd = from_dlpack(rstd_1d.detach(), assumed_align=4).mark_layout_dynamic(leading_dim=0)
-    mMean = from_dlpack(mean_1d.detach(), assumed_align=4).mark_layout_dynamic(leading_dim=0)
+    mRstd = from_dlpack(rstd_1d.detach(), assumed_align=4).mark_layout_dynamic(
+        leading_dim=0
+    )
+    mMean = from_dlpack(mean_1d.detach(), assumed_align=4).mark_layout_dynamic(
+        leading_dim=0
+    )
 
     stream = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
     key = (N, dtype)
@@ -1231,8 +1225,12 @@ def _layernorm_backward_params_sm100(
 
     mX = _convert_row_major(x_2d)
     mdO = _convert_row_major(dout_2d)
-    mRstd = from_dlpack(rstd_1d.detach(), assumed_align=4).mark_layout_dynamic(leading_dim=0)
-    mMean = from_dlpack(mean_1d.detach(), assumed_align=4).mark_layout_dynamic(leading_dim=0)
+    mRstd = from_dlpack(rstd_1d.detach(), assumed_align=4).mark_layout_dynamic(
+        leading_dim=0
+    )
+    mMean = from_dlpack(mean_1d.detach(), assumed_align=4).mark_layout_dynamic(
+        leading_dim=0
+    )
 
     mdW_partial = (
         from_dlpack(dw_partial, assumed_align=16).mark_compact_shape_dynamic(mode=0)

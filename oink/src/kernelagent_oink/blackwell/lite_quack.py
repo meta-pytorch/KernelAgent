@@ -85,6 +85,7 @@ TORCH2CUTE_DTYPE = {
 # Tensor conversion helpers (from quack.utils)
 # -------------------------
 
+
 def convert_from_dlpack(
     x: Tensor,
     leading_dim: int,
@@ -108,7 +109,9 @@ def convert_from_dlpack(
 
 
 @dsl_user_op
-def elem_pointer(x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None) -> cute.Pointer:
+def elem_pointer(
+    x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None
+) -> cute.Pointer:
     return x.iterator + cute.crd2idx(coord, x.layout, loc=loc, ip=ip)
 
 
@@ -159,7 +162,9 @@ def store_shared_remote(
     ).ir_value()
     if const_expr(isinstance(val, float)):
         val = Float32(val)
-    assert isinstance(val, (Float32, Int32, cutlass.Int64)), "val must be Float32, Int32, or Int64"
+    assert isinstance(val, (Float32, Int32, cutlass.Int64)), (
+        "val must be Float32, Int32, or Int64"
+    )
     suffix = {Float32: "f32", Int32: "s32", cutlass.Int64: "s64"}[type(val)]
     constraint = {Float32: "f", Int32: "r", cutlass.Int64: "l"}[type(val)]
     llvm.inline_asm(
@@ -178,19 +183,27 @@ def predicate_k(tAcA: cute.Tensor, limit: cutlass.Int32) -> cute.Tensor:
     # Only compute predicates for the "k" dimension. For the mn dimension, we will use "if".
     tApA = cute.make_fragment(
         cute.make_layout(
-            (cute.size(tAcA, mode=[0, 1]), cute.size(tAcA, mode=[1]), cute.size(tAcA, mode=[2])),
+            (
+                cute.size(tAcA, mode=[0, 1]),
+                cute.size(tAcA, mode=[1]),
+                cute.size(tAcA, mode=[2]),
+            ),
             stride=(cute.size(tAcA, mode=[2]), 0, 1),
         ),
         cutlass.Boolean,
     )
     for rest_v in cutlass.range_constexpr(tApA.shape[0]):
         for rest_k in cutlass.range_constexpr(tApA.shape[2]):
-            tApA[rest_v, 0, rest_k] = cute.elem_less(tAcA[(0, rest_v), 0, rest_k][1], limit)
+            tApA[rest_v, 0, rest_k] = cute.elem_less(
+                tAcA[(0, rest_v), 0, rest_k][1], limit
+            )
     return tApA
 
 
 @dsl_user_op
-def domain_offset_i64(coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None) -> cute.Tensor:
+def domain_offset_i64(
+    coord: cute.Coord, tensor: cute.Tensor, *, loc=None, ip=None
+) -> cute.Tensor:
     flat_coord_i64 = tuple(cutlass.Int64(c) for c in cute.flatten(coord))
     flat_stride = cute.flatten_to_tuple(tensor.stride)
     assert len(flat_coord_i64) == len(flat_stride), (
@@ -228,7 +241,9 @@ def coord_offset_i64(
 
 
 @cute.jit
-def fill_oob(tXsX: cute.Tensor, tXpX: Optional[cute.Tensor], fill_value: cutlass.Numeric) -> None:
+def fill_oob(
+    tXsX: cute.Tensor, tXpX: Optional[cute.Tensor], fill_value: cutlass.Numeric
+) -> None:
     """Fill out-of-bounds values in shared memory tensor."""
     tXrX_fill = cute.make_fragment_like(tXsX[(None, 0), None, 0])
     tXrX_fill.fill(fill_value)
@@ -256,7 +271,9 @@ def f32x2_to_i64(a: Float32, b: Float32, *, loc=None, ip=None) -> cutlass.Int64:
     )
     vec_i64x1 = vector.bitcast(T.vector(1, T.i64()), vec_f32x2, loc=loc, ip=ip)
     res = cutlass.Int64(
-        vector.extract(vec_i64x1, dynamic_position=[], static_position=[0], loc=loc, ip=ip)
+        vector.extract(
+            vec_i64x1, dynamic_position=[], static_position=[0], loc=loc, ip=ip
+        )
     )
     return res
 
@@ -272,10 +289,14 @@ def i64_to_f32x2(c: cutlass.Int64, *, loc=None, ip=None) -> Tuple[Float32, Float
     )
     vec_f32x2 = vector.bitcast(T.vector(2, T.f32()), vec_i64x1, loc=loc, ip=ip)
     res0 = Float32(
-        vector.extract(vec_f32x2, dynamic_position=[], static_position=[0], loc=loc, ip=ip)
+        vector.extract(
+            vec_f32x2, dynamic_position=[], static_position=[0], loc=loc, ip=ip
+        )
     )
     res1 = Float32(
-        vector.extract(vec_f32x2, dynamic_position=[], static_position=[1], loc=loc, ip=ip)
+        vector.extract(
+            vec_f32x2, dynamic_position=[], static_position=[1], loc=loc, ip=ip
+        )
     )
     return res0, res1
 
@@ -372,7 +393,9 @@ def block_or_cluster_reduce(
     """Perform either block or cluster reduction based on whether mbar_ptr is provided."""
     if cutlass.const_expr(mbar_ptr is None):
         return block_reduce(val, op, reduction_buffer, init_val=init_val)
-    return cluster_reduce(val, op, reduction_buffer, mbar_ptr, init_val=init_val, phase=phase)
+    return cluster_reduce(
+        val, op, reduction_buffer, mbar_ptr, init_val=init_val, phase=phase
+    )
 
 
 @cute.jit
@@ -393,7 +416,9 @@ def row_reduce(
         val = x
     warp_op = {
         cute.ReductionOp.ADD: operator.add,
-        cute.ReductionOp.MAX: cute.arch.fmax if cutlass.const_expr(x.dtype == Float32) else max,
+        cute.ReductionOp.MAX: cute.arch.fmax
+        if cutlass.const_expr(x.dtype == Float32)
+        else max,
         cute.ReductionOp.MIN: min,
         cute.ReductionOp.MUL: operator.mul,
     }[op]
@@ -521,7 +546,9 @@ def online_softmax_reduce(
                         reduction_buffer[row_idx, lane_idx]
                     )
                 max_x_final = warp_reduce(max_x_single_warp, cute.arch.fmax)
-                sum_exp_x *= cute.math.exp(max_x_single_warp - max_x_final, fastmath=True)
+                sum_exp_x *= cute.math.exp(
+                    max_x_single_warp - max_x_final, fastmath=True
+                )
                 sum_exp_x = warp_reduce(sum_exp_x, operator.add)
                 if cutlass.const_expr(return_exp_x):
                     exp_x *= cute.math.exp(max_x - max_x_final, fastmath=True)
@@ -533,16 +560,23 @@ def online_softmax_reduce(
                         num_warps = rows_per_block * warps_per_row
                         cute.arch.mbarrier_arrive_and_expect_tx(
                             mbar_ptr,
-                            num_warps * cluster_n * reduction_buffer.element_type.width // 8,
+                            num_warps
+                            * cluster_n
+                            * reduction_buffer.element_type.width
+                            // 8,
                         )
                 if lane_idx < cluster_n:
                     store_shared_remote(
                         f32x2_to_i64(max_x, sum_exp_x),
-                        elem_pointer(reduction_buffer, (row_idx, (col_idx, cta_rank_in_cluster))),
+                        elem_pointer(
+                            reduction_buffer, (row_idx, (col_idx, cta_rank_in_cluster))
+                        ),
                         mbar_ptr,
                         peer_cta_rank_in_cluster=lane_idx,
                     )
-                cute.arch.mbarrier_wait(mbar_ptr, phase=phase if phase is not None else 0)
+                cute.arch.mbarrier_wait(
+                    mbar_ptr, phase=phase if phase is not None else 0
+                )
                 num_iter = cute.ceil_div(warps_per_row * cluster_n, cute.arch.WARP_SIZE)
                 max_x_single_warp = cute.make_fragment(num_iter, Float32)
                 max_x_single_warp.fill(-Float32.inf)
@@ -591,7 +625,9 @@ def get_copy_atom(
 
     num_copy_bits = const_expr(min(128, num_copy_elems * dtype.width))
     copy_op = cpasync.CopyG2SOp() if is_async else cute.nvgpu.CopyUniversalOp()
-    return cute.make_copy_atom(copy_op, dtype, num_bits_per_copy=num_copy_bits, loc=loc, ip=ip)
+    return cute.make_copy_atom(
+        copy_op, dtype, num_bits_per_copy=num_copy_bits, loc=loc, ip=ip
+    )
 
 
 @dsl_user_op
@@ -606,7 +642,9 @@ def copy(
     ip=None,
     **kwargs,
 ) -> None:
-    copy_atom = get_copy_atom(src.element_type, num_copy_elems, is_async, loc=loc, ip=ip)
+    copy_atom = get_copy_atom(
+        src.element_type, num_copy_elems, is_async, loc=loc, ip=ip
+    )
     cute.copy(copy_atom, src, dst, pred=pred, loc=loc, ip=ip, **kwargs)
 
 
@@ -637,15 +675,21 @@ class ReductionBase:
     def _get_num_threads(self) -> int:
         return 128 if self.N <= 16384 else 256
 
-    def _get_tv_layout(self, num_copy_bits: int = 128) -> Tuple[cute.Shape, cute.Layout]:
+    def _get_tv_layout(
+        self, num_copy_bits: int = 128
+    ) -> Tuple[cute.Shape, cute.Layout]:
         vecsize = num_copy_bits // self.dtype.width
-        assert self.N % vecsize == 0, f"Input N {self.N} is not divisible by vector size {vecsize}"
+        assert self.N % vecsize == 0, (
+            f"Input N {self.N} is not divisible by vector size {vecsize}"
+        )
         num_threads = self._get_num_threads()
         assert num_threads % cute.arch.WARP_SIZE == 0
 
         threads_per_row = self._calculate_threads_per_row()
         self._set_cluster_n()
-        num_blocks_N = cute.ceil_div(self.N // vecsize, threads_per_row * self.cluster_n)
+        num_blocks_N = cute.ceil_div(
+            self.N // vecsize, threads_per_row * self.cluster_n
+        )
         cols_per_block = num_threads // threads_per_row
         tiler_mn = (cols_per_block, vecsize * num_blocks_N * threads_per_row)
         tv_layout = cute.make_layout(
@@ -660,11 +704,16 @@ class ReductionBase:
     def _smem_size_in_bytes(self, tiler_mn, num_warps: int) -> int:
         return (
             cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn))
-            + self.stage * num_warps * self.cluster_n * (self.reduction_dtype.width // 8)
+            + self.stage
+            * num_warps
+            * self.cluster_n
+            * (self.reduction_dtype.width // 8)
             + self.stage * (cutlass.Int64.width // 8)
         )
 
-    def _get_reduction_buffer_layout(self, tv_layout: cute.Layout, cluster_n: int) -> cute.Layout:
+    def _get_reduction_buffer_layout(
+        self, tv_layout: cute.Layout, cluster_n: int
+    ) -> cute.Layout:
         num_warps = cute.size(tv_layout, mode=[0]) // cute.arch.WARP_SIZE
         warps_per_row = max(tv_layout.shape[0][0] // cute.arch.WARP_SIZE, 1)
         return cute.make_ordered_layout(
@@ -723,7 +772,9 @@ class RMSNormBackward(ReductionBase):
         super().__init__(dtype, N, stage=2, reduction_dtype=Float32)
         self.reload_wdy = None if N <= 16 * 1024 else "smem"
         if self.N > 128 * 1024 and self.dtype.width >= 32:
-            raise ValueError("RMSNormBackward does not support N > 128k with dtype >= 32 bits")
+            raise ValueError(
+                "RMSNormBackward does not support N > 128k with dtype >= 32 bits"
+            )
 
     def _get_num_threads(self) -> int:
         return 128 if self.N <= 4096 else 256
@@ -736,7 +787,11 @@ class RMSNormBackward(ReductionBase):
             else (
                 16
                 if N <= 128
-                else (32 if N <= 256 else (64 if N <= 512 else (128 if N <= 4096 else 256)))
+                else (
+                    32
+                    if N <= 256
+                    else (64 if N <= 512 else (128 if N <= 4096 else 256))
+                )
             )
         )
 
@@ -745,7 +800,11 @@ class RMSNormBackward(ReductionBase):
         cluster_n = (
             1
             if N <= 8 * 1024
-            else (2 if N <= 16 * 1024 else (4 if N <= 32 * 1024 else (8 if N <= 64 * 1024 else 16)))
+            else (
+                2
+                if N <= 16 * 1024
+                else (4 if N <= 32 * 1024 else (8 if N <= 64 * 1024 else 16))
+            )
         )
         self.cluster_n = cluster_n
 
@@ -755,7 +814,10 @@ class RMSNormBackward(ReductionBase):
         return (
             cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn)) * 2
             + cute.size_in_bytes(do_dtype, cute.make_layout(tiler_mn)) * 2
-            + self.stage * num_warps * self.cluster_n * (self.reduction_dtype.width // 8)
+            + self.stage
+            * num_warps
+            * self.cluster_n
+            * (self.reduction_dtype.width // 8)
             + self.stage * (cutlass.Int64.width // 8) * 2
         )
 
@@ -783,7 +845,9 @@ class RMSNormBackward(ReductionBase):
             )
 
         mX, mdO, mdResO, mdX, mdRes = [
-            cute.make_tensor(t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t)))
+            cute.make_tensor(
+                t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t))
+            )
             if const_expr(t is not None)
             else None
             for t in (mX, mdO, mdResO, mdX, mdRes)
@@ -802,7 +866,9 @@ class RMSNormBackward(ReductionBase):
             num_copy_bits=128 // largest_dtype_width * mX.element_type.width
         )
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         num_warps = num_threads // cute.arch.WARP_SIZE
         if const_expr(mW is not None):
@@ -814,7 +880,9 @@ class RMSNormBackward(ReductionBase):
 
         num_blocks = sm_count
         kernel = (
-            self.kernel(mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes, tv_layout, tiler_mn)
+            self.kernel(
+                mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes, tv_layout, tiler_mn
+            )
             if _KERNEL_ACCEPTS_LAYOUT_ARGS
             else self.kernel(mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes)
         )
@@ -822,7 +890,9 @@ class RMSNormBackward(ReductionBase):
             grid=[num_blocks, self.cluster_n, 1],
             block=[num_threads, 1, 1],
             cluster=[1, self.cluster_n, 1] if self.cluster_n > 1 else None,
-            smem=self._smem_size_in_bytes(tiler_mn, num_warps, do_dtype=mdO.element_type),
+            smem=self._smem_size_in_bytes(
+                tiler_mn, num_warps, do_dtype=mdO.element_type
+            ),
             stream=stream,
         )
 
@@ -856,7 +926,9 @@ class RMSNormBackward(ReductionBase):
         idX = cute.make_identity_tensor(shape)
 
         smem = cutlass.utils.SmemAllocator()
-        smem_layout = cute.make_ordered_layout((tiler_mn[0], tiler_mn[1], 2), order=(1, 0, 2))
+        smem_layout = cute.make_ordered_layout(
+            (tiler_mn[0], tiler_mn[1], 2), order=(1, 0, 2)
+        )
         sX = smem.allocate_tensor(mX.element_type, smem_layout, byte_alignment=16)
         sdO = smem.allocate_tensor(mdO.element_type, smem_layout, byte_alignment=16)
         reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(
@@ -870,8 +942,12 @@ class RMSNormBackward(ReductionBase):
             mbar_full_ptr, mbar_empty_ptr = None, None
 
         num_copy_elems_X = tv_layout.shape[1][0]
-        copy_atom_load_X = get_copy_atom(mX.element_type, num_copy_elems_X, is_async=False)
-        thr_copy_X = cute.make_tiled_copy(copy_atom_load_X, tv_layout, tiler_mn).get_slice(tidx)
+        copy_atom_load_X = get_copy_atom(
+            mX.element_type, num_copy_elems_X, is_async=False
+        )
+        thr_copy_X = cute.make_tiled_copy(
+            copy_atom_load_X, tv_layout, tiler_mn
+        ).get_slice(tidx)
         copy_fn = partial(copy, num_copy_elems=num_copy_elems_X)
 
         gX, gdO, gdResO, gdX, gdRes, cX = [
@@ -898,7 +974,8 @@ class RMSNormBackward(ReductionBase):
         tXcX = thr_copy_X.partition_S(cX)[(0, None), None, None, None]
 
         tXrX, tXrdO, tXrdX = [
-            cute.make_fragment_like(thr[None, None, None, 0]) for thr in (tXgX, tXgdO, tXgdX)
+            cute.make_fragment_like(thr[None, None, None, 0])
+            for thr in (tXgX, tXgdO, tXgdX)
         ]
         tXrdResO = None
         if const_expr(mdResO is not None):
@@ -959,10 +1036,24 @@ class RMSNormBackward(ReductionBase):
         for bidx in cutlass.range(bidx_start, cute.ceil_div(M, tiler_mn[0]), gdim):
             row = tXcX[None, None, None, bidx][0][0]
             if row + gdim * tiler_mn[0] < M:
-                tXgX_cur = coord_offset_i64(bidx + gdim, tXgX, dim=3)[None, None, None, 0]
-                tXgdO_cur = coord_offset_i64(bidx + gdim, tXgdO, dim=3)[None, None, None, 0]
-                copy_fn(tXgX_cur, tXsX[None, None, None, stage ^ 1], pred=tXpX, is_async=True)
-                copy_fn(tXgdO_cur, tXsdO[None, None, None, stage ^ 1], pred=tXpX, is_async=True)
+                tXgX_cur = coord_offset_i64(bidx + gdim, tXgX, dim=3)[
+                    None, None, None, 0
+                ]
+                tXgdO_cur = coord_offset_i64(bidx + gdim, tXgdO, dim=3)[
+                    None, None, None, 0
+                ]
+                copy_fn(
+                    tXgX_cur,
+                    tXsX[None, None, None, stage ^ 1],
+                    pred=tXpX,
+                    is_async=True,
+                )
+                copy_fn(
+                    tXgdO_cur,
+                    tXsdO[None, None, None, stage ^ 1],
+                    pred=tXpX,
+                    is_async=True,
+                )
             elif tiler_mn[0] > 1:
                 fill_oob(
                     tXsX[None, None, None, stage ^ 1],
@@ -979,7 +1070,9 @@ class RMSNormBackward(ReductionBase):
             if row < M or tiler_mn[0] == 1:
                 rstd_val = mRstd[row]
             if const_expr(mdResO is not None):
-                tXgdResO_cur = coord_offset_i64(bidx, tXgdResO, dim=3)[None, None, None, 0]
+                tXgdResO_cur = coord_offset_i64(bidx, tXgdResO, dim=3)[
+                    None, None, None, 0
+                ]
                 if row < M or tiler_mn[0] == 1:
                     copy_fn(tXgdResO_cur, tXrdResO, pred=tXpX)
                 elif tiler_mn[0] > 1:
@@ -1036,7 +1129,9 @@ class RMSNormBackward(ReductionBase):
                 copy_fn(tXrdX, tXgdX_cur, pred=tXpX)
             if const_expr(mdRes is not None):
                 tXrdRes.store(dx.to(tXrdRes.element_type))
-                tXgdRes_cur = coord_offset_i64(bidx, tXgdRes, dim=3)[None, None, None, 0]
+                tXgdRes_cur = coord_offset_i64(bidx, tXgdRes, dim=3)[
+                    None, None, None, 0
+                ]
                 if row < M or tiler_mn[0] == 1:
                     copy_fn(tXrdRes, tXgdRes_cur, pred=tXpX)
             if const_expr(mdW is not None):
@@ -1204,7 +1299,9 @@ def get_sm_count(
     num_sms = props.multi_processor_count
 
     sm_count_multiple = (
-        16 if N <= 256 else (8 if N <= 1024 else (4 if N <= 2048 else (2 if N <= 4096 else 1)))
+        16
+        if N <= 256
+        else (8 if N <= 1024 else (4 if N <= 2048 else (2 if N <= 4096 else 1)))
     )
     sm_count = num_sms
     if N <= 8192:

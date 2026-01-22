@@ -134,7 +134,9 @@ class SoftmaxFwdSM100(ReductionBase):
         # Use the generic ReductionBase tiling with 128-bit vectorization.
         tiler_mn, tv_layout = self._get_tv_layout()
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         num_warps = num_threads // cute.arch.WARP_SIZE
         kernel = (
@@ -201,7 +203,9 @@ class SoftmaxFwdSM100(ReductionBase):
             cute.make_ordered_layout(tiler_mn, order=(1, 0)),
             byte_alignment=16,
         )
-        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(smem, tv_layout)
+        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(
+            smem, tv_layout
+        )
 
         # Copy atoms for gmem <-> smem and smem <-> gmem.
         # Use 128-bit cp.async for global->shared and 128-bit vectorized stores.
@@ -216,8 +220,12 @@ class SoftmaxFwdSM100(ReductionBase):
             num_bits_per_copy=128,
         )
 
-        thr_copy_load = cute.make_tiled_copy(copy_atom_load, tv_layout, tiler_mn).get_slice(tidx)
-        thr_copy_store = cute.make_tiled_copy(copy_atom_store, tv_layout, tiler_mn).get_slice(tidx)
+        thr_copy_load = cute.make_tiled_copy(
+            copy_atom_load, tv_layout, tiler_mn
+        ).get_slice(tidx)
+        thr_copy_store = cute.make_tiled_copy(
+            copy_atom_store, tv_layout, tiler_mn
+        ).get_slice(tidx)
 
         tXgX = thr_copy_load.partition_S(gX)
         tXsX = thr_copy_load.partition_D(sX)
@@ -349,7 +357,10 @@ class SoftmaxBwdSM100(ReductionBase):
         # Store both y and dy tiles plus reduction buffers and mbarriers.
         return (
             cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn)) * 2
-            + self.stage * num_warps * self.cluster_n * (self.reduction_dtype.width // 8)
+            + self.stage
+            * num_warps
+            * self.cluster_n
+            * (self.reduction_dtype.width // 8)
             + self.stage * (cutlass.Int64.width // 8)
         )
 
@@ -367,7 +378,9 @@ class SoftmaxBwdSM100(ReductionBase):
         # Use the generic ReductionBase tiling with 128-bit vectorization.
         tiler_mn, tv_layout = self._get_tv_layout()
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         num_warps = num_threads // cute.arch.WARP_SIZE
         kernel = (
@@ -423,7 +436,9 @@ class SoftmaxBwdSM100(ReductionBase):
         mdY, mY, mdX = [
             domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mdY, mY, mdX)
         ]
-        gdY, gY, gdX = [cute.local_tile(mT, tiler_mn, (0, cluster_y)) for mT in (mdY, mY, mdX)]
+        gdY, gY, gdX = [
+            cute.local_tile(mT, tiler_mn, (0, cluster_y)) for mT in (mdY, mY, mdX)
+        ]
         cX = cute.local_tile(idX, tiler_mn, (bidx, cluster_y))
 
         smem = cutlass.utils.SmemAllocator()
@@ -437,7 +452,9 @@ class SoftmaxBwdSM100(ReductionBase):
             cute.make_ordered_layout(tiler_mn, order=(1, 0)),
             byte_alignment=16,
         )
-        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(smem, tv_layout)
+        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(
+            smem, tv_layout
+        )
 
         copy_atom_load = cute.make_copy_atom(
             cute.nvgpu.cpasync.CopyG2SOp(),
@@ -450,8 +467,12 @@ class SoftmaxBwdSM100(ReductionBase):
             num_bits_per_copy=128,
         )
 
-        thr_copy_load = cute.make_tiled_copy(copy_atom_load, tv_layout, tiler_mn).get_slice(tidx)
-        thr_copy_store = cute.make_tiled_copy(copy_atom_store, tv_layout, tiler_mn).get_slice(tidx)
+        thr_copy_load = cute.make_tiled_copy(
+            copy_atom_load, tv_layout, tiler_mn
+        ).get_slice(tidx)
+        thr_copy_store = cute.make_tiled_copy(
+            copy_atom_store, tv_layout, tiler_mn
+        ).get_slice(tidx)
 
         tdYgdY = thr_copy_load.partition_S(gdY)
         tdYsdY = thr_copy_load.partition_D(sdY)
@@ -460,7 +481,9 @@ class SoftmaxBwdSM100(ReductionBase):
         tdXgdX = thr_copy_store.partition_D(gdX)
         tXcX = thr_copy_load.partition_S(cX)[(0, None), None, None]
 
-        tdYrdY, tYrY, tdXrdX = [cute.make_fragment_like(thr) for thr in (tdYgdY, tYgY, tdXgdX)]
+        tdYrdY, tYrY, tdXrdX = [
+            cute.make_fragment_like(thr) for thr in (tdYgdY, tYgY, tdXgdX)
+        ]
 
         num_warps = cute.size(tv_layout, mode=[0]) // cute.arch.WARP_SIZE
         self._initialize_cluster(tidx, mbar_ptr, num_warps)
@@ -535,9 +558,8 @@ def _convert_2d_tensor(x: Tensor) -> cute.Tensor:
     # the shape compact with row-major stride order (0, 1), with mode=0 (batch).
     # We intentionally do not call mark_layout_dynamic here to avoid the
     # leading_dim stride==1 constraint used in RMSNorm.
-    return (
-        from_dlpack(x.detach(), assumed_align=16)
-        .mark_compact_shape_dynamic(mode=0, stride_order=(0, 1))
+    return from_dlpack(x.detach(), assumed_align=16).mark_compact_shape_dynamic(
+        mode=0, stride_order=(0, 1)
     )
 
 
@@ -581,7 +603,9 @@ def _softmax_forward_ptr_into(*, x: Tensor, out: Tensor) -> None:
     compiled = _PTR_FWD_COMPILE_CACHE.get(key)
     if compiled is None:
         op = SoftmaxFwdSM100(dtype_x, int(N))
-        ptr_x = rt.make_ptr(dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        ptr_x = rt.make_ptr(
+            dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         ptr_out = rt.make_ptr(
             dtype_x, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
         )
@@ -596,8 +620,12 @@ def _softmax_forward_ptr_into(*, x: Tensor, out: Tensor) -> None:
         )
         _PTR_FWD_COMPILE_CACHE[key] = compiled
 
-    ptr_x = rt.make_ptr(dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-    ptr_out = rt.make_ptr(dtype_x, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+    ptr_x = rt.make_ptr(
+        dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_out = rt.make_ptr(
+        dtype_x, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
     compiled(ptr_x, ptr_out, Int32(int(M)), Int32(int(x.stride(0))), stream)
 
 
@@ -606,7 +634,9 @@ def _softmax_backward_ptr_into(*, dy: Tensor, y: Tensor, dx: Tensor) -> None:
     assert dy.is_cuda and dy.dim() == 2
     assert y.is_cuda and y.shape == dy.shape and y.dtype == dy.dtype
     assert dx.is_cuda and dx.shape == dy.shape and dx.dtype == dy.dtype
-    assert dy.stride() == y.stride() == dx.stride(), "Pointer path expects matching strides"
+    assert dy.stride() == y.stride() == dx.stride(), (
+        "Pointer path expects matching strides"
+    )
 
     M, N = dy.shape
     device_index = dy.get_device()
@@ -619,9 +649,15 @@ def _softmax_backward_ptr_into(*, dy: Tensor, y: Tensor, dx: Tensor) -> None:
     compiled = _PTR_BWD_COMPILE_CACHE.get(key)
     if compiled is None:
         op = SoftmaxBwdSM100(dtype_x, int(N))
-        ptr_dy = rt.make_ptr(dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-        ptr_y = rt.make_ptr(dtype_x, y.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-        ptr_dx = rt.make_ptr(dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+        ptr_dy = rt.make_ptr(
+            dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_y = rt.make_ptr(
+            dtype_x, y.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_dx = rt.make_ptr(
+            dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
         ld = Int32(int(dy.stride(0)))
         compiled = cute.compile(
             op.launch_from_ptrs,
@@ -634,9 +670,15 @@ def _softmax_backward_ptr_into(*, dy: Tensor, y: Tensor, dx: Tensor) -> None:
         )
         _PTR_BWD_COMPILE_CACHE[key] = compiled
 
-    ptr_dy = rt.make_ptr(dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-    ptr_y = rt.make_ptr(dtype_x, y.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
-    ptr_dx = rt.make_ptr(dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+    ptr_dy = rt.make_ptr(
+        dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_y = rt.make_ptr(
+        dtype_x, y.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_dx = rt.make_ptr(
+        dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
     compiled(ptr_dy, ptr_y, ptr_dx, Int32(int(M)), Int32(int(dy.stride(0))), stream)
 
 
@@ -679,8 +721,14 @@ def softmax_backward(dy: Tensor, y: Tensor) -> Tensor:
 
     N = dy.size(1)
     dtype = TORCH2CUTE_DTYPE[dy.dtype]
-    if _can_use_ptr_path_2d(dy) and _can_use_ptr_path_2d(y) and dy.stride() == y.stride():
-        dx = torch.empty_strided(dy.shape, dy.stride(), device=dy.device, dtype=dy.dtype)
+    if (
+        _can_use_ptr_path_2d(dy)
+        and _can_use_ptr_path_2d(y)
+        and dy.stride() == y.stride()
+    ):
+        dx = torch.empty_strided(
+            dy.shape, dy.stride(), device=dy.device, dtype=dy.dtype
+        )
         _softmax_backward_ptr_into(dy=dy, y=y, dx=dx)
         return dx
 

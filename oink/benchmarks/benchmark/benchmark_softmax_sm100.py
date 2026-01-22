@@ -150,6 +150,7 @@ def bench_single(
     bytes_io = bytes_io_model_softmax(M, N, dtype, mode=mode)
 
     if mode == "fwd":
+
         def fn_oink():
             return oink_softmax.softmax_forward(x)
 
@@ -174,6 +175,7 @@ def bench_single(
                 return quack_softmax_bwd(dy, y_q)
 
     elif mode == "fwd_bwd":
+
         def fn_oink():
             return oink_softmax.softmax_fwd_bwd(dy, x)
 
@@ -208,20 +210,36 @@ def main() -> None:
     print(f"Running on {torch.cuda.get_device_name(device)} (SM{sm})")
 
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"])
-    p.add_argument("--mode", type=str, default="fwd_bwd", choices=["fwd", "bwd", "fwd_bwd"])
-    p.add_argument("--iters", type=int, default=50, help="Triton do_bench rep_ms (kernel-only).")
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"]
+    )
+    p.add_argument(
+        "--mode", type=str, default="fwd_bwd", choices=["fwd", "bwd", "fwd_bwd"]
+    )
+    p.add_argument(
+        "--iters", type=int, default=50, help="Triton do_bench rep_ms (kernel-only)."
+    )
     p.add_argument("--warmup-ms", type=int, default=25)
-    p.add_argument("--csv", type=str, default=None, help="Optional CSV output path; appends rows")
-    p.add_argument("--json", type=str, default=None, help="Optional JSON output path (meta + rows)")
+    p.add_argument(
+        "--csv", type=str, default=None, help="Optional CSV output path; appends rows"
+    )
+    p.add_argument(
+        "--json", type=str, default=None, help="Optional JSON output path (meta + rows)"
+    )
     p.add_argument("--configs", type=str, default="1024x4096,8192x4096")
-    p.add_argument("--quack-suite", action="store_true", help="Run Quack-style batch/seq grid")
+    p.add_argument(
+        "--quack-suite", action="store_true", help="Run Quack-style batch/seq grid"
+    )
     p.add_argument(
         "--dsv3",
         action="store_true",
         help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}",
     )
-    p.add_argument("--skip-verify", action="store_true", help="Skip correctness checks (Oink/Quack vs PyTorch softmax)")
+    p.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip correctness checks (Oink/Quack vs PyTorch softmax)",
+    )
     args = p.parse_args()
 
     dtype = parse_dtype(args.dtype)
@@ -237,8 +255,11 @@ def main() -> None:
     meta = collect_device_meta(device)
 
     rows_out: List[Dict[str, Any]] = []
-    for (M, N) in cfgs:
-        print(f"bench M={M:<8d} N={N:<6d} dtype={args.dtype} mode={args.mode} ...", flush=True)
+    for M, N in cfgs:
+        print(
+            f"bench M={M:<8d} N={N:<6d} dtype={args.dtype} mode={args.mode} ...",
+            flush=True,
+        )
         (ms_oink, gbps_oink), quack, stats = bench_single(
             M=M,
             N=N,

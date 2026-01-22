@@ -84,16 +84,22 @@ def dsv3_configs() -> List[Tuple[int, int]]:
     return [(m, n) for m in Ms for n in Ns]
 
 
-def _verify_parity(logits: torch.Tensor, target: torch.Tensor, *, ignore_index: int) -> dict[str, object]:
+def _verify_parity(
+    logits: torch.Tensor, target: torch.Tensor, *, ignore_index: int
+) -> dict[str, object]:
     dtype = logits.dtype
     ref_block_rows = 512
-    dloss = torch.randn(logits.size(0), device=logits.device, dtype=torch.float32)  # upstream grad
+    dloss = torch.randn(
+        logits.size(0), device=logits.device, dtype=torch.float32
+    )  # upstream grad
 
     with torch.no_grad():
         loss_o, lse_o = oink_ce.cross_entropy_forward(
             logits, target, ignore_index=ignore_index, reduction="none"
         )
-        dx_o = oink_ce.cross_entropy_backward(dloss, logits, target, lse_o, ignore_index=ignore_index)
+        dx_o = oink_ce.cross_entropy_backward(
+            dloss, logits, target, lse_o, ignore_index=ignore_index
+        )
         dx_fused_o = oink_ce.cross_entropy_fwd_bwd(
             dloss,
             logits,
@@ -125,8 +131,12 @@ def _verify_parity(logits: torch.Tensor, target: torch.Tensor, *, ignore_index: 
 
     M = int(logits.shape[0])
     N = int(logits.shape[1])
-    loss_acc_ours = ErrorStatsAccumulator(total_elems=M, p99_target_samples=min(M, 1_000_000))
-    lse_acc_ours = ErrorStatsAccumulator(total_elems=M, p99_target_samples=min(M, 1_000_000))
+    loss_acc_ours = ErrorStatsAccumulator(
+        total_elems=M, p99_target_samples=min(M, 1_000_000)
+    )
+    lse_acc_ours = ErrorStatsAccumulator(
+        total_elems=M, p99_target_samples=min(M, 1_000_000)
+    )
     dx_acc_ours = ErrorStatsAccumulator(total_elems=M * N)
     dx_fused_acc_ours = ErrorStatsAccumulator(total_elems=M * N)
     loss_acc_quack = (
@@ -159,23 +169,39 @@ def _verify_parity(logits: torch.Tensor, target: torch.Tensor, *, ignore_index: 
             ignore_index=ignore_index,
         )
         lse_ref = torch.logsumexp(logits_f32, dim=-1)
-        (dx_ref_f32,) = torch.autograd.grad(loss_ref, logits_f32, grad_outputs=dloss_blk)
+        (dx_ref_f32,) = torch.autograd.grad(
+            loss_ref, logits_f32, grad_outputs=dloss_blk
+        )
         dx_ref = dx_ref_f32.to(dtype)
 
-        torch.testing.assert_close(loss_o[start:end], loss_ref.detach(), **_VERIFY_TOL_LOSS)
-        torch.testing.assert_close(lse_o[start:end], lse_ref.detach(), **_VERIFY_TOL_LOSS)
+        torch.testing.assert_close(
+            loss_o[start:end], loss_ref.detach(), **_VERIFY_TOL_LOSS
+        )
+        torch.testing.assert_close(
+            lse_o[start:end], lse_ref.detach(), **_VERIFY_TOL_LOSS
+        )
         torch.testing.assert_close(dx_o[start:end], dx_ref, **_VERIFY_TOL_DX[dtype])
-        torch.testing.assert_close(dx_fused_o[start:end], dx_ref, **_VERIFY_TOL_DX[dtype])
+        torch.testing.assert_close(
+            dx_fused_o[start:end], dx_ref, **_VERIFY_TOL_DX[dtype]
+        )
         loss_acc_ours.update(loss_o[start:end], loss_ref.detach())
         lse_acc_ours.update(lse_o[start:end], lse_ref.detach())
         dx_acc_ours.update(dx_o[start:end], dx_ref)
         dx_fused_acc_ours.update(dx_fused_o[start:end], dx_ref)
 
         if loss_q is not None and lse_q is not None and dx_q is not None:
-            torch.testing.assert_close(loss_q[start:end], loss_ref.detach(), **_VERIFY_TOL_LOSS)
-            torch.testing.assert_close(lse_q[start:end], lse_ref.detach(), **_VERIFY_TOL_LOSS)
+            torch.testing.assert_close(
+                loss_q[start:end], loss_ref.detach(), **_VERIFY_TOL_LOSS
+            )
+            torch.testing.assert_close(
+                lse_q[start:end], lse_ref.detach(), **_VERIFY_TOL_LOSS
+            )
             torch.testing.assert_close(dx_q[start:end], dx_ref, **_VERIFY_TOL_DX[dtype])
-            assert loss_acc_quack is not None and lse_acc_quack is not None and dx_acc_quack is not None
+            assert (
+                loss_acc_quack is not None
+                and lse_acc_quack is not None
+                and dx_acc_quack is not None
+            )
             loss_acc_quack.update(loss_q[start:end], loss_ref.detach())
             lse_acc_quack.update(lse_q[start:end], lse_ref.detach())
             dx_acc_quack.update(dx_q[start:end], dx_ref)
@@ -185,7 +211,11 @@ def _verify_parity(logits: torch.Tensor, target: torch.Tensor, *, ignore_index: 
     stats.update(error_stats_to_row("ours_err_lse", lse_acc_ours.finalize()))
     stats.update(error_stats_to_row("ours_err_dx", dx_acc_ours.finalize()))
     stats.update(error_stats_to_row("ours_err_dx_fused", dx_fused_acc_ours.finalize()))
-    if loss_acc_quack is not None and lse_acc_quack is not None and dx_acc_quack is not None:
+    if (
+        loss_acc_quack is not None
+        and lse_acc_quack is not None
+        and dx_acc_quack is not None
+    ):
         stats.update(error_stats_to_row("quack_err_loss", loss_acc_quack.finalize()))
         stats.update(error_stats_to_row("quack_err_lse", lse_acc_quack.finalize()))
         stats.update(error_stats_to_row("quack_err_dx", dx_acc_quack.finalize()))
@@ -219,6 +249,7 @@ def bench_single(
     bytes_io = bytes_io_model_ce(M, N, dtype, target_dtype=target.dtype, mode=mode)
 
     if mode == "fwd":
+
         def fn_oink():
             return oink_ce.cross_entropy_forward(
                 logits, target, ignore_index=int(ignore_index), reduction="none"
@@ -275,6 +306,7 @@ def bench_single(
                 )
 
     elif mode == "fwd_bwd":
+
         def fn_oink():
             return oink_ce.cross_entropy_fwd_bwd(
                 dloss,
@@ -330,16 +362,34 @@ def main() -> None:
     print(f"Running on {torch.cuda.get_device_name(device)} (SM{sm})")
 
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"])
-    p.add_argument("--mode", type=str, default="fwd_bwd", choices=["fwd", "bwd", "fwd_bwd"])
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"]
+    )
+    p.add_argument(
+        "--mode", type=str, default="fwd_bwd", choices=["fwd", "bwd", "fwd_bwd"]
+    )
     p.add_argument("--ignore-index", type=int, default=-100)
-    p.add_argument("--iters", type=int, default=50, help="Triton do_bench rep_ms (kernel-only).")
+    p.add_argument(
+        "--iters", type=int, default=50, help="Triton do_bench rep_ms (kernel-only)."
+    )
     p.add_argument("--warmup-ms", type=int, default=25)
-    p.add_argument("--csv", type=str, default=None, help="Optional CSV output path; appends rows")
-    p.add_argument("--json", type=str, default=None, help="Optional JSON output path (meta + rows)")
+    p.add_argument(
+        "--csv", type=str, default=None, help="Optional CSV output path; appends rows"
+    )
+    p.add_argument(
+        "--json", type=str, default=None, help="Optional JSON output path (meta + rows)"
+    )
     p.add_argument("--configs", type=str, default="1024x4096,8192x4096")
-    p.add_argument("--quack-suite", action="store_true", help="Run Quack-style batch/seq grid (vocab=4096)")
-    p.add_argument("--dsv3", action="store_true", help="Run DSv3 set: M in {4096,16384,65536}, N in {3072,6144,8192,12288}")
+    p.add_argument(
+        "--quack-suite",
+        action="store_true",
+        help="Run Quack-style batch/seq grid (vocab=4096)",
+    )
+    p.add_argument(
+        "--dsv3",
+        action="store_true",
+        help="Run DSv3 set: M in {4096,16384,65536}, N in {3072,6144,8192,12288}",
+    )
     p.add_argument(
         "--skip-verify",
         action="store_true",
@@ -360,8 +410,11 @@ def main() -> None:
     meta = collect_device_meta(device)
 
     rows_out: List[Dict[str, Any]] = []
-    for (M, N) in cfgs:
-        print(f"bench M={M:<8d} N={N:<6d} dtype={args.dtype} mode={args.mode} ...", flush=True)
+    for M, N in cfgs:
+        print(
+            f"bench M={M:<8d} N={N:<6d} dtype={args.dtype} mode={args.mode} ...",
+            flush=True,
+        )
         (ms_oink, gbps_oink), quack, stats = bench_single(
             M=M,
             N=N,

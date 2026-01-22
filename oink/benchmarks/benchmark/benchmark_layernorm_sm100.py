@@ -97,7 +97,9 @@ def _verify_parity(
 
     y_acc_ours = ErrorStatsAccumulator(total_elems=M * N)
     y_acc_quack = (
-        ErrorStatsAccumulator(total_elems=M * N) if (quack_layernorm is not None and b is None) else None
+        ErrorStatsAccumulator(total_elems=M * N)
+        if (quack_layernorm is not None and b is None)
+        else None
     )
     with torch.no_grad():
         ours = oink_ln.layernorm(
@@ -138,8 +140,12 @@ def _verify_parity(
     # Pure-PyTorch reference (float32 accumulation), matching Quack's unit tests:
     # - compute ref output via F.layer_norm on float32
     # - compute mean/rstd from float32 input
-    rstd_ref_all = torch.empty((M,), device=x.device, dtype=torch.float32) if return_rstd else None
-    mean_ref_all = torch.empty((M,), device=x.device, dtype=torch.float32) if return_mean else None
+    rstd_ref_all = (
+        torch.empty((M,), device=x.device, dtype=torch.float32) if return_rstd else None
+    )
+    mean_ref_all = (
+        torch.empty((M,), device=x.device, dtype=torch.float32) if return_mean else None
+    )
 
     for start, end in iter_row_blocks(M, ref_block_rows):
         x_f32 = x[start:end].float()
@@ -165,16 +171,24 @@ def _verify_parity(
                 rstd_ref_all[start:end] = rstd_ref
 
                 assert rstd_o is not None
-                torch.testing.assert_close(rstd_o[start:end], rstd_ref, **_VERIFY_TOL_STATS)
+                torch.testing.assert_close(
+                    rstd_o[start:end], rstd_ref, **_VERIFY_TOL_STATS
+                )
                 if rstd_q is not None:
-                    torch.testing.assert_close(rstd_q[start:end], rstd_ref, **_VERIFY_TOL_STATS)
+                    torch.testing.assert_close(
+                        rstd_q[start:end], rstd_ref, **_VERIFY_TOL_STATS
+                    )
 
             if return_mean:
                 mean_ref = mean_f32
                 assert mean_o is not None
-                torch.testing.assert_close(mean_o[start:end], mean_ref, **_VERIFY_TOL_STATS)
+                torch.testing.assert_close(
+                    mean_o[start:end], mean_ref, **_VERIFY_TOL_STATS
+                )
                 if mean_q is not None:
-                    torch.testing.assert_close(mean_q[start:end], mean_ref, **_VERIFY_TOL_STATS)
+                    torch.testing.assert_close(
+                        mean_q[start:end], mean_ref, **_VERIFY_TOL_STATS
+                    )
 
     stats: dict[str, object] = {}
     stats.update(error_stats_to_row("ours_err_y", y_acc_ours.finalize()))
@@ -184,30 +198,38 @@ def _verify_parity(
     if return_rstd:
         assert rstd_o is not None and rstd_ref_all is not None
         rstd_acc_ours = ErrorStatsAccumulator(
-            total_elems=int(rstd_ref_all.numel()), p99_target_samples=int(rstd_ref_all.numel())
+            total_elems=int(rstd_ref_all.numel()),
+            p99_target_samples=int(rstd_ref_all.numel()),
         )
         rstd_acc_ours.update(rstd_o, rstd_ref_all)
         stats.update(error_stats_to_row("ours_err_rstd", rstd_acc_ours.finalize()))
         if rstd_q is not None:
             rstd_acc_quack = ErrorStatsAccumulator(
-                total_elems=int(rstd_ref_all.numel()), p99_target_samples=int(rstd_ref_all.numel())
+                total_elems=int(rstd_ref_all.numel()),
+                p99_target_samples=int(rstd_ref_all.numel()),
             )
             rstd_acc_quack.update(rstd_q, rstd_ref_all)
-            stats.update(error_stats_to_row("quack_err_rstd", rstd_acc_quack.finalize()))
+            stats.update(
+                error_stats_to_row("quack_err_rstd", rstd_acc_quack.finalize())
+            )
 
     if return_mean:
         assert mean_o is not None and mean_ref_all is not None
         mean_acc_ours = ErrorStatsAccumulator(
-            total_elems=int(mean_ref_all.numel()), p99_target_samples=int(mean_ref_all.numel())
+            total_elems=int(mean_ref_all.numel()),
+            p99_target_samples=int(mean_ref_all.numel()),
         )
         mean_acc_ours.update(mean_o, mean_ref_all)
         stats.update(error_stats_to_row("ours_err_mean", mean_acc_ours.finalize()))
         if mean_q is not None:
             mean_acc_quack = ErrorStatsAccumulator(
-                total_elems=int(mean_ref_all.numel()), p99_target_samples=int(mean_ref_all.numel())
+                total_elems=int(mean_ref_all.numel()),
+                p99_target_samples=int(mean_ref_all.numel()),
             )
             mean_acc_quack.update(mean_q, mean_ref_all)
-            stats.update(error_stats_to_row("quack_err_mean", mean_acc_quack.finalize()))
+            stats.update(
+                error_stats_to_row("quack_err_mean", mean_acc_quack.finalize())
+            )
 
     return stats
 
@@ -232,7 +254,9 @@ def bench_single(
 
     stats: dict[str, object] = {}
     if verify:
-        stats = _verify_parity(x, w, b, eps=eps, return_rstd=return_rstd, return_mean=return_mean)
+        stats = _verify_parity(
+            x, w, b, eps=eps, return_rstd=return_rstd, return_mean=return_mean
+        )
 
     bytes_io = bytes_io_model_layernorm(
         M,
@@ -285,17 +309,33 @@ def main() -> None:
     print(f"Running on {torch.cuda.get_device_name(device)} (SM{sm})")
 
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"])
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"]
+    )
     p.add_argument("--eps", type=float, default=1e-6)
     p.add_argument("--return-rstd", action="store_true")
     p.add_argument("--return-mean", action="store_true")
-    p.add_argument("--with-bias", action="store_true", help="Benchmark bias path (Quack compare skipped)")
-    p.add_argument("--iters", type=int, default=100, help="Triton do_bench rep_ms (kernel-only).")
+    p.add_argument(
+        "--with-bias",
+        action="store_true",
+        help="Benchmark bias path (Quack compare skipped)",
+    )
+    p.add_argument(
+        "--iters", type=int, default=100, help="Triton do_bench rep_ms (kernel-only)."
+    )
     p.add_argument("--warmup-ms", type=int, default=25)
-    p.add_argument("--csv", type=str, default=None, help="Optional CSV output path; appends rows")
-    p.add_argument("--json", type=str, default=None, help="Optional JSON output path (meta + rows)")
+    p.add_argument(
+        "--csv", type=str, default=None, help="Optional CSV output path; appends rows"
+    )
+    p.add_argument(
+        "--json", type=str, default=None, help="Optional JSON output path (meta + rows)"
+    )
     p.add_argument("--configs", type=str, default="1024x4096,8192x4096")
-    p.add_argument("--quack-suite", action="store_true", help="Run Quack-style batch/seq grid (hidden=4096)")
+    p.add_argument(
+        "--quack-suite",
+        action="store_true",
+        help="Run Quack-style batch/seq grid (hidden=4096)",
+    )
     p.add_argument(
         "--dsv3",
         action="store_true",
@@ -322,7 +362,7 @@ def main() -> None:
     meta = collect_device_meta(device)
 
     rows_out: List[Dict[str, Any]] = []
-    for (M, N) in cfgs:
+    for M, N in cfgs:
         print(f"bench M={M:<8d} N={N:<6d} dtype={args.dtype} ...", flush=True)
         (ms_oink, gbps_oink), quack, stats = bench_single(
             M=M,

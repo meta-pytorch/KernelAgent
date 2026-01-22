@@ -103,9 +103,8 @@ def _convert_logits_2d(x: Tensor) -> cute.Tensor:
     softmax and RMSNorm kernels.
     """
     assert x.dim() == 2, "Input logits must be 2D (M, N)"
-    return (
-        from_dlpack(x.detach(), assumed_align=16)
-        .mark_compact_shape_dynamic(mode=0, stride_order=(0, 1))
+    return from_dlpack(x.detach(), assumed_align=16).mark_compact_shape_dynamic(
+        mode=0, stride_order=(0, 1)
     )
 
 
@@ -136,7 +135,11 @@ class CrossEntropyFwdSM100(ReductionBase):
             else (
                 16
                 if N <= 128
-                else (32 if N <= 3072 else (64 if N <= 6144 else (128 if N <= 16384 else 256)))
+                else (
+                    32
+                    if N <= 3072
+                    else (64 if N <= 6144 else (128 if N <= 16384 else 256))
+                )
             )
         )
 
@@ -183,7 +186,9 @@ class CrossEntropyFwdSM100(ReductionBase):
         num_copy_bits = math.gcd(self.N, 128 // self.dtype.width) * self.dtype.width
         tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=num_copy_bits)
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         num_warps = num_threads // cute.arch.WARP_SIZE
         kernel = (
@@ -267,7 +272,9 @@ class CrossEntropyFwdSM100(ReductionBase):
             cute.make_ordered_layout(tiler_mn, order=(1, 0)),
             byte_alignment=16,
         )
-        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(smem, tv_layout)
+        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(
+            smem, tv_layout
+        )
 
         # Copy setup: gmem -> smem via cp.async, 128-bit or narrower as needed.
         num_copy_elems_X = tv_layout.shape[1][0]
@@ -277,7 +284,9 @@ class CrossEntropyFwdSM100(ReductionBase):
             gX.element_type,
             num_bits_per_copy=num_copy_bits_X,
         )
-        thr_copy_X = cute.make_tiled_copy(copy_atom_load_X, tv_layout, tiler_mn).get_slice(tidx)
+        thr_copy_X = cute.make_tiled_copy(
+            copy_atom_load_X, tv_layout, tiler_mn
+        ).get_slice(tidx)
 
         tXgX = thr_copy_X.partition_S(gX)
         tXsX = thr_copy_X.partition_D(sX)
@@ -414,13 +423,21 @@ class CrossEntropyBackwardSM100:
             else (
                 16
                 if N <= 128
-                else (32 if N <= 3072 else (64 if N <= 6144 else (128 if N <= 16384 else 256)))
+                else (
+                    32
+                    if N <= 3072
+                    else (64 if N <= 6144 else (128 if N <= 16384 else 256))
+                )
             )
         )
 
-    def _get_tv_layout(self, num_copy_bits: int = 128) -> tuple[cute.Shape, cute.Layout]:
+    def _get_tv_layout(
+        self, num_copy_bits: int = 128
+    ) -> tuple[cute.Shape, cute.Layout]:
         vecsize = num_copy_bits // self.dtype.width
-        assert self.N % vecsize == 0, f"Input N {self.N} is not divisible by vector size {vecsize}"
+        assert self.N % vecsize == 0, (
+            f"Input N {self.N} is not divisible by vector size {vecsize}"
+        )
         N = min(self.N, 16384)
         num_threads = 128 if N <= 16384 else 256
         threads_per_row = self._calculate_threads_per_row()
@@ -452,7 +469,9 @@ class CrossEntropyBackwardSM100:
         num_copy_bits = math.gcd(self.N, 128 // self.dtype.width) * self.dtype.width
         tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=num_copy_bits)
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         # Broadcast (M,) tensors along the N dimension with stride 0.
         mDLoss, mTarget, mLSE = [
@@ -564,8 +583,12 @@ class CrossEntropyBackwardSM100:
             gdX.element_type,
             num_bits_per_copy=num_copy_bits_X,
         )
-        thr_copy_X = cute.make_tiled_copy(copy_atom_load_X, tv_layout, tiler_mn).get_slice(tidx)
-        thr_copy_dX = cute.make_tiled_copy(copy_atom_store_dX, tv_layout, tiler_mn).get_slice(tidx)
+        thr_copy_X = cute.make_tiled_copy(
+            copy_atom_load_X, tv_layout, tiler_mn
+        ).get_slice(tidx)
+        thr_copy_dX = cute.make_tiled_copy(
+            copy_atom_store_dX, tv_layout, tiler_mn
+        ).get_slice(tidx)
 
         tXgX = thr_copy_X.partition_S(gX)
         tXsX = thr_copy_X.partition_D(sX)
@@ -898,8 +921,14 @@ def _cross_entropy_forward_ptr_into(
     assert logits.is_cuda and logits.dim() == 2
     assert target.is_cuda and target.dim() == 1 and target.shape[0] == logits.shape[0]
     assert target.dtype is torch.int64
-    assert loss.is_cuda and loss.shape == (logits.shape[0],) and loss.dtype is torch.float32
-    assert lse.is_cuda and lse.shape == (logits.shape[0],) and lse.dtype is torch.float32
+    assert (
+        loss.is_cuda
+        and loss.shape == (logits.shape[0],)
+        and loss.dtype is torch.float32
+    )
+    assert (
+        lse.is_cuda and lse.shape == (logits.shape[0],) and lse.dtype is torch.float32
+    )
 
     M, N = logits.shape
     device_index = logits.get_device()
@@ -991,10 +1020,18 @@ def _cross_entropy_backward_ptr_into(
     assert logits.is_cuda and logits.dim() == 2
     assert target.is_cuda and target.dim() == 1 and target.shape[0] == logits.shape[0]
     assert target.dtype is torch.int64
-    assert dloss.is_cuda and dloss.shape == (logits.shape[0],) and dloss.dtype is torch.float32
-    assert lse.is_cuda and lse.shape == (logits.shape[0],) and lse.dtype is torch.float32
+    assert (
+        dloss.is_cuda
+        and dloss.shape == (logits.shape[0],)
+        and dloss.dtype is torch.float32
+    )
+    assert (
+        lse.is_cuda and lse.shape == (logits.shape[0],) and lse.dtype is torch.float32
+    )
     assert dx.is_cuda and dx.shape == logits.shape and dx.dtype == logits.dtype
-    assert dx.stride() == logits.stride(), "Pointer path expects dx to match logits strides"
+    assert dx.stride() == logits.stride(), (
+        "Pointer path expects dx to match logits strides"
+    )
 
     M, N = logits.shape
     device_index = logits.get_device()
@@ -1060,7 +1097,9 @@ def _cross_entropy_backward_ptr_into(
         mem_space=rt.AddressSpace.gmem,
         assumed_align=4,
     )
-    ptr_dx = rt.make_ptr(dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16)
+    ptr_dx = rt.make_ptr(
+        dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
     ptr_lse = rt.make_ptr(
         cutlass.Float32,
         lse.data_ptr(),
@@ -1169,7 +1208,9 @@ def verify_cross_entropy_parity(
         mask = torch.rand(M, device=device) < 0.1
         target[mask] = ignore_index
 
-    loss, lse = cross_entropy_forward(logits, target, ignore_index=ignore_index, reduction="none")
+    loss, lse = cross_entropy_forward(
+        logits, target, ignore_index=ignore_index, reduction="none"
+    )
 
     logits_ref = logits.detach().clone().requires_grad_()
     target_ref = target.detach().clone()
