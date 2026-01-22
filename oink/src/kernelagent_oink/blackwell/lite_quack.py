@@ -39,7 +39,7 @@ import cutlass.cute as cute
 from cutlass import Float32, Int32, const_expr
 from cutlass.cute.runtime import from_dlpack
 from cutlass.cutlass_dsl import T, dsl_user_op
-from cutlass._mlir.dialects import llvm, vector
+from cutlass._mlir.dialects import llvm, nvvm, vector
 
 
 def _parse_version_tuple(version: str) -> tuple[int, int, int]:
@@ -68,6 +68,24 @@ _CUTLASS_DSL_VERSION = _cutlass_dsl_version()
 _KERNEL_ACCEPTS_LAYOUT_ARGS = (
     _CUTLASS_DSL_VERSION is not None and _CUTLASS_DSL_VERSION < (4, 3, 4)
 )
+
+# Cache device properties lookups (notably `multi_processor_count`) since some
+# dispatch paths call `get_sm_count` inside tight benchmark loops.
+_DEVICE_NUM_SMS_CACHE: dict[int, int] = {}
+
+
+def get_num_sms(device: torch.device) -> int:
+    """Return the number of SMs for a CUDA device (cached)."""
+    device_index = device.index
+    if device_index is None:
+        device_index = torch.cuda.current_device()
+    device_index = int(device_index)
+    cached = _DEVICE_NUM_SMS_CACHE.get(device_index)
+    if cached is not None:
+        return cached
+    num_sms = int(torch.cuda.get_device_properties(device_index).multi_processor_count)
+    _DEVICE_NUM_SMS_CACHE[device_index] = num_sms
+    return num_sms
 
 
 # -------------------------
@@ -176,6 +194,43 @@ def store_shared_remote(
         is_align_stack=False,
         asm_dialect=llvm.AsmDialect.AD_ATT,
     )
+
+
+@dsl_user_op
+def atomic_add_f32(
+    a: float | Float32, gmem_ptr: cute.Pointer, *, loc=None, ip=None
+) -> Float32:
+    """Atomic add into global memory (float32)."""
+    return nvvm.atomicrmw(
+        res=T.f32(),
+        op=nvvm.AtomicOpKind.FADD,
+        ptr=gmem_ptr.llvm_ptr,
+        a=Float32(a).ir_value(loc=loc, ip=ip),
+        loc=loc,
+        ip=ip,
+    )
+
+
+@cute.jit
+def atomic_add_tensor_f32(
+    src: cute.Tensor,
+    dst: cute.Tensor,
+    *,
+    pred: Optional[cute.Tensor] = None,
+) -> None:
+    """Atomic-add a register fragment into a GMEM tile (float32)."""
+    if const_expr(pred is None):
+        for i in cutlass.range_constexpr(cute.size(src.shape)):
+            coord = cute.idx2crd(i, src.shape)
+            atomic_add_f32(src[i], elem_pointer(dst, coord))
+    else:
+        for i in cutlass.range_constexpr(cute.size(src.shape)):
+            # CuTeDSL 4.3.4+ disallows introducing new tuple-typed values inside
+            # a dynamic `if`. Compute `coord` unconditionally, then predicate the
+            # atomic update.
+            coord = cute.idx2crd(i, src.shape)
+            if pred[i]:
+                atomic_add_f32(src[i], elem_pointer(dst, coord))
 
 
 @cute.jit
@@ -318,9 +373,7 @@ def warp_reduce(
         for i in cutlass.range_constexpr(cute.size(val.shape)):
             res[i] = warp_reduce(res[i], op, width)
         return res.load()
-    for i in cutlass.range_constexpr(int(math.log2(width))):
-        val = op(val, cute.arch.shuffle_sync_bfly(val, offset=1 << i))
-    return val
+    return cute.arch.warp_reduction(val, op, threads_in_group=width)
 
 
 @cute.jit
@@ -623,7 +676,10 @@ def get_copy_atom(
 ) -> cute.CopyAtom:
     from cutlass.cute.nvgpu import cpasync
 
-    num_copy_bits = const_expr(min(128, num_copy_elems * dtype.width))
+    # cp.async is limited to 128b per op; synchronous vectorized copies can go wider.
+    max_bits = const_expr(128 if is_async else 256)
+    num_copy_bits = const_expr(min(max_bits, num_copy_elems * dtype.width))
+    # Match Quack's default cp.async cache policy (leave cache_mode unspecified).
     copy_op = cpasync.CopyG2SOp() if is_async else cute.nvgpu.CopyUniversalOp()
     return cute.make_copy_atom(
         copy_op, dtype, num_bits_per_copy=num_copy_bits, loc=loc, ip=ip
@@ -678,6 +734,20 @@ class ReductionBase:
     def _get_tv_layout(
         self, num_copy_bits: int = 128
     ) -> Tuple[cute.Shape, cute.Layout]:
+        """Return (tiler_mn, tv_layout) for SM100 reduction kernels.
+
+        This intentionally mirrors Quack's `ReductionBase._get_tiled_copy(...)`:
+        - `tiler_mn` spans the full N range for the CTA, including any "K-loop"
+          repeats (`num_blocks_N`).
+        - `tv_layout` is the *tiled* thread/value layout used by CuTe's copy
+          partitioning (does **not** bake in `num_blocks_N`), matching
+          `quack.copy_utils.tiled_copy_2d(...).layout_tv_tiled`.
+        """
+        if num_copy_bits > 128:
+            raise ValueError(
+                f"num_copy_bits={num_copy_bits} exceeds 128b; Quack-style SM100 reduction "
+                "tiling assumes <=128b vectorization (cp.async and common CopyAtoms)."
+            )
         vecsize = num_copy_bits // self.dtype.width
         assert self.N % vecsize == 0, (
             f"Input N {self.N} is not divisible by vector size {vecsize}"
@@ -692,30 +762,56 @@ class ReductionBase:
         )
         cols_per_block = num_threads // threads_per_row
         tiler_mn = (cols_per_block, vecsize * num_blocks_N * threads_per_row)
-        tv_layout = cute.make_layout(
-            ((threads_per_row, cols_per_block), (vecsize, num_blocks_N)),
-            stride=(
-                (vecsize * cols_per_block, 1),
-                (cols_per_block, cols_per_block * vecsize * threads_per_row),
-            ),
+
+        # Construct the same tv layout that Quack gets from `tiled_copy_2d(...).layout_tv_tiled`.
+        copy_atom = cute.make_copy_atom(
+            cute.nvgpu.CopyUniversalOp(),
+            self.dtype,
+            num_bits_per_copy=num_copy_bits,
         )
+        thr_layout = cute.make_ordered_layout(
+            (cols_per_block, threads_per_row),
+            order=(1, 0),
+        )
+        val_layout = cute.make_layout((1, vecsize))
+        tv_layout = cute.make_tiled_copy_tv(
+            copy_atom, thr_layout, val_layout
+        ).layout_tv_tiled
         return tiler_mn, tv_layout
 
     def _smem_size_in_bytes(self, tiler_mn, num_warps: int) -> int:
-        return (
-            cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn))
-            + self.stage
-            * num_warps
-            * self.cluster_n
-            * (self.reduction_dtype.width // 8)
-            + self.stage * (cutlass.Int64.width // 8)
+        # Mirror the allocation order used by the SM100 reduction kernels:
+        #   1) sX (byte_alignment=16)
+        #   2) reduction_buffer (byte_alignment=8)
+        #   3) mbar_ptr (Int64, 8B)
+        #
+        # CuTeDSL's SmemAllocator may insert padding between allocations to satisfy
+        # alignment. Be conservative and round up offsets accordingly so we never
+        # under-allocate dynamic shared memory.
+
+        def _align_up(x: int, align: int) -> int:
+            return ((x + align - 1) // align) * align
+
+        sx_bytes = int(cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn)))
+        reduction_bytes = int(
+            self.stage * num_warps * self.cluster_n * (self.reduction_dtype.width // 8)
         )
+        mbar_bytes = int(self.stage * (cutlass.Int64.width // 8))
+
+        offset = _align_up(sx_bytes, 16)
+        offset = _align_up(offset, 8) + reduction_bytes
+        offset = _align_up(offset, 8) + mbar_bytes
+        return int(offset)
 
     def _get_reduction_buffer_layout(
         self, tv_layout: cute.Layout, cluster_n: int
     ) -> cute.Layout:
         num_warps = cute.size(tv_layout, mode=[0]) // cute.arch.WARP_SIZE
-        warps_per_row = max(tv_layout.shape[0][0] // cute.arch.WARP_SIZE, 1)
+        warps_per_row = (
+            num_warps
+            if cutlass.const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else max(tv_layout.shape[0][0] // cute.arch.WARP_SIZE, 1)
+        )
         return cute.make_ordered_layout(
             (num_warps // warps_per_row, (warps_per_row, cluster_n), self.stage),
             order=(1, 0, 2),
@@ -730,7 +826,7 @@ class ReductionBase:
         reduction_buffer = smem.allocate_tensor(
             self.reduction_dtype,
             self._get_reduction_buffer_layout(tv_layout, self.cluster_n),
-            byte_alignment=4,
+            byte_alignment=8,
         )
         if cutlass.const_expr(self.cluster_n > 1):
             mbar_ptr = smem.allocate_array(
@@ -771,6 +867,9 @@ class RMSNormBackward(ReductionBase):
         # 2 stages for double buffering when computing mean of x_hat * wdy
         super().__init__(dtype, N, stage=2, reduction_dtype=Float32)
         self.reload_wdy = None if N <= 16 * 1024 else "smem"
+        # Optional optimization: atomically accumulate mdW into a single (N,)
+        # buffer instead of writing an (sm_count, N) partial buffer + torch.sum.
+        self.atomic_dw = False
         if self.N > 128 * 1024 and self.dtype.width >= 32:
             raise ValueError(
                 "RMSNormBackward does not support N > 128k with dtype >= 32 bits"
@@ -856,15 +955,18 @@ class RMSNormBackward(ReductionBase):
         largest_dtype_width = const_expr(
             max(
                 mX.element_type.width,
+                mW.element_type.width if mW is not None else 0,
                 mdO.element_type.width,
                 mdX.element_type.width,
                 mdResO.element_type.width if mdResO is not None else 0,
                 mdRes.element_type.width if mdRes is not None else 0,
             )
         )
-        tiler_mn, tv_layout = self._get_tv_layout(
-            num_copy_bits=128 // largest_dtype_width * mX.element_type.width
-        )
+        # Quack-style policy: cap the *largest* dtype to 128b, then scale the
+        # activation copy width down proportionally (e.g. fp16 + fp32-weight
+        # => 64b activation vectors so the fp32 path stays at 128b).
+        num_copy_bits = const_expr(128 // largest_dtype_width * mX.element_type.width)
+        tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=int(num_copy_bits))
         num_threads = (
             cute.size(tv_layout, mode=[0])
             if _KERNEL_ACCEPTS_LAYOUT_ARGS
@@ -941,12 +1043,25 @@ class RMSNormBackward(ReductionBase):
         else:
             mbar_full_ptr, mbar_empty_ptr = None, None
 
-        num_copy_elems_X = tv_layout.shape[1][0]
+        num_copy_elems_X = (
+            tv_layout.shape[1]
+            if cutlass.const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if cutlass.const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
         copy_atom_load_X = get_copy_atom(
             mX.element_type, num_copy_elems_X, is_async=False
         )
-        thr_copy_X = cute.make_tiled_copy(
-            copy_atom_load_X, tv_layout, tiler_mn
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems_X))
+        thr_copy_X = cute.make_tiled_copy_tv(
+            copy_atom_load_X, thr_layout, val_layout
         ).get_slice(tidx)
         copy_fn = partial(copy, num_copy_elems=num_copy_elems_X)
 
@@ -1025,7 +1140,6 @@ class RMSNormBackward(ReductionBase):
         if const_expr(self.cluster_n > 1):
             cute.arch.cluster_wait()
 
-        threads_per_row = tv_layout.shape[0][0]
         if const_expr(mdW is not None):
             tXrdW.fill(0.0)
         if const_expr(mdB is not None):
@@ -1165,7 +1279,10 @@ class RMSNormBackward(ReductionBase):
                         )
                         cute.autovec_copy(tXsdW_other, tXrdW_other)
                         tXrdW.store(tXrdW.load() + tXrdW_other.load())
-                    copy_fn(tXrdW, tXgdW, pred=tXpX)
+                    if const_expr(self.atomic_dw):
+                        atomic_add_tensor_f32(tXrdW, tXgdW, pred=tXpX)
+                    else:
+                        copy_fn(tXrdW, tXgdW, pred=tXpX)
                 cute.arch.barrier()
             if const_expr(mdB is not None):
                 sdB = cute.make_tensor(
@@ -1190,7 +1307,10 @@ class RMSNormBackward(ReductionBase):
                     copy_fn(tXrdB, tXgdB, pred=tXpX)
         else:
             if const_expr(mdW is not None):
-                copy_fn(tXrdW, tXgdW, pred=tXpX)
+                if const_expr(self.atomic_dw):
+                    atomic_add_tensor_f32(tXrdW, tXgdW, pred=tXpX)
+                else:
+                    copy_fn(tXrdW, tXgdW, pred=tXpX)
             if const_expr(mdB is not None):
                 copy_fn(tXrdB, tXgdB, pred=tXpX)
 
@@ -1295,8 +1415,7 @@ def get_sm_count(
         increased to improve SM occupancy, matching the existing SM100
         tuning used by both RMSNorm and LayerNorm.
     """
-    props = torch.cuda.get_device_properties(device)
-    num_sms = props.multi_processor_count
+    num_sms = get_num_sms(device)
 
     sm_count_multiple = (
         16

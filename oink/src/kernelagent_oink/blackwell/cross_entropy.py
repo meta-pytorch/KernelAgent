@@ -79,11 +79,17 @@ from cutlass import Boolean, Float32, Int32, const_expr
 from cutlass.cute import runtime as rt
 from cutlass.cute.runtime import from_dlpack
 
+from kernelagent_oink.blackwell.fast_launch import (
+    StableI32Arg,
+    disable_fast_launch,
+    fast_launch_enabled,
+    set_runtime_ptr,
+    tls_cache as _tls_fast_launch_cache,
+)
 from kernelagent_oink.blackwell.lite_quack import (
     _KERNEL_ACCEPTS_LAYOUT_ARGS,
     TORCH2CUTE_DTYPE,
     ReductionBase,
-    domain_offset_i64,
     fill_oob,
     online_softmax_reduce,
     predicate_k,
@@ -93,6 +99,454 @@ _FWD_COMPILE_CACHE: dict[tuple[type[cutlass.Numeric], int], cute.Kernel] = {}
 _BWD_COMPILE_CACHE: dict[tuple[type[cutlass.Numeric], int], cute.Kernel] = {}
 _PTR_FWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
 _PTR_BWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
+_PTR_FWDBWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
+
+
+class _PtrCrossEntropyFastLaunch:
+    def __init__(
+        self,
+        *,
+        compiled: object,
+        executor: object,
+        capi_func: object,
+        ptr_logits: object,
+        ptr_target: object,
+        ptr_aux_a: object,
+        ptr_aux_b: object,
+        ptr_aux_c: object | None,
+        arg_m: StableI32Arg,
+        arg_ld: StableI32Arg,
+        arg_ignore_index: StableI32Arg,
+        stream: cuda.CUstream,
+        packed_args: object,
+        keepalive: tuple[object, ...],
+        logits_align: int,
+        target_align: int,
+        aux_a_align: int,
+        aux_b_align: int,
+        aux_c_align: int | None,
+    ):
+        self._compiled = compiled
+        self._executor = executor
+        self._capi_func = capi_func
+        self._ptr_logits = ptr_logits
+        self._ptr_target = ptr_target
+        self._ptr_aux_a = ptr_aux_a
+        self._ptr_aux_b = ptr_aux_b
+        self._ptr_aux_c = ptr_aux_c
+        self._arg_m = arg_m
+        self._arg_ld = arg_ld
+        self._arg_ignore_index = arg_ignore_index
+        self._stream = stream
+        self._packed_args = packed_args
+        self._keepalive = keepalive
+        self._logits_align = int(logits_align)
+        self._target_align = int(target_align)
+        self._aux_a_align = int(aux_a_align)
+        self._aux_b_align = int(aux_b_align)
+        self._aux_c_align = int(aux_c_align) if aux_c_align is not None else None
+
+        self._use_fast_launch = True
+        self._cuda_result = getattr(executor, "cuda_result", None)
+
+        self._last_logits_ptr = -1
+        self._last_target_ptr = -1
+        self._last_aux_a_ptr = -1
+        self._last_aux_b_ptr = -1
+        self._last_aux_c_ptr = -1
+        self._last_m = -1
+        self._last_ld = -1
+        self._last_ignore_index = None
+
+    def launch(
+        self,
+        *,
+        logits_ptr: int,
+        target_ptr: int,
+        aux_a_ptr: int,
+        aux_b_ptr: int,
+        aux_c_ptr: int | None,
+        M: int,
+        ld: int,
+        ignore_index: int,
+        stream_handle: int,
+        dtype_logits: type[cutlass.Numeric],
+        aux_a_dtype: type[cutlass.Numeric],
+        aux_b_dtype: type[cutlass.Numeric],
+        aux_c_dtype: type[cutlass.Numeric] | None,
+    ) -> None:
+        if not fast_launch_enabled() or not self._use_fast_launch:
+            self._fallback_launch(
+                logits_ptr=logits_ptr,
+                target_ptr=target_ptr,
+                aux_a_ptr=aux_a_ptr,
+                aux_b_ptr=aux_b_ptr,
+                aux_c_ptr=aux_c_ptr,
+                M=M,
+                ld=ld,
+                ignore_index=ignore_index,
+                stream_handle=stream_handle,
+                dtype_logits=dtype_logits,
+                aux_a_dtype=aux_a_dtype,
+                aux_b_dtype=aux_b_dtype,
+                aux_c_dtype=aux_c_dtype,
+            )
+            return
+
+        if logits_ptr != self._last_logits_ptr:
+            try:
+                set_runtime_ptr(self._ptr_logits, logits_ptr)
+                self._last_logits_ptr = logits_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    logits_ptr=logits_ptr,
+                    target_ptr=target_ptr,
+                    aux_a_ptr=aux_a_ptr,
+                    aux_b_ptr=aux_b_ptr,
+                    aux_c_ptr=aux_c_ptr,
+                    M=M,
+                    ld=ld,
+                    ignore_index=ignore_index,
+                    stream_handle=stream_handle,
+                    dtype_logits=dtype_logits,
+                    aux_a_dtype=aux_a_dtype,
+                    aux_b_dtype=aux_b_dtype,
+                    aux_c_dtype=aux_c_dtype,
+                )
+                return
+
+        if target_ptr != self._last_target_ptr:
+            try:
+                set_runtime_ptr(self._ptr_target, target_ptr)
+                self._last_target_ptr = target_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    logits_ptr=logits_ptr,
+                    target_ptr=target_ptr,
+                    aux_a_ptr=aux_a_ptr,
+                    aux_b_ptr=aux_b_ptr,
+                    aux_c_ptr=aux_c_ptr,
+                    M=M,
+                    ld=ld,
+                    ignore_index=ignore_index,
+                    stream_handle=stream_handle,
+                    dtype_logits=dtype_logits,
+                    aux_a_dtype=aux_a_dtype,
+                    aux_b_dtype=aux_b_dtype,
+                    aux_c_dtype=aux_c_dtype,
+                )
+                return
+
+        if aux_a_ptr != self._last_aux_a_ptr:
+            try:
+                set_runtime_ptr(self._ptr_aux_a, aux_a_ptr)
+                self._last_aux_a_ptr = aux_a_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    logits_ptr=logits_ptr,
+                    target_ptr=target_ptr,
+                    aux_a_ptr=aux_a_ptr,
+                    aux_b_ptr=aux_b_ptr,
+                    aux_c_ptr=aux_c_ptr,
+                    M=M,
+                    ld=ld,
+                    ignore_index=ignore_index,
+                    stream_handle=stream_handle,
+                    dtype_logits=dtype_logits,
+                    aux_a_dtype=aux_a_dtype,
+                    aux_b_dtype=aux_b_dtype,
+                    aux_c_dtype=aux_c_dtype,
+                )
+                return
+
+        if aux_b_ptr != self._last_aux_b_ptr:
+            try:
+                set_runtime_ptr(self._ptr_aux_b, aux_b_ptr)
+                self._last_aux_b_ptr = aux_b_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    logits_ptr=logits_ptr,
+                    target_ptr=target_ptr,
+                    aux_a_ptr=aux_a_ptr,
+                    aux_b_ptr=aux_b_ptr,
+                    aux_c_ptr=aux_c_ptr,
+                    M=M,
+                    ld=ld,
+                    ignore_index=ignore_index,
+                    stream_handle=stream_handle,
+                    dtype_logits=dtype_logits,
+                    aux_a_dtype=aux_a_dtype,
+                    aux_b_dtype=aux_b_dtype,
+                    aux_c_dtype=aux_c_dtype,
+                )
+                return
+
+        if self._ptr_aux_c is not None and aux_c_ptr is not None:
+            if aux_c_ptr != self._last_aux_c_ptr:
+                try:
+                    set_runtime_ptr(self._ptr_aux_c, aux_c_ptr)
+                    self._last_aux_c_ptr = aux_c_ptr
+                except AttributeError:
+                    self._disable_fast_launch()
+                    self._fallback_launch(
+                        logits_ptr=logits_ptr,
+                        target_ptr=target_ptr,
+                        aux_a_ptr=aux_a_ptr,
+                        aux_b_ptr=aux_b_ptr,
+                        aux_c_ptr=aux_c_ptr,
+                        M=M,
+                        ld=ld,
+                        ignore_index=ignore_index,
+                        stream_handle=stream_handle,
+                        dtype_logits=dtype_logits,
+                        aux_a_dtype=aux_a_dtype,
+                        aux_b_dtype=aux_b_dtype,
+                        aux_c_dtype=aux_c_dtype,
+                    )
+                    return
+
+        if M != self._last_m:
+            self._arg_m.set(M)
+            self._last_m = M
+        if ld != self._last_ld:
+            self._arg_ld.set(ld)
+            self._last_ld = ld
+        if ignore_index != self._last_ignore_index:
+            self._arg_ignore_index.set(ignore_index)
+            self._last_ignore_index = int(ignore_index)
+
+        if self._cuda_result is not None:
+            self._cuda_result.value = 0
+        ret = self._capi_func(self._packed_args)  # type: ignore[misc]
+        if ret != 0:
+            raise RuntimeError(f"CuTeDSL capi_func returned non-zero: {ret}")
+        if self._cuda_result is not None:
+            err = int(self._cuda_result.value)
+            if err != 0:
+                raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
+
+    def _disable_fast_launch(self) -> None:
+        self._use_fast_launch = False
+        disable_fast_launch()
+
+    def _fallback_launch(
+        self,
+        *,
+        logits_ptr: int,
+        target_ptr: int,
+        aux_a_ptr: int,
+        aux_b_ptr: int,
+        aux_c_ptr: int | None,
+        M: int,
+        ld: int,
+        ignore_index: int,
+        stream_handle: int,
+        dtype_logits: type[cutlass.Numeric],
+        aux_a_dtype: type[cutlass.Numeric],
+        aux_b_dtype: type[cutlass.Numeric],
+        aux_c_dtype: type[cutlass.Numeric] | None,
+    ) -> None:
+        stream = cuda.CUstream(int(stream_handle))
+        ptr_logits = rt.make_ptr(
+            dtype_logits,
+            int(logits_ptr),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._logits_align,
+        )
+        ptr_target = rt.make_ptr(
+            cutlass.Int64,
+            int(target_ptr),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._target_align,
+        )
+        ptr_aux_a = rt.make_ptr(
+            aux_a_dtype,
+            int(aux_a_ptr),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._aux_a_align,
+        )
+        ptr_aux_b = rt.make_ptr(
+            aux_b_dtype,
+            int(aux_b_ptr),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._aux_b_align,
+        )
+        if (
+            self._ptr_aux_c is not None
+            and aux_c_ptr is not None
+            and aux_c_dtype is not None
+        ):
+            ptr_aux_c = rt.make_ptr(
+                aux_c_dtype,
+                int(aux_c_ptr),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=int(self._aux_c_align or 0),
+            )
+            self._compiled(
+                ptr_logits,
+                ptr_target,
+                ptr_aux_a,
+                ptr_aux_b,
+                ptr_aux_c,
+                Int32(int(M)),
+                Int32(int(ld)),
+                Int32(int(ignore_index)),
+                stream,
+            )
+        else:
+            self._compiled(
+                ptr_logits,
+                ptr_target,
+                ptr_aux_a,
+                ptr_aux_b,
+                Int32(int(M)),
+                Int32(int(ld)),
+                Int32(int(ignore_index)),
+                stream,
+            )
+
+
+def _get_fast_ptr_cross_entropy_launcher(
+    *,
+    compiled: object,
+    dtype_logits: type[cutlass.Numeric],
+    N: int,
+    device_index: int,
+    stream_handle: int,
+    mode: Literal["fwd", "bwd", "fwd_bwd"],
+) -> _PtrCrossEntropyFastLaunch | None:
+    if not fast_launch_enabled():
+        return None
+    key = (
+        f"ptr_fast_{mode}",
+        id(compiled),
+        int(N),
+        dtype_logits,
+        int(device_index),
+        int(stream_handle),
+    )
+    cache = _tls_fast_launch_cache()
+    cached = cache.get(key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    ptr_logits = rt.make_ptr(
+        dtype_logits, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_target = rt.make_ptr(
+        cutlass.Int64, 0, mem_space=rt.AddressSpace.gmem, assumed_align=8
+    )
+    if mode == "fwd":
+        ptr_aux_a = rt.make_ptr(
+            cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4
+        )  # loss
+        ptr_aux_b = rt.make_ptr(
+            cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4
+        )  # lse
+        ptr_aux_c = None
+        aux_align_b = 4
+        aux_align_c = None
+    elif mode == "bwd":
+        ptr_aux_a = rt.make_ptr(
+            cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4
+        )  # dloss
+        ptr_aux_b = rt.make_ptr(
+            dtype_logits, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )  # dx
+        ptr_aux_c = rt.make_ptr(
+            cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4
+        )  # lse
+        aux_align_b = 16
+        aux_align_c = 4
+    elif mode == "fwd_bwd":
+        ptr_aux_a = rt.make_ptr(
+            cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4
+        )  # dloss
+        ptr_aux_b = rt.make_ptr(
+            dtype_logits, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )  # dx
+        ptr_aux_c = None
+        aux_align_b = 16
+        aux_align_c = None
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
+
+    arg_m = StableI32Arg(0)
+    arg_ld = StableI32Arg(N)
+    arg_ignore_index = StableI32Arg(-100)
+    stream = cuda.CUstream(int(stream_handle))
+    executor = compiled.to(device_index)  # type: ignore[attr-defined]
+
+    try:
+        if ptr_aux_c is not None:
+            exe_args, adapted_args = executor.generate_execution_args(
+                ptr_logits,
+                ptr_target,
+                ptr_aux_a,
+                ptr_aux_b,
+                ptr_aux_c,
+                arg_m,
+                arg_ld,
+                arg_ignore_index,
+                stream,
+            )
+        else:
+            exe_args, adapted_args = executor.generate_execution_args(
+                ptr_logits,
+                ptr_target,
+                ptr_aux_a,
+                ptr_aux_b,
+                arg_m,
+                arg_ld,
+                arg_ignore_index,
+                stream,
+            )
+        packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
+        capi_func = compiled.capi_func  # type: ignore[attr-defined]
+    except AttributeError:
+        disable_fast_launch()
+        return None
+
+    keepalive: tuple[object, ...] = (
+        executor,
+        ptr_logits,
+        ptr_target,
+        ptr_aux_a,
+        ptr_aux_b,
+        ptr_aux_c,
+        arg_m,
+        arg_ld,
+        arg_ignore_index,
+        stream,
+        *adapted_args,
+    )
+    launcher = _PtrCrossEntropyFastLaunch(
+        compiled=compiled,
+        executor=executor,
+        capi_func=capi_func,
+        ptr_logits=ptr_logits,
+        ptr_target=ptr_target,
+        ptr_aux_a=ptr_aux_a,
+        ptr_aux_b=ptr_aux_b,
+        ptr_aux_c=ptr_aux_c,
+        arg_m=arg_m,
+        arg_ld=arg_ld,
+        arg_ignore_index=arg_ignore_index,
+        stream=stream,
+        packed_args=packed_args,
+        keepalive=keepalive,
+        logits_align=16,
+        target_align=8,
+        aux_a_align=4,
+        aux_b_align=aux_align_b,
+        aux_c_align=aux_align_c,
+    )
+    cache[key] = launcher
+    return launcher
 
 
 def _convert_logits_2d(x: Tensor) -> cute.Tensor:
@@ -261,9 +715,10 @@ class CrossEntropyFwdSM100(ReductionBase):
         shape: cute.Shape = mX.shape
         idX = cute.make_identity_tensor(shape)
 
-        # Slice per-CTA region; use 64-bit indexing for large tensors.
-        mX_off = domain_offset_i64((bidx * tiler_mn[0], 0), mX)
-        gX = cute.local_tile(mX_off, tiler_mn, (0, cluster_y))
+        # Quack-style CTA tiling: let CuTe compute the CTA offsets directly.
+        # (Avoids the extra 64-bit address arithmetic in `domain_offset_i64` on
+        # the common inference/benchmark sizes.)
+        gX = cute.local_tile(mX, tiler_mn, (bidx, cluster_y))
         cX = cute.local_tile(idX, tiler_mn, (bidx, cluster_y))
 
         smem = cutlass.utils.SmemAllocator()
@@ -277,15 +732,28 @@ class CrossEntropyFwdSM100(ReductionBase):
         )
 
         # Copy setup: gmem -> smem via cp.async, 128-bit or narrower as needed.
-        num_copy_elems_X = tv_layout.shape[1][0]
+        num_copy_elems_X = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
         num_copy_bits_X = mX.element_type.width * num_copy_elems_X
         copy_atom_load_X = cute.make_copy_atom(
             cute.nvgpu.cpasync.CopyG2SOp(),
             gX.element_type,
             num_bits_per_copy=num_copy_bits_X,
         )
-        thr_copy_X = cute.make_tiled_copy(
-            copy_atom_load_X, tv_layout, tiler_mn
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems_X))
+        thr_copy_X = cute.make_tiled_copy_tv(
+            copy_atom_load_X, thr_layout, val_layout
         ).get_slice(tidx)
 
         tXgX = thr_copy_X.partition_S(gX)
@@ -321,14 +789,11 @@ class CrossEntropyFwdSM100(ReductionBase):
 
         should_ignore = Boolean(target == ignore_index)
 
-        # Load the target logit if this row is not ignored. Use Int64 indexing
-        # to safely handle very large tensors.
+        # Load the target logit if this row is not ignored.
         target_logit = Float32.zero
         if row < shape[0] and tXcX[0][1] == 0 and not should_ignore:
-            mX_row = domain_offset_i64((row, 0), mX)
-            target_logit = Float32(mX_row[0, target])
+            target_logit = Float32(mX[row, target])
 
-        threads_per_row = tv_layout.shape[0][0]
         max_x, denom, _ = online_softmax_reduce(
             x,
             threads_per_row,
@@ -392,6 +857,305 @@ class CrossEntropyFwdSM100(ReductionBase):
                 mTarget,
                 mLoss,
                 mLSE,
+                ignore_index,
+                tv_layout,
+                tiler_mn,
+            )
+
+
+class CrossEntropyFwdBwdSM100(ReductionBase):
+    """Fused cross-entropy forward+backward producing dx from (logits, target, dloss).
+
+    This avoids materializing the intermediate `lse` (and loss) in global memory
+    when the only desired output is `dx` for `reduction="none"` semantics.
+    """
+
+    def __init__(self, dtype: Type[cutlass.Numeric], N: int):
+        super().__init__(dtype, N, stage=1, reduction_dtype=cutlass.Int64)
+
+    def _calculate_threads_per_row(self) -> int:
+        N = self.N
+        return (
+            8
+            if N <= 64
+            else (
+                16
+                if N <= 128
+                else (
+                    32
+                    if N <= 3072
+                    else (64 if N <= 6144 else (128 if N <= 16384 else 256))
+                )
+            )
+        )
+
+    def _set_cluster_n(self) -> None:
+        N = self.N
+        if const_expr(self.dtype.width == 16):
+            cluster_n = (
+                1
+                if N <= 16 * 1024
+                else (
+                    2
+                    if N <= 32 * 1024
+                    else (4 if N <= 64 * 1024 else (8 if N <= 128 * 1024 else 16))
+                )
+            )
+        else:
+            cluster_n = (
+                1
+                if N <= 16 * 1024
+                else (
+                    2
+                    if N <= 64 * 1024
+                    else (4 if N <= 128 * 1024 else (8 if N <= 256 * 1024 else 16))
+                )
+            )
+        self.cluster_n = cluster_n
+
+    @cute.jit
+    def __call__(
+        self,
+        mX: cute.Tensor,  # (M, N)
+        mTarget: cute.Tensor,  # (M,)
+        mDLoss: cute.Tensor,  # (M,)
+        mdX: cute.Tensor,  # (M, N)
+        ignore_index: Int32,
+        stream: cuda.CUstream,
+    ) -> None:
+        assert mX.element_type == self.dtype
+        assert mdX.element_type == self.dtype
+        self._set_cluster_n()
+        num_copy_bits = math.gcd(self.N, 128 // self.dtype.width) * self.dtype.width
+        tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=num_copy_bits)
+        num_threads = (
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
+        )
+        num_warps = num_threads // cute.arch.WARP_SIZE
+        kernel = (
+            self.kernel(
+                mX,
+                mTarget,
+                mDLoss,
+                mdX,
+                ignore_index,
+                tv_layout,
+                tiler_mn,
+            )
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self.kernel(
+                mX,
+                mTarget,
+                mDLoss,
+                mdX,
+                ignore_index,
+            )
+        )
+        kernel.launch(
+            grid=[cute.ceil_div(mX.shape[0], tiler_mn[0]), self.cluster_n, 1],
+            block=[num_threads, 1, 1],
+            cluster=[1, self.cluster_n, 1] if const_expr(self.cluster_n > 1) else None,
+            smem=self._smem_size_in_bytes(tiler_mn, num_warps),
+            stream=stream,
+        )
+
+    @cute.jit
+    def launch_from_ptrs(
+        self,
+        ptr_logits: cute.Pointer,
+        ptr_target: cute.Pointer,
+        ptr_dloss: cute.Pointer,
+        ptr_dx: cute.Pointer,
+        M: Int32,
+        ld: Int32,
+        ignore_index: Int32,
+        stream: cuda.CUstream,
+    ) -> None:
+        """Pointer-based entrypoint that bypasses DLPack conversions."""
+        ld_assumed = cute.assume(ld, divby=128 // self.dtype.width)
+        layout_mn = cute.make_layout((M, self.N), stride=(ld_assumed, 1))
+        layout_m = cute.make_layout((M,), stride=(1,))
+        mX = cute.make_tensor(ptr_logits, layout_mn)
+        mdX = cute.make_tensor(ptr_dx, layout_mn)
+        mTarget = cute.make_tensor(ptr_target, layout_m)
+        mDLoss = cute.make_tensor(ptr_dloss, layout_m)
+        self.__call__(mX, mTarget, mDLoss, mdX, ignore_index, stream)
+
+    @cute.jit
+    def _kernel_impl(
+        self,
+        mX: cute.Tensor,  # (M, N)
+        mTarget: cute.Tensor,  # (M,)
+        mDLoss: cute.Tensor,  # (M,)
+        mdX: cute.Tensor,  # (M, N)
+        ignore_index: Int32,
+        tv_layout: cute.Layout,
+        tiler_mn: cute.Shape,
+    ) -> None:
+        tidx, _, _ = cute.arch.thread_idx()
+        bidx, _, _ = cute.arch.block_idx()
+        cluster_y = (
+            const_expr(0)
+            if const_expr(self.cluster_n == 1)
+            else cute.arch.block_idx()[1]
+        )
+
+        shape: cute.Shape = mX.shape
+        idX = cute.make_identity_tensor(shape)
+
+        gX, gdX, cX = [
+            cute.local_tile(mT, tiler_mn, (bidx, cluster_y)) for mT in (mX, mdX, idX)
+        ]
+
+        smem = cutlass.utils.SmemAllocator()
+        sX = smem.allocate_tensor(
+            mX.element_type,
+            cute.make_ordered_layout(tiler_mn, order=(1, 0)),
+            byte_alignment=16,
+        )
+        reduction_buffer, mbar_ptr = self._allocate_reduction_buffer_and_mbar(
+            smem, tv_layout
+        )
+
+        num_copy_elems_X = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
+        num_copy_bits_X = mX.element_type.width * num_copy_elems_X
+        copy_atom_load_X = cute.make_copy_atom(
+            cute.nvgpu.cpasync.CopyG2SOp(),
+            gX.element_type,
+            num_bits_per_copy=num_copy_bits_X,
+        )
+        copy_atom_store_dX = cute.make_copy_atom(
+            cute.nvgpu.CopyUniversalOp(),
+            gdX.element_type,
+            num_bits_per_copy=num_copy_bits_X,
+        )
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems_X))
+        thr_copy_X = cute.make_tiled_copy_tv(
+            copy_atom_load_X, thr_layout, val_layout
+        ).get_slice(tidx)
+        thr_copy_dX = cute.make_tiled_copy_tv(
+            copy_atom_store_dX, thr_layout, val_layout
+        ).get_slice(tidx)
+
+        tXgX = thr_copy_X.partition_S(gX)
+        tXsX = thr_copy_X.partition_D(sX)
+        tXcX = thr_copy_X.partition_S(cX)[(0, None), None, None]
+        tXcFull = thr_copy_X.partition_S(cX)
+        tXgdX = thr_copy_dX.partition_D(gdX)
+
+        tXrX, tXrdX = [cute.make_fragment_like(thr) for thr in (tXgX, tXgdX)]
+
+        num_warps = cute.size(tv_layout, mode=[0]) // cute.arch.WARP_SIZE
+        self._initialize_cluster(tidx, mbar_ptr, num_warps)
+
+        row = tXcX[0][0]
+        target = Int32.zero
+        dloss = Float32.zero
+        if row < shape[0]:
+            target = Int32(mTarget[row])
+            should_ignore = Boolean(target == ignore_index)
+            dloss = Float32(mDLoss[row]) if not should_ignore else Float32.zero
+
+        is_even_N = const_expr(shape[1] == tiler_mn[1] * self.cluster_n)
+        tXpX = (
+            predicate_k(thr_copy_X.partition_S(cX), limit=shape[1])
+            if const_expr(not is_even_N)
+            else None
+        )
+        if row < shape[0]:
+            cute.copy(copy_atom_load_X, tXgX, tXsX, pred=tXpX)
+        cute.arch.cp_async_commit_group()
+        cute.arch.cp_async_wait_group(0)
+
+        if const_expr(not is_even_N):
+            fill_oob(tXsX, tXpX, -tXsX.element_type.inf)
+
+        cute.autovec_copy(tXsX, tXrX)
+        x = tXrX.load().to(Float32)
+
+        _max_x, denom, exp_x = online_softmax_reduce(
+            x,
+            threads_per_row,
+            reduction_buffer[None, None, 0],
+            mbar_ptr,
+            hook_fn=cute.arch.cluster_wait if const_expr(self.cluster_n > 1) else None,
+            phase=None,
+            return_exp_x=True,
+        )
+        assert exp_x is not None
+        probs = exp_x * cute.arch.rcp_approx(denom)
+        prob_shifted = probs - 1.0
+
+        mask = cute.make_fragment_like(tXrX, cutlass.Boolean)
+        for i in cutlass.range(cute.size(tXcFull), unroll_full=True):
+            mask[i] = tXcFull[i][1] == target
+        grad = cute.where(mask.load(), prob_shifted, probs)
+        grad = grad * dloss
+
+        tXrdX.store(grad.to(tXrdX.element_type))
+
+        tXpdX = (
+            predicate_k(thr_copy_dX.partition_S(cX), limit=shape[1])
+            if const_expr(not is_even_N)
+            else None
+        )
+        if row < shape[0]:
+            cute.copy(copy_atom_store_dX, tXrdX, tXgdX, pred=tXpdX)
+
+    if _KERNEL_ACCEPTS_LAYOUT_ARGS:
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,  # (M, N)
+            mTarget: cute.Tensor,  # (M,)
+            mDLoss: cute.Tensor,  # (M,)
+            mdX: cute.Tensor,  # (M, N)
+            ignore_index: Int32,
+            tv_layout: cute.Layout,
+            tiler_mn: cute.Shape,
+        ) -> None:
+            self._kernel_impl(
+                mX,
+                mTarget,
+                mDLoss,
+                mdX,
+                ignore_index,
+                tv_layout,
+                tiler_mn,
+            )
+    else:
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,  # (M, N)
+            mTarget: cute.Tensor,  # (M,)
+            mDLoss: cute.Tensor,  # (M,)
+            mdX: cute.Tensor,  # (M, N)
+            ignore_index: Int32,
+        ) -> None:
+            num_copy_bits = math.gcd(self.N, 128 // self.dtype.width) * self.dtype.width
+            tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=num_copy_bits)
+            self._kernel_impl(
+                mX,
+                mTarget,
+                mDLoss,
+                mdX,
                 ignore_index,
                 tv_layout,
                 tiler_mn,
@@ -565,13 +1329,17 @@ class CrossEntropyBackwardSM100:
         )
 
         idX = cute.make_identity_tensor(shape)
-        mX_off, mdX_off = [
-            domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mX, mdX)
+        # Quack-style CTA tiling: avoid extra 64-bit address arithmetic by
+        # letting CuTe compute the CTA offsets directly.
+        gX, gdX, cX = [
+            cute.local_tile(mT, tiler_mn, (bidx, bidy)) for mT in (mX, mdX, idX)
         ]
-        gX, gdX = [cute.local_tile(mT, tiler_mn, (0, bidy)) for mT in (mX_off, mdX_off)]
-        cX = cute.local_tile(idX, tiler_mn, (bidx, bidy))
 
-        num_copy_elems_X = tv_layout.shape[1][0]
+        num_copy_elems_X = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
         num_copy_bits_X = mX.element_type.width * num_copy_elems_X
         copy_atom_load_X = cute.make_copy_atom(
             cute.nvgpu.cpasync.CopyG2SOp(),
@@ -934,7 +1702,8 @@ def _cross_entropy_forward_ptr_into(
     device_index = logits.get_device()
     if torch.cuda.current_device() != device_index:
         torch.cuda.set_device(device_index)
-    stream = cuda.CUstream(int(torch.cuda.current_stream().cuda_stream))
+    stream_handle = int(torch.cuda.current_stream().cuda_stream)
+    stream = cuda.CUstream(stream_handle)
 
     dtype_x = TORCH2CUTE_DTYPE[logits.dtype]
     key = ("ptr_fwd", int(N), dtype_x, int(device_index))
@@ -974,6 +1743,32 @@ def _cross_entropy_forward_ptr_into(
             stream,
         )
         _PTR_FWD_COMPILE_CACHE[key] = compiled
+
+    launcher = _get_fast_ptr_cross_entropy_launcher(
+        compiled=compiled,
+        dtype_logits=dtype_x,
+        N=int(N),
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        mode="fwd",
+    )
+    if launcher is not None:
+        launcher.launch(
+            logits_ptr=int(logits.data_ptr()),
+            target_ptr=int(target.data_ptr()),
+            aux_a_ptr=int(loss.data_ptr()),
+            aux_b_ptr=int(lse.data_ptr()),
+            aux_c_ptr=None,
+            M=int(M),
+            ld=int(logits.stride(0)),
+            ignore_index=int(ignore_index),
+            stream_handle=stream_handle,
+            dtype_logits=dtype_x,
+            aux_a_dtype=cutlass.Float32,
+            aux_b_dtype=cutlass.Float32,
+            aux_c_dtype=None,
+        )
+        return
 
     ptr_logits = rt.make_ptr(
         dtype_x, logits.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
@@ -1037,7 +1832,8 @@ def _cross_entropy_backward_ptr_into(
     device_index = logits.get_device()
     if torch.cuda.current_device() != device_index:
         torch.cuda.set_device(device_index)
-    stream = cuda.CUstream(int(torch.cuda.current_stream().cuda_stream))
+    stream_handle = int(torch.cuda.current_stream().cuda_stream)
+    stream = cuda.CUstream(stream_handle)
 
     dtype_x = TORCH2CUTE_DTYPE[logits.dtype]
     key = ("ptr_bwd", int(N), dtype_x, int(device_index))
@@ -1082,6 +1878,32 @@ def _cross_entropy_backward_ptr_into(
         )
         _PTR_BWD_COMPILE_CACHE[key] = compiled
 
+    launcher = _get_fast_ptr_cross_entropy_launcher(
+        compiled=compiled,
+        dtype_logits=dtype_x,
+        N=int(N),
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        mode="bwd",
+    )
+    if launcher is not None:
+        launcher.launch(
+            logits_ptr=int(logits.data_ptr()),
+            target_ptr=int(target.data_ptr()),
+            aux_a_ptr=int(dloss.data_ptr()),
+            aux_b_ptr=int(dx.data_ptr()),
+            aux_c_ptr=int(lse.data_ptr()),
+            M=int(M),
+            ld=int(logits.stride(0)),
+            ignore_index=int(ignore_index),
+            stream_handle=stream_handle,
+            dtype_logits=dtype_x,
+            aux_a_dtype=cutlass.Float32,
+            aux_b_dtype=dtype_x,
+            aux_c_dtype=cutlass.Float32,
+        )
+        return
+
     ptr_logits = rt.make_ptr(
         dtype_x, logits.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
     )
@@ -1112,6 +1934,127 @@ def _cross_entropy_backward_ptr_into(
         ptr_dloss,
         ptr_dx,
         ptr_lse,
+        Int32(int(M)),
+        Int32(int(logits.stride(0))),
+        Int32(int(ignore_index)),
+        stream,
+    )
+
+
+def _cross_entropy_fwd_bwd_ptr_into(
+    *,
+    logits: Tensor,
+    target: Tensor,
+    dloss: Tensor,
+    dx: Tensor,
+    ignore_index: int,
+) -> None:
+    """Launch the fused pointer-based cross-entropy fwd+bwd kernel into preallocated `dx`."""
+    assert logits.is_cuda and logits.dim() == 2
+    assert target.is_cuda and target.dim() == 1 and target.shape[0] == logits.shape[0]
+    assert target.dtype is torch.int64
+    assert (
+        dloss.is_cuda
+        and dloss.shape == (logits.shape[0],)
+        and dloss.dtype is torch.float32
+    )
+    assert dx.is_cuda and dx.shape == logits.shape and dx.dtype == logits.dtype
+    assert dx.stride() == logits.stride(), (
+        "Pointer path expects dx to match logits strides"
+    )
+
+    M, N = logits.shape
+    device_index = logits.get_device()
+    if torch.cuda.current_device() != device_index:
+        torch.cuda.set_device(device_index)
+    stream_handle = int(torch.cuda.current_stream().cuda_stream)
+    stream = cuda.CUstream(stream_handle)
+
+    dtype_x = TORCH2CUTE_DTYPE[logits.dtype]
+    key = ("ptr_fwd_bwd", int(N), dtype_x, int(device_index))
+    compiled = _PTR_FWDBWD_COMPILE_CACHE.get(key)
+    if compiled is None:
+        op = CrossEntropyFwdBwdSM100(dtype_x, int(N))
+        ptr_logits = rt.make_ptr(
+            dtype_x, logits.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_target = rt.make_ptr(
+            cutlass.Int64,
+            target.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=8,
+        )
+        ptr_dloss = rt.make_ptr(
+            cutlass.Float32,
+            dloss.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=4,
+        )
+        ptr_dx = rt.make_ptr(
+            dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        compiled = cute.compile(
+            op.launch_from_ptrs,
+            ptr_logits,
+            ptr_target,
+            ptr_dloss,
+            ptr_dx,
+            Int32(int(M)),
+            Int32(int(logits.stride(0))),
+            Int32(int(ignore_index)),
+            stream,
+        )
+        _PTR_FWDBWD_COMPILE_CACHE[key] = compiled
+
+    launcher = _get_fast_ptr_cross_entropy_launcher(
+        compiled=compiled,
+        dtype_logits=dtype_x,
+        N=int(N),
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        mode="fwd_bwd",
+    )
+    if launcher is not None:
+        launcher.launch(
+            logits_ptr=int(logits.data_ptr()),
+            target_ptr=int(target.data_ptr()),
+            aux_a_ptr=int(dloss.data_ptr()),
+            aux_b_ptr=int(dx.data_ptr()),
+            aux_c_ptr=None,
+            M=int(M),
+            ld=int(logits.stride(0)),
+            ignore_index=int(ignore_index),
+            stream_handle=stream_handle,
+            dtype_logits=dtype_x,
+            aux_a_dtype=cutlass.Float32,
+            aux_b_dtype=dtype_x,
+            aux_c_dtype=None,
+        )
+        return
+
+    ptr_logits = rt.make_ptr(
+        dtype_x, logits.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_target = rt.make_ptr(
+        cutlass.Int64,
+        target.data_ptr(),
+        mem_space=rt.AddressSpace.gmem,
+        assumed_align=8,
+    )
+    ptr_dloss = rt.make_ptr(
+        cutlass.Float32,
+        dloss.data_ptr(),
+        mem_space=rt.AddressSpace.gmem,
+        assumed_align=4,
+    )
+    ptr_dx = rt.make_ptr(
+        dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    compiled(
+        ptr_logits,
+        ptr_target,
+        ptr_dloss,
+        ptr_dx,
         Int32(int(M)),
         Int32(int(logits.stride(0))),
         Int32(int(ignore_index)),
@@ -1155,6 +2098,70 @@ def cross_entropy_backward(
         ignore_index=ignore_index,
     )
     return dx
+
+
+def cross_entropy_fwd_bwd(
+    dloss: Tensor,
+    logits: Tensor,
+    target: Tensor,
+    ignore_index: int = -100,
+) -> Tensor:
+    """Fused cross-entropy forward+backward producing ``dx`` for ``reduction='none'``.
+
+    Computes per-logit gradients ``dx`` given:
+      - ``logits``: (M, N)
+      - ``target``: (M,)
+      - ``dloss``: (M,) upstream gradients (float32 recommended)
+
+    The fast path avoids materializing intermediate ``lse`` in global memory.
+    """
+    assert logits.dim() == 2, "logits must be 2D (M, N)"
+    assert target.dim() == 1, "target must be 1D (M,)"
+    assert dloss.dim() == 1, "dloss must be 1D (M,)"
+    assert logits.shape[0] == target.shape[0] == dloss.shape[0], (
+        "Batch dimensions must match"
+    )
+    assert logits.is_cuda and target.is_cuda and dloss.is_cuda, (
+        "All tensors must be on CUDA device"
+    )
+    assert logits.dtype in TORCH2CUTE_DTYPE, "Unsupported logits dtype"
+
+    dx = torch.empty_like(logits)
+
+    if (
+        _can_use_ptr_path_logits(logits)
+        and _can_use_ptr_path_logits(dx)
+        and _can_use_ptr_path_target(target)
+        and _can_use_ptr_path_f32_1d(dloss)
+        and logits.stride() == dx.stride()
+    ):
+        _cross_entropy_fwd_bwd_ptr_into(
+            logits=logits,
+            target=target,
+            dloss=dloss,
+            dx=dx,
+            ignore_index=int(ignore_index),
+        )
+        return dx
+
+    # Fallback: reuse the existing forward+backward kernels (DLPack path handles
+    # any necessary dtype conversions).
+    with torch.no_grad():
+        _loss, lse = cross_entropy_forward(
+            logits,
+            target,
+            ignore_index=int(ignore_index),
+            reduction="none",
+        )
+        _cross_entropy_backward_sm100(
+            logits,
+            target,
+            dloss,
+            lse,
+            dx,
+            ignore_index=int(ignore_index),
+        )
+        return dx
 
 
 def cross_entropy(

@@ -211,6 +211,23 @@ def main() -> None:
             ],
         ),
         (
+            "fused_add_rmsnorm_dsv3",
+            [
+                py,
+                script("benchmark_fused_add_rmsnorm_sm100.py"),
+                *common,
+                "--dsv3",
+                "--quack-baseline",
+                "kernel_inplace",
+                "--iters",
+                "200",
+                "--warmup-ms",
+                "25",
+                "--json",
+                os.path.join(out_dir, "fused_add_rmsnorm_dsv3.json"),
+            ],
+        ),
+        (
             "softmax_fwd_bwd_quack_suite",
             [
                 py,

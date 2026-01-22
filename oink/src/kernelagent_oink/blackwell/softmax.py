@@ -65,11 +65,17 @@ from cutlass import Float32, Int32, const_expr
 from cutlass.cute import runtime as rt
 from cutlass.cute.runtime import from_dlpack
 
+from kernelagent_oink.blackwell.fast_launch import (
+    StableI32Arg,
+    disable_fast_launch,
+    fast_launch_enabled,
+    set_runtime_ptr,
+    tls_cache as _tls_fast_launch_cache,
+)
 from kernelagent_oink.blackwell.lite_quack import (
     _KERNEL_ACCEPTS_LAYOUT_ARGS,
     TORCH2CUTE_DTYPE,
     ReductionBase,
-    domain_offset_i64,
     fill_oob,
     online_softmax_reduce,
     predicate_k,
@@ -80,6 +86,275 @@ _FWD_COMPILE_CACHE: dict[tuple[Type[cutlass.Numeric], int], object] = {}
 _BWD_COMPILE_CACHE: dict[tuple[Type[cutlass.Numeric], int], object] = {}
 _PTR_FWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
 _PTR_BWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
+_PTR_FWDBWD_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
+
+
+class _PtrSoftmaxFastLaunch:
+    def __init__(
+        self,
+        *,
+        compiled: object,
+        executor: object,
+        capi_func: object,
+        ptr_a: object,
+        ptr_b: object,
+        ptr_c: object | None,
+        arg_m: StableI32Arg,
+        arg_ld: StableI32Arg,
+        stream: cuda.CUstream,
+        assumed_align: int,
+        packed_args: object,
+        keepalive: tuple[object, ...],
+    ):
+        self._compiled = compiled
+        self._executor = executor
+        self._capi_func = capi_func
+        self._ptr_a = ptr_a
+        self._ptr_b = ptr_b
+        self._ptr_c = ptr_c
+        self._arg_m = arg_m
+        self._arg_ld = arg_ld
+        self._stream = stream
+        self._assumed_align = int(assumed_align)
+        self._packed_args = packed_args
+        self._keepalive = keepalive
+
+        self._use_fast_launch = True
+        self._cuda_result = getattr(executor, "cuda_result", None)
+
+        self._last_a_ptr = -1
+        self._last_b_ptr = -1
+        self._last_c_ptr = -1
+        self._last_m = -1
+        self._last_ld = -1
+
+    def launch(
+        self,
+        *,
+        a_ptr: int,
+        b_ptr: int,
+        c_ptr: int | None,
+        M: int,
+        ld: int,
+        stream_handle: int,
+        dtype: type[cutlass.Numeric],
+    ) -> None:
+        if not fast_launch_enabled() or not self._use_fast_launch:
+            self._fallback_launch(
+                a_ptr=a_ptr,
+                b_ptr=b_ptr,
+                c_ptr=c_ptr,
+                M=M,
+                ld=ld,
+                stream_handle=stream_handle,
+                dtype=dtype,
+            )
+            return
+
+        if a_ptr != self._last_a_ptr:
+            try:
+                set_runtime_ptr(self._ptr_a, a_ptr)
+                self._last_a_ptr = a_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    a_ptr=a_ptr,
+                    b_ptr=b_ptr,
+                    c_ptr=c_ptr,
+                    M=M,
+                    ld=ld,
+                    stream_handle=stream_handle,
+                    dtype=dtype,
+                )
+                return
+
+        if b_ptr != self._last_b_ptr:
+            try:
+                set_runtime_ptr(self._ptr_b, b_ptr)
+                self._last_b_ptr = b_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    a_ptr=a_ptr,
+                    b_ptr=b_ptr,
+                    c_ptr=c_ptr,
+                    M=M,
+                    ld=ld,
+                    stream_handle=stream_handle,
+                    dtype=dtype,
+                )
+                return
+
+        if self._ptr_c is not None and c_ptr is not None:
+            if c_ptr != self._last_c_ptr:
+                try:
+                    set_runtime_ptr(self._ptr_c, c_ptr)
+                    self._last_c_ptr = c_ptr
+                except AttributeError:
+                    self._disable_fast_launch()
+                    self._fallback_launch(
+                        a_ptr=a_ptr,
+                        b_ptr=b_ptr,
+                        c_ptr=c_ptr,
+                        M=M,
+                        ld=ld,
+                        stream_handle=stream_handle,
+                        dtype=dtype,
+                    )
+                    return
+
+        if M != self._last_m:
+            self._arg_m.set(M)
+            self._last_m = M
+        if ld != self._last_ld:
+            self._arg_ld.set(ld)
+            self._last_ld = ld
+
+        if self._cuda_result is not None:
+            self._cuda_result.value = 0
+        ret = self._capi_func(self._packed_args)  # type: ignore[misc]
+        if ret != 0:
+            raise RuntimeError(f"CuTeDSL capi_func returned non-zero: {ret}")
+        if self._cuda_result is not None:
+            err = int(self._cuda_result.value)
+            if err != 0:
+                raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
+
+    def _disable_fast_launch(self) -> None:
+        self._use_fast_launch = False
+        disable_fast_launch()
+
+    def _fallback_launch(
+        self,
+        *,
+        a_ptr: int,
+        b_ptr: int,
+        c_ptr: int | None,
+        M: int,
+        ld: int,
+        stream_handle: int,
+        dtype: type[cutlass.Numeric],
+    ) -> None:
+        stream = cuda.CUstream(int(stream_handle))
+        ptr_a = rt.make_ptr(
+            dtype,
+            a_ptr,
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._assumed_align,
+        )
+        ptr_b = rt.make_ptr(
+            dtype,
+            b_ptr,
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._assumed_align,
+        )
+        if self._ptr_c is not None and c_ptr is not None:
+            ptr_c = rt.make_ptr(
+                dtype,
+                c_ptr,
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=self._assumed_align,
+            )
+            self._compiled(ptr_a, ptr_b, ptr_c, Int32(int(M)), Int32(int(ld)), stream)
+        else:
+            self._compiled(ptr_a, ptr_b, Int32(int(M)), Int32(int(ld)), stream)
+
+
+def _get_fast_ptr_softmax_launcher(
+    *,
+    compiled: object,
+    dtype: type[cutlass.Numeric],
+    N: int,
+    device_index: int,
+    stream_handle: int,
+    assumed_align: int,
+    is_bwd: bool,
+) -> _PtrSoftmaxFastLaunch | None:
+    if not fast_launch_enabled():
+        return None
+    key = (
+        "ptr_fast_bwd" if is_bwd else "ptr_fast_fwd",
+        id(compiled),
+        int(N),
+        dtype,
+        int(device_index),
+        int(stream_handle),
+        int(assumed_align),
+    )
+    cache = _tls_fast_launch_cache()
+    cached = cache.get(key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    assumed_align = int(assumed_align)
+    ptr_a = rt.make_ptr(
+        dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+    )
+    ptr_b = rt.make_ptr(
+        dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+    )
+    ptr_c = (
+        rt.make_ptr(
+            dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align
+        )
+        if is_bwd
+        else None
+    )
+
+    arg_m = StableI32Arg(0)
+    arg_ld = StableI32Arg(N)
+    stream = cuda.CUstream(int(stream_handle))
+    executor = compiled.to(device_index)  # type: ignore[attr-defined]
+    try:
+        if ptr_c is not None:
+            exe_args, adapted_args = executor.generate_execution_args(
+                ptr_a,
+                ptr_b,
+                ptr_c,
+                arg_m,
+                arg_ld,
+                stream,
+            )
+        else:
+            exe_args, adapted_args = executor.generate_execution_args(
+                ptr_a,
+                ptr_b,
+                arg_m,
+                arg_ld,
+                stream,
+            )
+        packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
+        capi_func = compiled.capi_func  # type: ignore[attr-defined]
+    except AttributeError:
+        disable_fast_launch()
+        return None
+
+    keepalive: tuple[object, ...] = (
+        executor,
+        ptr_a,
+        ptr_b,
+        ptr_c,
+        arg_m,
+        arg_ld,
+        stream,
+        *adapted_args,
+    )
+    launcher = _PtrSoftmaxFastLaunch(
+        compiled=compiled,
+        executor=executor,
+        capi_func=capi_func,
+        ptr_a=ptr_a,
+        ptr_b=ptr_b,
+        ptr_c=ptr_c,
+        arg_m=arg_m,
+        arg_ld=arg_ld,
+        stream=stream,
+        assumed_align=assumed_align,
+        packed_args=packed_args,
+        keepalive=keepalive,
+    )
+    cache[key] = launcher
+    return launcher
 
 
 class SoftmaxFwdSM100(ReductionBase):
@@ -87,9 +362,23 @@ class SoftmaxFwdSM100(ReductionBase):
         # One-stage online reduction: pack (max, sum_exp) into Int64 reduction buffer.
         super().__init__(dtype, N, stage=1, reduction_dtype=cutlass.Int64)
 
+    def _get_num_threads(self) -> int:
+        # SM100 tuning note:
+        # For N=4096, we use 32 threads per row (1 warp) and run 1 row per CTA
+        # (32 threads total). This keeps the reduction fully warp-local and
+        # improves throughput on this GB200 versus Quack's default 2-rows-per-CTA
+        # schedule with 64 threads per row (4 warps total).
+        if self.N == 4096:
+            return 32
+        return super()._get_num_threads()
+
     def _calculate_threads_per_row(self) -> int:
         # Match Quack's bucketed policy for Softmax.
         N = self.N
+        if N == 4096:
+            return 32
+        if N == 6144:
+            return 128
         if N <= 64:
             return 8
         if N <= 128:
@@ -192,10 +481,10 @@ class SoftmaxFwdSM100(ReductionBase):
         shape = mX.shape
         idX = cute.make_identity_tensor(shape)
 
-        # Slice per-CTA region; use 64-bit indexing for large tensors.
-        mX, mO = [domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mX, mO)]
-        gX, gO = [cute.local_tile(mT, tiler_mn, (0, cluster_y)) for mT in (mX, mO)]
-        cX = cute.local_tile(idX, tiler_mn, (bidx, cluster_y))
+        # Quack-style CTA tiling.
+        gX, gO, cX = [
+            cute.local_tile(mT, tiler_mn, (bidx, cluster_y)) for mT in (mX, mO, idX)
+        ]
 
         smem = cutlass.utils.SmemAllocator()
         sX = smem.allocate_tensor(
@@ -220,11 +509,25 @@ class SoftmaxFwdSM100(ReductionBase):
             num_bits_per_copy=128,
         )
 
-        thr_copy_load = cute.make_tiled_copy(
-            copy_atom_load, tv_layout, tiler_mn
+        num_copy_elems = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems))
+        thr_copy_load = cute.make_tiled_copy_tv(
+            copy_atom_load, thr_layout, val_layout
         ).get_slice(tidx)
-        thr_copy_store = cute.make_tiled_copy(
-            copy_atom_store, tv_layout, tiler_mn
+        thr_copy_store = cute.make_tiled_copy_tv(
+            copy_atom_store, thr_layout, val_layout
         ).get_slice(tidx)
 
         tXgX = thr_copy_load.partition_S(gX)
@@ -256,7 +559,6 @@ class SoftmaxFwdSM100(ReductionBase):
 
         cute.autovec_copy(tXsX, tXrX)
         x = tXrX.load().to(Float32)
-        threads_per_row = tv_layout.shape[0][0]
 
         # Online softmax reduction: compute max and sum_exp in a single pass, with
         # optional cluster-wide aggregation via an Int64 reduction buffer.
@@ -313,6 +615,8 @@ class SoftmaxBwdSM100(ReductionBase):
     def _calculate_threads_per_row(self) -> int:
         # Match Quack backward softmax buckets.
         N = self.N
+        if N in (4096, 6144):
+            return 128
         if N <= 64:
             return 8
         if N <= 128:
@@ -433,13 +737,10 @@ class SoftmaxBwdSM100(ReductionBase):
         shape = mdY.shape
         idX = cute.make_identity_tensor(shape)
 
-        mdY, mY, mdX = [
-            domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mdY, mY, mdX)
+        gdY, gY, gdX, cX = [
+            cute.local_tile(mT, tiler_mn, (bidx, cluster_y))
+            for mT in (mdY, mY, mdX, idX)
         ]
-        gdY, gY, gdX = [
-            cute.local_tile(mT, tiler_mn, (0, cluster_y)) for mT in (mdY, mY, mdX)
-        ]
-        cX = cute.local_tile(idX, tiler_mn, (bidx, cluster_y))
 
         smem = cutlass.utils.SmemAllocator()
         sdY = smem.allocate_tensor(
@@ -467,11 +768,25 @@ class SoftmaxBwdSM100(ReductionBase):
             num_bits_per_copy=128,
         )
 
-        thr_copy_load = cute.make_tiled_copy(
-            copy_atom_load, tv_layout, tiler_mn
+        num_copy_elems = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems))
+        thr_copy_load = cute.make_tiled_copy_tv(
+            copy_atom_load, thr_layout, val_layout
         ).get_slice(tidx)
-        thr_copy_store = cute.make_tiled_copy(
-            copy_atom_store, tv_layout, tiler_mn
+        thr_copy_store = cute.make_tiled_copy_tv(
+            copy_atom_store, thr_layout, val_layout
         ).get_slice(tidx)
 
         tdYgdY = thr_copy_load.partition_S(gdY)
@@ -505,8 +820,6 @@ class SoftmaxBwdSM100(ReductionBase):
         cute.autovec_copy(tYsY, tYrY)
         dy = tdYrdY.load().to(Float32)
         y = tYrY.load().to(Float32)
-
-        threads_per_row = tv_layout.shape[0][0]
         dot = row_reduce(
             dy * y,
             cute.ReductionOp.ADD,
@@ -553,6 +866,335 @@ class SoftmaxBwdSM100(ReductionBase):
             self._kernel_impl(mdY, mY, mdX, tv_layout, tiler_mn)
 
 
+class SoftmaxFwdBwdSM100(ReductionBase):
+    """Fused softmax forward+backward producing dx from (x, dy).
+
+    Computes:
+      y = softmax(x)
+      dot = sum(dy * y)
+      dx = y * (dy - dot)
+
+    This avoids materializing the intermediate `y` in global memory, which is
+    the dominant overhead in a naive `softmax_backward(dy, softmax_forward(x))`
+    composition.
+    """
+
+    def __init__(self, dtype: Type[cutlass.Numeric], N: int):
+        # Online softmax reduction uses an Int64 reduction buffer packing
+        # (max, sum_exp) pairs. We allocate a separate Float32 reduction buffer
+        # for dot(dy, y).
+        super().__init__(dtype, N, stage=1, reduction_dtype=cutlass.Int64)
+
+    def _calculate_threads_per_row(self) -> int:
+        # Favor the backward bucket policy (better for the dot reduction).
+        N = self.N
+        if N in (4096, 6144):
+            return 128
+        if N <= 64:
+            return 8
+        if N <= 128:
+            return 16
+        if N <= 3072:
+            return 32
+        if N <= 6144:
+            return 64
+        if N <= 8192:
+            return 128
+        return 256
+
+    def _set_cluster_n(self) -> None:
+        # Quack-style growth of cluster_n with N and dtype.
+        N = self.N
+        if const_expr(self.dtype.width == 16):
+            cluster_n = (
+                1
+                if N <= 16 * 1024
+                else (
+                    2
+                    if N <= 32 * 1024
+                    else (4 if N <= 64 * 1024 else (8 if N <= 128 * 1024 else 16))
+                )
+            )
+        else:
+            cluster_n = (
+                1
+                if N <= 32 * 1024
+                else (
+                    2
+                    if N <= 64 * 1024
+                    else (4 if N <= 128 * 1024 else (8 if N <= 256 * 1024 else 16))
+                )
+            )
+        self.cluster_n = cluster_n
+
+    def _get_num_threads(self) -> int:
+        # Keep in sync with _calculate_threads_per_row.
+        return 128 if self.N <= 8192 else 256
+
+    def _smem_size_in_bytes(self, tiler_mn, num_warps: int) -> int:
+        # Allocation order:
+        #   1) sX (16B aligned)
+        #   2) sdY (16B aligned)
+        #   3) reduction_buffer_stats (8B aligned)
+        #   4) reduction_buffer_dot (8B aligned)
+        #   5) optional mbarrier array (8B aligned)
+        def _align_up(x: int, align: int) -> int:
+            return ((x + align - 1) // align) * align
+
+        tile_bytes = int(cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn)))
+        reduction_stats_bytes = int(
+            num_warps * self.cluster_n * (cutlass.Int64.width // 8)
+        )
+        reduction_dot_bytes = int(
+            num_warps * self.cluster_n * (cutlass.Float32.width // 8)
+        )
+        mbar_bytes = (
+            int(2 * (cutlass.Int64.width // 8)) if const_expr(self.cluster_n > 1) else 0
+        )
+
+        offset = _align_up(tile_bytes, 16)
+        offset = _align_up(offset, 16) + tile_bytes
+        offset = _align_up(offset, 8) + reduction_stats_bytes
+        offset = _align_up(offset, 8) + reduction_dot_bytes
+        offset = _align_up(offset, 8) + mbar_bytes
+        return int(offset)
+
+    @cute.jit
+    def __call__(
+        self,
+        mX: cute.Tensor,
+        mdY: cute.Tensor,
+        mdX: cute.Tensor,
+        stream: cuda.CUstream,
+    ) -> None:
+        assert mX.element_type == self.dtype
+        assert mdY.element_type == self.dtype
+        assert mdX.element_type == self.dtype
+        tiler_mn, tv_layout = self._get_tv_layout()
+        num_threads = (
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
+        )
+        num_warps = num_threads // cute.arch.WARP_SIZE
+        kernel = (
+            self.kernel(mX, mdY, mdX, tv_layout, tiler_mn)
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self.kernel(mX, mdY, mdX)
+        )
+        kernel.launch(
+            grid=[cute.ceil_div(mX.shape[0], tiler_mn[0]), self.cluster_n, 1],
+            block=[num_threads, 1, 1],
+            cluster=[1, self.cluster_n, 1] if const_expr(self.cluster_n > 1) else None,
+            smem=self._smem_size_in_bytes(tiler_mn, num_warps),
+            stream=stream,
+        )
+
+    @cute.jit
+    def launch_from_ptrs(
+        self,
+        ptr_x: cute.Pointer,
+        ptr_dy: cute.Pointer,
+        ptr_dx: cute.Pointer,
+        M: Int32,
+        ld: Int32,
+        stream: cuda.CUstream,
+    ) -> None:
+        """Pointer-based entrypoint that bypasses DLPack conversions."""
+        ld_assumed = cute.assume(ld, divby=128 // self.dtype.width)
+        layout_mn = cute.make_layout((M, self.N), stride=(ld_assumed, 1))
+        mX = cute.make_tensor(ptr_x, layout_mn)
+        mdY = cute.make_tensor(ptr_dy, layout_mn)
+        mdX = cute.make_tensor(ptr_dx, layout_mn)
+        self.__call__(mX, mdY, mdX, stream)
+
+    @cute.jit
+    def _kernel_impl(
+        self,
+        mX: cute.Tensor,
+        mdY: cute.Tensor,
+        mdX: cute.Tensor,
+        tv_layout: cute.Layout,
+        tiler_mn: cute.Shape,
+    ) -> None:
+        tidx, _, _ = cute.arch.thread_idx()
+        bidx, _, _ = cute.arch.block_idx()
+        cluster_y = (
+            const_expr(0)
+            if const_expr(self.cluster_n == 1)
+            else cute.arch.block_idx()[1]
+        )
+
+        shape = mX.shape
+        idX = cute.make_identity_tensor(shape)
+
+        gX, gdY, gdX, cX = [
+            cute.local_tile(mT, tiler_mn, (bidx, cluster_y))
+            for mT in (mX, mdY, mdX, idX)
+        ]
+
+        smem = cutlass.utils.SmemAllocator()
+        sX = smem.allocate_tensor(
+            mX.element_type,
+            cute.make_ordered_layout(tiler_mn, order=(1, 0)),
+            byte_alignment=16,
+        )
+        sdY = smem.allocate_tensor(
+            mdY.element_type,
+            cute.make_ordered_layout(tiler_mn, order=(1, 0)),
+            byte_alignment=16,
+        )
+
+        reduction_layout = self._get_reduction_buffer_layout(tv_layout, self.cluster_n)
+        reduction_buffer_stats = smem.allocate_tensor(
+            cutlass.Int64, reduction_layout, byte_alignment=8
+        )
+        reduction_buffer_dot = smem.allocate_tensor(
+            cutlass.Float32, reduction_layout, byte_alignment=8
+        )
+
+        if const_expr(self.cluster_n > 1):
+            mbar_ptr_base = smem.allocate_array(cutlass.Int64, num_elems=2)
+            mbar_ptr_stats = mbar_ptr_base
+            mbar_ptr_dot = mbar_ptr_base + Int32(1)
+        else:
+            mbar_ptr_stats = None
+            mbar_ptr_dot = None
+
+        copy_atom_load = cute.make_copy_atom(
+            cute.nvgpu.cpasync.CopyG2SOp(),
+            mX.element_type,
+            num_bits_per_copy=128,
+        )
+        copy_atom_store = cute.make_copy_atom(
+            cute.nvgpu.CopyUniversalOp(),
+            gdX.element_type,
+            num_bits_per_copy=128,
+        )
+
+        num_copy_elems = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems))
+        thr_copy_load = cute.make_tiled_copy_tv(
+            copy_atom_load, thr_layout, val_layout
+        ).get_slice(tidx)
+        thr_copy_store = cute.make_tiled_copy_tv(
+            copy_atom_store, thr_layout, val_layout
+        ).get_slice(tidx)
+
+        tXgX = thr_copy_load.partition_S(gX)
+        tXsX = thr_copy_load.partition_D(sX)
+        tdYgdY = thr_copy_load.partition_S(gdY)
+        tdYsdY = thr_copy_load.partition_D(sdY)
+        tdXgdX = thr_copy_store.partition_D(gdX)
+        tXcX = thr_copy_load.partition_S(cX)[(0, None), None, None]
+
+        tXrX, tdYrdY, tdXrdX = [
+            cute.make_fragment_like(thr) for thr in (tXgX, tdYgdY, tdXgdX)
+        ]
+
+        if const_expr(
+            self.cluster_n > 1
+            and mbar_ptr_stats is not None
+            and mbar_ptr_dot is not None
+        ):
+            if tidx < 2:
+                cute.arch.mbarrier_init(mbar_ptr_stats + tidx, 1)
+            cute.arch.mbarrier_init_fence()
+            cute.arch.cluster_arrive_relaxed()
+
+        is_even_N = const_expr(self.N == tiler_mn[1] * self.cluster_n)
+        tXpX = (
+            predicate_k(thr_copy_load.partition_S(cX), limit=shape[1])
+            if const_expr(not is_even_N)
+            else None
+        )
+
+        if tXcX[0][0] < shape[0]:
+            cute.copy(copy_atom_load, tXgX, tXsX, pred=tXpX)
+            cute.copy(copy_atom_load, tdYgdY, tdYsdY, pred=tXpX)
+        cute.arch.cp_async_commit_group()
+        cute.arch.cp_async_wait_group(0)
+
+        if const_expr(not is_even_N):
+            fill_oob(tXsX, tXpX, -tXsX.element_type.inf)
+            fill_oob(tdYsdY, tXpX, 0.0)
+
+        cute.autovec_copy(tXsX, tXrX)
+        cute.autovec_copy(tdYsdY, tdYrdY)
+        x = tXrX.load().to(Float32)
+        dy = tdYrdY.load().to(Float32)
+
+        _, denom, exp_x = online_softmax_reduce(
+            x,
+            threads_per_row,
+            reduction_buffer_stats[None, None, 0],
+            mbar_ptr_stats,
+            hook_fn=cute.arch.cluster_wait if const_expr(self.cluster_n > 1) else None,
+            phase=None,
+            return_exp_x=True,
+        )
+        assert exp_x is not None
+        y = exp_x * cute.arch.rcp_approx(denom)
+
+        dot = row_reduce(
+            dy * y,
+            cute.ReductionOp.ADD,
+            threads_per_row,
+            reduction_buffer_dot[None, None, 0],
+            mbar_ptr_dot,
+            phase=None,
+            init_val=0.0,
+            hook_fn=cute.arch.cluster_wait if const_expr(self.cluster_n > 1) else None,
+        )
+
+        dx = y * (dy - dot)
+        tdXrdX.store(dx.to(tdXrdX.element_type))
+
+        tOpO = (
+            predicate_k(thr_copy_store.partition_S(cX), limit=shape[1])
+            if const_expr(not is_even_N)
+            else None
+        )
+        if tXcX[0][0] < shape[0]:
+            cute.copy(copy_atom_store, tdXrdX, tdXgdX, pred=tOpO)
+
+    if _KERNEL_ACCEPTS_LAYOUT_ARGS:
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,
+            mdY: cute.Tensor,
+            mdX: cute.Tensor,
+            tv_layout: cute.Layout,
+            tiler_mn: cute.Shape,
+        ) -> None:
+            self._kernel_impl(mX, mdY, mdX, tv_layout, tiler_mn)
+    else:
+
+        @cute.kernel
+        def kernel(
+            self,
+            mX: cute.Tensor,
+            mdY: cute.Tensor,
+            mdX: cute.Tensor,
+        ) -> None:
+            tiler_mn, tv_layout = self._get_tv_layout()
+            self._kernel_impl(mX, mdY, mdX, tv_layout, tiler_mn)
+
+
 def _convert_2d_tensor(x: Tensor) -> cute.Tensor:
     # Match Quack's Softmax conversion exactly: assume 16B alignment and mark
     # the shape compact with row-major stride order (0, 1), with mode=0 (batch).
@@ -596,7 +1238,8 @@ def _softmax_forward_ptr_into(*, x: Tensor, out: Tensor) -> None:
     device_index = x.get_device()
     if torch.cuda.current_device() != device_index:
         torch.cuda.set_device(device_index)
-    stream = cuda.CUstream(int(torch.cuda.current_stream().cuda_stream))
+    stream_handle = int(torch.cuda.current_stream().cuda_stream)
+    stream = cuda.CUstream(stream_handle)
 
     dtype_x = TORCH2CUTE_DTYPE[x.dtype]
     key = ("ptr_fwd", int(N), dtype_x, int(device_index))
@@ -620,6 +1263,27 @@ def _softmax_forward_ptr_into(*, x: Tensor, out: Tensor) -> None:
         )
         _PTR_FWD_COMPILE_CACHE[key] = compiled
 
+    launcher = _get_fast_ptr_softmax_launcher(
+        compiled=compiled,
+        dtype=dtype_x,
+        N=int(N),
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        assumed_align=16,
+        is_bwd=False,
+    )
+    if launcher is not None:
+        launcher.launch(
+            a_ptr=int(x.data_ptr()),
+            b_ptr=int(out.data_ptr()),
+            c_ptr=None,
+            M=int(M),
+            ld=int(x.stride(0)),
+            stream_handle=stream_handle,
+            dtype=dtype_x,
+        )
+        return
+
     ptr_x = rt.make_ptr(
         dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
     )
@@ -642,7 +1306,8 @@ def _softmax_backward_ptr_into(*, dy: Tensor, y: Tensor, dx: Tensor) -> None:
     device_index = dy.get_device()
     if torch.cuda.current_device() != device_index:
         torch.cuda.set_device(device_index)
-    stream = cuda.CUstream(int(torch.cuda.current_stream().cuda_stream))
+    stream_handle = int(torch.cuda.current_stream().cuda_stream)
+    stream = cuda.CUstream(stream_handle)
 
     dtype_x = TORCH2CUTE_DTYPE[dy.dtype]
     key = ("ptr_bwd", int(N), dtype_x, int(device_index))
@@ -670,6 +1335,27 @@ def _softmax_backward_ptr_into(*, dy: Tensor, y: Tensor, dx: Tensor) -> None:
         )
         _PTR_BWD_COMPILE_CACHE[key] = compiled
 
+    launcher = _get_fast_ptr_softmax_launcher(
+        compiled=compiled,
+        dtype=dtype_x,
+        N=int(N),
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        assumed_align=16,
+        is_bwd=True,
+    )
+    if launcher is not None:
+        launcher.launch(
+            a_ptr=int(dy.data_ptr()),
+            b_ptr=int(y.data_ptr()),
+            c_ptr=int(dx.data_ptr()),
+            M=int(M),
+            ld=int(dy.stride(0)),
+            stream_handle=stream_handle,
+            dtype=dtype_x,
+        )
+        return
+
     ptr_dy = rt.make_ptr(
         dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
     )
@@ -680,6 +1366,81 @@ def _softmax_backward_ptr_into(*, dy: Tensor, y: Tensor, dx: Tensor) -> None:
         dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
     )
     compiled(ptr_dy, ptr_y, ptr_dx, Int32(int(M)), Int32(int(dy.stride(0))), stream)
+
+
+def _softmax_fwd_bwd_ptr_into(*, x: Tensor, dy: Tensor, dx: Tensor) -> None:
+    """Launch the fused pointer-based Softmax fwd+bwd kernel into preallocated `dx`."""
+    assert x.is_cuda and x.dim() == 2
+    assert dy.is_cuda and dy.shape == x.shape and dy.dtype == x.dtype
+    assert dx.is_cuda and dx.shape == x.shape and dx.dtype == x.dtype
+    assert x.stride() == dy.stride() == dx.stride(), (
+        "Pointer path expects matching strides"
+    )
+
+    M, N = x.shape
+    device_index = x.get_device()
+    if torch.cuda.current_device() != device_index:
+        torch.cuda.set_device(device_index)
+    stream_handle = int(torch.cuda.current_stream().cuda_stream)
+    stream = cuda.CUstream(stream_handle)
+
+    dtype_x = TORCH2CUTE_DTYPE[x.dtype]
+    key = ("ptr_fwd_bwd", int(N), dtype_x, int(device_index))
+    compiled = _PTR_FWDBWD_COMPILE_CACHE.get(key)
+    if compiled is None:
+        op = SoftmaxFwdBwdSM100(dtype_x, int(N))
+        ptr_x = rt.make_ptr(
+            dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_dy = rt.make_ptr(
+            dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ptr_dx = rt.make_ptr(
+            dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        ld = Int32(int(x.stride(0)))
+        compiled = cute.compile(
+            op.launch_from_ptrs,
+            ptr_x,
+            ptr_dy,
+            ptr_dx,
+            Int32(int(M)),
+            ld,
+            stream,
+        )
+        _PTR_FWDBWD_COMPILE_CACHE[key] = compiled
+
+    launcher = _get_fast_ptr_softmax_launcher(
+        compiled=compiled,
+        dtype=dtype_x,
+        N=int(N),
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        assumed_align=16,
+        is_bwd=True,
+    )
+    if launcher is not None:
+        launcher.launch(
+            a_ptr=int(x.data_ptr()),
+            b_ptr=int(dy.data_ptr()),
+            c_ptr=int(dx.data_ptr()),
+            M=int(M),
+            ld=int(x.stride(0)),
+            stream_handle=stream_handle,
+            dtype=dtype_x,
+        )
+        return
+
+    ptr_x = rt.make_ptr(
+        dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_dy = rt.make_ptr(
+        dtype_x, dy.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_dx = rt.make_ptr(
+        dtype_x, dx.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    compiled(ptr_x, ptr_dy, ptr_dx, Int32(int(M)), Int32(int(x.stride(0))), stream)
 
 
 def softmax_forward(x: Tensor) -> Tensor:
@@ -747,6 +1508,31 @@ def softmax_backward(dy: Tensor, y: Tensor) -> Tensor:
         _BWD_COMPILE_CACHE[compile_key] = kernel
     kernel(dy_tensor, y_tensor, dx_tensor, current_stream)
     return dx
+
+
+def softmax_fwd_bwd(dy: Tensor, x: Tensor) -> Tensor:
+    """Fused softmax forward+backward producing ``dx`` from ``(x, dy)``.
+
+    This is intended for benchmarks and training-like use-cases where the
+    intermediate ``y = softmax(x)`` is not needed outside the backward pass.
+    """
+    assert x.dim() == 2 and dy.dim() == 2, "x and dy must be 2D (M, N)"
+    assert x.shape == dy.shape, "x and dy must have the same shape"
+    assert x.is_cuda and dy.is_cuda, "x and dy must be on CUDA device"
+    assert x.dtype in TORCH2CUTE_DTYPE, "Unsupported dtype"
+    assert dy.dtype == x.dtype, "x and dy must have the same dtype"
+
+    if (
+        _can_use_ptr_path_2d(x)
+        and _can_use_ptr_path_2d(dy)
+        and x.stride() == dy.stride()
+    ):
+        dx = torch.empty_strided(x.shape, x.stride(), device=x.device, dtype=x.dtype)
+        _softmax_fwd_bwd_ptr_into(x=x, dy=dy, dx=dx)
+        return dx
+
+    with torch.no_grad():
+        return softmax_backward(dy, softmax_forward(x))
 
 
 class SoftmaxFunction(torch.autograd.Function):

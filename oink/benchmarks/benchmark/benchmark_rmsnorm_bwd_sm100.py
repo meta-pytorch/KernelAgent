@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import csv
 import os
-import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -30,19 +29,17 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 # Ensure SM100 (GB200) architecture is recognized by CuTeDSL when running outside vLLM.
 os.environ.setdefault("CUTE_DSL_ARCH", "sm_100a")
 
-# Make the in-repo KernelAgent Oink package importable without an editable install.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_OINK_SRC = os.path.abspath(os.path.join(_HERE, "..", "src"))
-if _OINK_SRC not in sys.path:
-    sys.path.insert(0, _OINK_SRC)
-
 from bench_utils import (  # noqa: E402
     ErrorStatsAccumulator,
     collect_device_meta,
+    ensure_oink_src_on_path,
     error_stats_to_row,
     iter_row_blocks,
     write_json,
 )
+
+ensure_oink_src_on_path()
+
 from kernelagent_oink.blackwell import rmsnorm as oink_rmsnorm  # noqa: E402
 
 try:

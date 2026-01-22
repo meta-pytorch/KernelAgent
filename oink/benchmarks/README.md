@@ -96,6 +96,12 @@ CUDA_VISIBLE_DEVICES=0 python oink/benchmarks/benchmark/benchmark_fused_add_rmsn
   --json /tmp/fused_add_rmsnorm_sm100_bf16.json
 ```
 
+Note on the Quack baseline: Oink exposes an **in-place** fused op (updates `x` and `residual`).
+Quack’s fused kernel produces `out` and `residual_out` out-of-place, so by default the benchmark
+times `quack::_rmsnorm_fwd` **plus** two explicit copies (`x.copy_(out)`, `residual.copy_(residual_out)`)
+to match the in-place semantics (integration-realistic). Use `--quack-baseline kernel` to time only
+the Quack fused kernel with preallocated outputs.
+
 ### RMSNorm backward
 
 ```bash
