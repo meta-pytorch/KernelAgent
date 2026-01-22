@@ -31,6 +31,7 @@ while matching `torch.nn.functional.layer_norm`'s gradients numerically.
 from __future__ import annotations
 
 import importlib.metadata
+import math
 import os
 import re
 import operator
@@ -70,6 +71,25 @@ from cutlass import Float32, Int32, const_expr
 from cutlass.cute import runtime as rt
 from cutlass.cute.runtime import from_dlpack
 
+from kernelagent_oink.blackwell.lite_quack import (
+    _KERNEL_ACCEPTS_LAYOUT_ARGS,
+    TORCH2CUTE_DTYPE,
+    ReductionBase as _ReductionBase,
+    convert_from_dlpack as convert_from_dlpack_cute,
+    get_sm_count,
+    predicate_k,
+    row_reduce,
+    warp_reduce,
+)
+from kernelagent_oink.blackwell.fast_launch import (
+    StableF32Arg,
+    StableI32Arg,
+    disable_fast_launch,
+    fast_launch_enabled,
+    set_runtime_ptr,
+    tls_cache as _tls_fast_launch_cache,
+)
+
 # Simple compile cache for the forward kernel
 _COMPILE_CACHE: dict[Tuple[int, type[cutlass.Numeric], bool, bool, bool], object] = {}
 _PTR_COMPILE_CACHE: dict[Tuple[object, ...], object] = {}
@@ -78,19 +98,428 @@ _PTR_COMPILE_CACHE: dict[Tuple[object, ...], object] = {}
 _BWD_DX_COMPILE_CACHE: dict[Tuple[int, Type[cutlass.Numeric]], object] = {}
 _BWD_PARAM_COMPILE_CACHE: dict[Tuple[int, Type[cutlass.Numeric], bool], object] = {}
 
-# Local helpers cloned from Quack via lite_quack so that this kernel does
-# not depend on `quack` at runtime.
-from kernelagent_oink.blackwell.lite_quack import (  # noqa: E402
-    _KERNEL_ACCEPTS_LAYOUT_ARGS,
-    TORCH2CUTE_DTYPE,
-    ReductionBase as _ReductionBase,
-    convert_from_dlpack as convert_from_dlpack_cute,
-    domain_offset_i64,
-    get_sm_count,
-    predicate_k,
-    row_reduce,
-    warp_reduce,
-)
+
+class _PtrLayernormFastLaunch:
+    def __init__(
+        self,
+        *,
+        compiled: object,
+        executor: object,
+        capi_func: object,
+        ptr_x: object,
+        ptr_w: object,
+        ptr_b: Optional[object],
+        ptr_out: object,
+        ptr_rstd: Optional[object],
+        ptr_mean: Optional[object],
+        arg_m: StableI32Arg,
+        arg_ld: StableI32Arg,
+        arg_eps: StableF32Arg,
+        stream: cuda.CUstream,
+        assumed_align_xo: int,
+        packed_args: object,
+        keepalive: tuple[object, ...],
+    ):
+        self._compiled = compiled
+        self._executor = executor
+        self._capi_func = capi_func
+        self._ptr_x = ptr_x
+        self._ptr_w = ptr_w
+        self._ptr_b = ptr_b
+        self._ptr_out = ptr_out
+        self._ptr_rstd = ptr_rstd
+        self._ptr_mean = ptr_mean
+        self._arg_m = arg_m
+        self._arg_ld = arg_ld
+        self._arg_eps = arg_eps
+        self._stream = stream
+        self._assumed_align_xo = int(assumed_align_xo)
+        self._packed_args = packed_args
+        self._keepalive = keepalive
+
+        self._use_fast_launch = True
+        self._cuda_result = getattr(executor, "cuda_result", None)
+
+        self._last_x_ptr = -1
+        self._last_w_ptr = -1
+        self._last_b_ptr = -1
+        self._last_out_ptr = -1
+        self._last_rstd_ptr = -1
+        self._last_mean_ptr = -1
+        self._last_m = -1
+        self._last_ld = -1
+        self._last_eps = float("nan")
+
+    def launch(
+        self,
+        *,
+        x: Tensor,
+        weight: Tensor,
+        bias: Optional[Tensor],
+        out: Tensor,
+        rstd: Optional[Tensor],
+        mean: Optional[Tensor],
+        M: int,
+        ld: int,
+        eps: float,
+    ) -> None:
+        if not fast_launch_enabled() or not self._use_fast_launch:
+            self._fallback_launch(
+                x=x,
+                weight=weight,
+                bias=bias,
+                out=out,
+                rstd=rstd,
+                mean=mean,
+                M=M,
+                ld=ld,
+                eps=eps,
+            )
+            return
+
+        x_ptr = x.data_ptr()
+        if x_ptr != self._last_x_ptr:
+            try:
+                set_runtime_ptr(self._ptr_x, x_ptr)
+                self._last_x_ptr = x_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    x=x,
+                    weight=weight,
+                    bias=bias,
+                    out=out,
+                    rstd=rstd,
+                    mean=mean,
+                    M=M,
+                    ld=ld,
+                    eps=eps,
+                )
+                return
+
+        w_ptr = weight.data_ptr()
+        if w_ptr != self._last_w_ptr:
+            try:
+                set_runtime_ptr(self._ptr_w, w_ptr)
+                self._last_w_ptr = w_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    x=x,
+                    weight=weight,
+                    bias=bias,
+                    out=out,
+                    rstd=rstd,
+                    mean=mean,
+                    M=M,
+                    ld=ld,
+                    eps=eps,
+                )
+                return
+
+        if self._ptr_b is not None and bias is not None:
+            b_ptr = bias.data_ptr()
+            if b_ptr != self._last_b_ptr:
+                try:
+                    set_runtime_ptr(self._ptr_b, b_ptr)
+                    self._last_b_ptr = b_ptr
+                except AttributeError:
+                    self._disable_fast_launch()
+                    self._fallback_launch(
+                        x=x,
+                        weight=weight,
+                        bias=bias,
+                        out=out,
+                        rstd=rstd,
+                        mean=mean,
+                        M=M,
+                        ld=ld,
+                        eps=eps,
+                    )
+                    return
+
+        out_ptr = out.data_ptr()
+        if out_ptr != self._last_out_ptr:
+            try:
+                set_runtime_ptr(self._ptr_out, out_ptr)
+                self._last_out_ptr = out_ptr
+            except AttributeError:
+                self._disable_fast_launch()
+                self._fallback_launch(
+                    x=x,
+                    weight=weight,
+                    bias=bias,
+                    out=out,
+                    rstd=rstd,
+                    mean=mean,
+                    M=M,
+                    ld=ld,
+                    eps=eps,
+                )
+                return
+
+        if self._ptr_rstd is not None and rstd is not None:
+            rstd_ptr = rstd.data_ptr()
+            if rstd_ptr != self._last_rstd_ptr:
+                try:
+                    set_runtime_ptr(self._ptr_rstd, rstd_ptr)
+                    self._last_rstd_ptr = rstd_ptr
+                except AttributeError:
+                    self._disable_fast_launch()
+                    self._fallback_launch(
+                        x=x,
+                        weight=weight,
+                        bias=bias,
+                        out=out,
+                        rstd=rstd,
+                        mean=mean,
+                        M=M,
+                        ld=ld,
+                        eps=eps,
+                    )
+                    return
+
+        if self._ptr_mean is not None and mean is not None:
+            mean_ptr = mean.data_ptr()
+            if mean_ptr != self._last_mean_ptr:
+                try:
+                    set_runtime_ptr(self._ptr_mean, mean_ptr)
+                    self._last_mean_ptr = mean_ptr
+                except AttributeError:
+                    self._disable_fast_launch()
+                    self._fallback_launch(
+                        x=x,
+                        weight=weight,
+                        bias=bias,
+                        out=out,
+                        rstd=rstd,
+                        mean=mean,
+                        M=M,
+                        ld=ld,
+                        eps=eps,
+                    )
+                    return
+
+        if M != self._last_m:
+            self._arg_m.set(M)
+            self._last_m = M
+        if ld != self._last_ld:
+            self._arg_ld.set(ld)
+            self._last_ld = ld
+        if eps != self._last_eps:
+            self._arg_eps.set(eps)
+            self._last_eps = eps
+
+        if self._cuda_result is not None:
+            self._cuda_result.value = 0
+        ret = self._capi_func(self._packed_args)  # type: ignore[misc]
+        if ret != 0:
+            raise RuntimeError(f"CuTeDSL capi_func returned non-zero: {ret}")
+        if self._cuda_result is not None:
+            err = int(self._cuda_result.value)
+            if err != 0:
+                raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
+
+    def _disable_fast_launch(self) -> None:
+        self._use_fast_launch = False
+        disable_fast_launch()
+
+    def _fallback_launch(
+        self,
+        *,
+        x: Tensor,
+        weight: Tensor,
+        bias: Optional[Tensor],
+        out: Tensor,
+        rstd: Optional[Tensor],
+        mean: Optional[Tensor],
+        M: int,
+        ld: int,
+        eps: float,
+    ) -> None:
+        dtype_x = TORCH2CUTE_DTYPE[x.dtype]
+        stream_handle = int(torch.cuda.current_stream().cuda_stream)
+        stream = cuda.CUstream(stream_handle)
+        ptr_x = rt.make_ptr(
+            dtype_x,
+            x.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._assumed_align_xo,
+        )
+        ptr_out = rt.make_ptr(
+            dtype_x,
+            out.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=self._assumed_align_xo,
+        )
+        ptr_w = rt.make_ptr(
+            cutlass.Float32,
+            weight.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=16,
+        )
+        ptr_b = (
+            rt.make_ptr(
+                cutlass.Float32,
+                bias.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=16,
+            )
+            if bias is not None
+            else None
+        )
+        ptr_rstd = (
+            rt.make_ptr(
+                cutlass.Float32,
+                rstd.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=4,
+            )
+            if rstd is not None
+            else None
+        )
+        ptr_mean = (
+            rt.make_ptr(
+                cutlass.Float32,
+                mean.data_ptr(),
+                mem_space=rt.AddressSpace.gmem,
+                assumed_align=4,
+            )
+            if mean is not None
+            else None
+        )
+        self._compiled(
+            ptr_x,
+            ptr_w,
+            ptr_b,
+            ptr_out,
+            ptr_rstd,
+            ptr_mean,
+            Int32(int(M)),
+            Int32(int(ld)),
+            stream,
+            Float32(float(eps)),
+        )
+
+
+def _get_fast_ptr_layernorm_launcher(
+    *,
+    compiled: object,
+    N: int,
+    dtype_x: type[cutlass.Numeric],
+    has_bias: bool,
+    has_rstd: bool,
+    has_mean: bool,
+    device_index: int,
+    stream_handle: int,
+    assumed_align_xo: int,
+    eps: float,
+) -> Optional[_PtrLayernormFastLaunch]:
+    if not fast_launch_enabled():
+        return None
+    key = (
+        "ptr_fast",
+        id(compiled),
+        int(N),
+        dtype_x,
+        bool(has_bias),
+        bool(has_rstd),
+        bool(has_mean),
+        int(device_index),
+        int(stream_handle),
+        int(assumed_align_xo),
+    )
+    cache = _tls_fast_launch_cache()
+    cached = cache.get(key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+
+    ptr_x = rt.make_ptr(
+        dtype_x, 0, mem_space=rt.AddressSpace.gmem, assumed_align=int(assumed_align_xo)
+    )
+    ptr_out = rt.make_ptr(
+        dtype_x, 0, mem_space=rt.AddressSpace.gmem, assumed_align=int(assumed_align_xo)
+    )
+    ptr_w = rt.make_ptr(
+        cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16
+    )
+    ptr_b = (
+        rt.make_ptr(
+            cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=16
+        )
+        if has_bias
+        else None
+    )
+    ptr_rstd = (
+        rt.make_ptr(cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4)
+        if has_rstd
+        else None
+    )
+    ptr_mean = (
+        rt.make_ptr(cutlass.Float32, 0, mem_space=rt.AddressSpace.gmem, assumed_align=4)
+        if has_mean
+        else None
+    )
+
+    arg_m = StableI32Arg(0)
+    arg_ld = StableI32Arg(N)
+    arg_eps = StableF32Arg(eps)
+    stream = cuda.CUstream(int(stream_handle))
+    executor = compiled.to(device_index)  # type: ignore[attr-defined]
+
+    try:
+        exe_args, adapted_args = executor.generate_execution_args(
+            ptr_x,
+            ptr_w,
+            ptr_b,
+            ptr_out,
+            ptr_rstd,
+            ptr_mean,
+            arg_m,
+            arg_ld,
+            stream,
+            arg_eps,
+        )
+        packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
+        capi_func = compiled.capi_func  # type: ignore[attr-defined]
+    except AttributeError:
+        disable_fast_launch()
+        return None
+
+    keepalive: tuple[object, ...] = (
+        executor,
+        ptr_x,
+        ptr_w,
+        ptr_b,
+        ptr_out,
+        ptr_rstd,
+        ptr_mean,
+        arg_m,
+        arg_ld,
+        arg_eps,
+        stream,
+        *adapted_args,
+    )
+    launcher = _PtrLayernormFastLaunch(
+        compiled=compiled,
+        executor=executor,
+        capi_func=capi_func,
+        ptr_x=ptr_x,
+        ptr_w=ptr_w,
+        ptr_b=ptr_b,
+        ptr_out=ptr_out,
+        ptr_rstd=ptr_rstd,
+        ptr_mean=ptr_mean,
+        arg_m=arg_m,
+        arg_ld=arg_ld,
+        arg_eps=arg_eps,
+        stream=stream,
+        assumed_align_xo=int(assumed_align_xo),
+        packed_args=packed_args,
+        keepalive=keepalive,
+    )
+    cache[key] = launcher
+    return launcher
 
 
 def _convert_row_major(t: Tensor) -> cute.Tensor:
@@ -121,17 +550,42 @@ class LayerNormSM100(_ReductionBase):
     - Dtype mapping and reduction helpers come from `lite_quack`.
     """
 
-    def __init__(self, dtype: type[cutlass.Numeric], N: int):
+    def __init__(
+        self,
+        dtype: type[cutlass.Numeric],
+        N: int,
+        *,
+        copy_bits_x: Optional[int] = None,
+        direct_gmem: bool = False,
+    ):
         super().__init__(dtype, N, stage=2)  # 2 stages for mean and var
         # Default reload policy mirrors Quack: use SMEM reload only for
         # very large hidden sizes. We keep this conservative for LayerNorm
         # and tune primarily via threads-per-block / cluster_n.
         self.reload_from: Optional[str] = None if N <= 16384 else "smem"
-        self.delay_w_load: bool = False
+        # SM100 tuning: for DSv3 hidden sizes where we fuse mean+var stats,
+        # delay loading fp32 weights/bias until after the reductions to lower
+        # register pressure.
+        self.delay_w_load: bool = bool(N in (4096, 6144, 7168, 8192))
+        self.copy_bits_x: Optional[int] = (
+            int(copy_bits_x) if copy_bits_x is not None else None
+        )
+        self.direct_gmem: bool = bool(direct_gmem)
+
+    def _get_num_threads(self) -> int:
+        nt = getattr(self, "_nt_override", None)
+        if nt is not None:
+            return int(nt)
+        return super()._get_num_threads()
 
     def _calculate_threads_per_row(self) -> int:
+        tpr = getattr(self, "_tpr_override", None)
+        if tpr is not None:
+            return int(tpr)
         # Match Quack's LayerNorm threads-per-row buckets.
         N = self.N
+        if N in (4096, 6144):
+            return 128
         return (
             8
             if N <= 64
@@ -188,7 +642,24 @@ class LayerNormSM100(_ReductionBase):
 
         # Tiling and cluster policy (mirrors Quack LayerNorm).
         self._set_cluster_n()
-        tiler_mn, tv_layout = self._get_tv_layout()
+        largest_dtype_width = const_expr(
+            max(
+                t.element_type.width
+                for t in (mX, mW, mB, mO, mRstd, mMean)
+                if t is not None
+            )
+        )
+        # Match Quack's unified RMSNorm/LayerNorm kernel: pick vecsize based on
+        # the widest dtype participating in the op (e.g. fp32 weights => fp16
+        # X uses 64b vectorization).
+        vecsize = math.gcd(self.N, 128 // largest_dtype_width)
+        default_copy_bits_x = vecsize * self.dtype.width
+        num_copy_bits_x = (
+            int(self.copy_bits_x)
+            if self.copy_bits_x is not None
+            else default_copy_bits_x
+        )
+        tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=num_copy_bits_x)
         num_threads = (
             cute.size(tv_layout, mode=[0])
             if _KERNEL_ACCEPTS_LAYOUT_ARGS
@@ -275,10 +746,14 @@ class LayerNormSM100(_ReductionBase):
         This reconstructs cute.Tensor views from raw device pointers + explicit
         layouts inside the JIT graph, reusing the tuned LayerNormSM100 schedule.
         """
-        # The kernel uses 128-bit vectorized copies for X. Mirror Quack's
-        # `divisibility=128 // dtype.width` contract so the compiler can
-        # prove alignment for cp.async.
-        ld_assumed = cute.assume(ld, divby=128 // self.dtype.width)
+        # Mirror Quack-style divisibility contracts so the compiler can prove
+        # alignment for vectorized loads/stores (and cp.async when enabled).
+        divby = (
+            int(self.copy_bits_x) // self.dtype.width
+            if const_expr(self.copy_bits_x is not None)
+            else (128 // self.dtype.width)
+        )
+        ld_assumed = cute.assume(ld, divby=divby)
         # Match `mark_compact_shape_dynamic(mode=0, ...)`: M is dynamic, N is static.
         layout_mn = cute.make_layout((M, self.N), stride=(ld_assumed, 1))
         layout_n = cute.make_layout((self.N,), stride=(1,))
@@ -338,9 +813,10 @@ class LayerNormSM100(_ReductionBase):
         shape = mX.shape
         idX = cute.make_identity_tensor(shape)
 
-        # Slice for CTAs: use domain_offset_i64 to handle >2^31 elements.
-        mX, mO = [domain_offset_i64((bidx * tiler_mn[0], 0), mT) for mT in (mX, mO)]
-        gX, gO = [cute.local_tile(mT, tiler_mn, (0, cluster_y)) for mT in (mX, mO)]
+        # Quack-style CTA tiling: let CuTe compute the CTA offsets directly.
+        # (Avoids the extra 64-bit address arithmetic in `domain_offset_i64` on
+        # the common inference/benchmark sizes.)
+        gX, gO = [cute.local_tile(mT, tiler_mn, (bidx, cluster_y)) for mT in (mX, mO)]
         cX = cute.local_tile(idX, tiler_mn, (bidx, cluster_y))
         gW = cute.local_tile(mW, tiler_mn, (0, cluster_y))
         gB = (
@@ -359,118 +835,160 @@ class LayerNormSM100(_ReductionBase):
             else None
         )
 
-        # Copy atoms for X / W / B / O.
+        # Copy atoms for X / W / B / O (mirror Quack's vector-size contract).
+        num_copy_elems_x = (
+            tv_layout.shape[1]
+            if const_expr(cute.rank(tv_layout.shape[1]) == 1)
+            else tv_layout.shape[1][0]
+        )
+        threads_per_row = (
+            tv_layout.shape[0]
+            if const_expr(cute.rank(tv_layout.shape[0]) == 1)
+            else tv_layout.shape[0][0]
+        )
+        num_copy_bits_x = mX.element_type.width * num_copy_elems_x
+        num_copy_bits_x_async = const_expr(min(128, num_copy_bits_x))
         copy_atom_load_X = cute.make_copy_atom(
             cute.nvgpu.CopyUniversalOp(),
             mX.element_type,
-            num_bits_per_copy=128,
+            num_bits_per_copy=num_copy_bits_x,
         )
         copy_atom_load_X_async = cute.make_copy_atom(
             cute.nvgpu.cpasync.CopyG2SOp(),
             mX.element_type,
-            num_bits_per_copy=128,
+            num_bits_per_copy=num_copy_bits_x_async,
+        )
+        num_copy_bits_wb = const_expr(
+            min(128, mW.element_type.width * num_copy_elems_x)
         )
         copy_atom_load_WB = cute.make_copy_atom(
             cute.nvgpu.CopyUniversalOp(),
             mW.element_type,
-            num_bits_per_copy=128,
+            num_bits_per_copy=num_copy_bits_wb,
         )
         copy_atom_store_O = cute.make_copy_atom(
             cute.nvgpu.CopyUniversalOp(),
             mO.element_type,
-            num_bits_per_copy=128,
+            num_bits_per_copy=num_copy_bits_x,
         )
 
-        thr_copy_X = cute.make_tiled_copy(
-            copy_atom_load_X_async,
-            tv_layout,
-            tiler_mn,
-        ).get_slice(tidx)
-        thr_copy_WB = cute.make_tiled_copy(
-            copy_atom_load_WB,
-            tv_layout,
-            tiler_mn,
-        ).get_slice(tidx)
-        thr_copy_O = cute.make_tiled_copy(
-            copy_atom_store_O,
-            tv_layout,
-            tiler_mn,
+        # Quack-style partitioning: use `make_tiled_copy_tv` (2D thread/value
+        # layout) and let partitioning over the CTA tile handle the N loop.
+        thr_layout = cute.make_ordered_layout(
+            (tiler_mn[0], threads_per_row), order=(1, 0)
+        )
+        val_layout = cute.make_layout((1, num_copy_elems_x))
+        thr_copy = cute.make_tiled_copy_tv(
+            copy_atom_load_X, thr_layout, val_layout
         ).get_slice(tidx)
 
-        tWgW = thr_copy_WB.partition_S(gW)
-        tBgB = thr_copy_WB.partition_S(gB) if const_expr(gB is not None) else None
-        tXgX = thr_copy_X.partition_S(gX)
-        tXsX = thr_copy_X.partition_D(sX)
-        tXgO = thr_copy_O.partition_D(gO)
-        tXrRstd = (
-            thr_copy_O.partition_D(gRstd) if const_expr(mRstd is not None) else None
-        )
-        tXrMean = (
-            thr_copy_O.partition_D(gMean) if const_expr(mMean is not None) else None
-        )
-        tXcX = thr_copy_X.partition_S(cX)[(0, None), None, None]
+        tXgX = thr_copy.partition_S(gX)
+        tXsX = thr_copy.partition_D(sX)
+        tXgO = thr_copy.partition_D(gO)
+        tXgW = thr_copy.partition_S(gW)
+        tXgB = thr_copy.partition_S(gB) if const_expr(gB is not None) else None
+        tXrRstd = thr_copy.partition_D(gRstd) if const_expr(mRstd is not None) else None
+        tXrMean = thr_copy.partition_D(gMean) if const_expr(mMean is not None) else None
+        tXcX = thr_copy.partition_S(cX)[(0, None), None, None]
 
         # Fragments for gmem->rmem.
-        tWrW = cute.make_fragment_like(tWgW)
-        tBrB = cute.make_fragment_like(tBgB) if const_expr(mB is not None) else None
-        tXrW = thr_copy_X.retile(tWrW)
-        tXrB = thr_copy_X.retile(tBrB) if const_expr(mB is not None) else None
+        tXrW = cute.make_fragment_like(tXgW)
+        tXrB = cute.make_fragment_like(tXgB) if const_expr(mB is not None) else None
         tXrX, tXrO = [cute.make_fragment_like(thr) for thr in (tXgX, tXgO)]
 
         num_warps = cute.size(tv_layout, mode=[0]) // cute.arch.WARP_SIZE
         self._initialize_cluster(tidx, mbar_ptr, num_warps, is_persistent=False)
 
-        tXpX = predicate_k(
-            thr_copy_X.partition_S(cX),
-            limit=shape[1],
+        is_even_N = const_expr(shape[1] == tiler_mn[1] * self.cluster_n)
+        tXpX = (
+            None if is_even_N else predicate_k(thr_copy.partition_S(cX), limit=shape[1])
         )
         row = tXcX[0][0]
-        if row < shape[0]:
-            cute.copy(copy_atom_load_X_async, tXgX, tXsX, pred=tXpX)
-        cute.arch.cp_async_commit_group()
+        if const_expr(not self.direct_gmem):
+            if row < shape[0]:
+                cute.copy(copy_atom_load_X_async, tXgX, tXsX, pred=tXpX)
+            cute.arch.cp_async_commit_group()
 
-        tWpW = predicate_k(
-            thr_copy_WB.partition_S(cX),
-            limit=shape[1],
-        )
         if const_expr(not delay_w_load):
-            cute.copy(copy_atom_load_WB, tWgW, tWrW, pred=tWpW)
+            cute.copy(copy_atom_load_WB, tXgW, tXrW, pred=tXpX)
             if const_expr(mB is not None):
-                cute.copy(copy_atom_load_WB, tBgB, tBrB, pred=tWpW)
+                cute.copy(copy_atom_load_WB, tXgB, tXrB, pred=tXpX)
 
-        cute.arch.cp_async_wait_group(0)
-        cute.autovec_copy(tXsX, tXrX)
-        x = tXrX.load().to(Float32)
-        threads_per_row = tv_layout.shape[0][0]
-        sum_x = row_reduce(
-            x,
-            cute.ReductionOp.ADD,
-            threads_per_row,
-            reduction_buffer[None, None, 0],
-            mbar_ptr + 0 if const_expr(self.cluster_n > 1) else None,
-            init_val=0.0,
-            hook_fn=(
-                cute.arch.cluster_wait if const_expr(self.cluster_n > 1) else None
-            ),
-        )
-        mean = sum_x / shape[1]
-
-        if const_expr(reload_from == "smem"):
+        if const_expr(not self.direct_gmem):
+            cute.arch.cp_async_wait_group(0)
             cute.autovec_copy(tXsX, tXrX)
-            x = tXrX.load().to(Float32)
-        elif const_expr(reload_from == "gmem"):
-            cute.copy(copy_atom_load_X, tXgX, tXrX, pred=tXpX)
-            x = tXrX.load().to(Float32)
+        else:
+            if row < shape[0]:
+                cute.copy(copy_atom_load_X, tXgX, tXrX, pred=tXpX)
+        x = tXrX.load().to(Float32)
+        if const_expr(self.cluster_n == 1 and self.N in (4096, 6144, 7168, 8192)):
+            # SM100 tuning for DSv3 hidden sizes:
+            # Compute (sum_x, sum_x2) together so we can derive mean + variance
+            # without a second reduction pass (and without re-materializing
+            # x-mean for the variance reduction).
+            sum_x = x.reduce(cute.ReductionOp.ADD, init_val=0.0, reduction_profile=0)
+            sum_x2 = (x * x).reduce(
+                cute.ReductionOp.ADD, init_val=0.0, reduction_profile=0
+            )
+            sum_x = warp_reduce(
+                sum_x,
+                operator.add,
+                width=min(threads_per_row, cute.arch.WARP_SIZE),
+            )
+            sum_x2 = warp_reduce(
+                sum_x2,
+                operator.add,
+                width=min(threads_per_row, cute.arch.WARP_SIZE),
+            )
+            warps_per_row, cluster_n = reduction_buffer.shape[1]
+            if const_expr(warps_per_row > 1 or cluster_n > 1):
+                lane_idx, warp_idx = cute.arch.lane_idx(), cute.arch.warp_idx()
+                row_idx, col_idx = warp_idx // warps_per_row, warp_idx % warps_per_row
+                if lane_idx == 0:
+                    reduction_buffer[row_idx, col_idx, 0] = sum_x
+                    reduction_buffer[row_idx, col_idx, 1] = sum_x2
+                cute.arch.barrier()
+                block_sum_x = 0.0
+                block_sum_x2 = 0.0
+                if lane_idx < warps_per_row:
+                    block_sum_x = reduction_buffer[row_idx, lane_idx, 0]
+                    block_sum_x2 = reduction_buffer[row_idx, lane_idx, 1]
+                sum_x = warp_reduce(block_sum_x, operator.add)
+                sum_x2 = warp_reduce(block_sum_x2, operator.add)
+            mean = sum_x / shape[1]
+            var = sum_x2 / shape[1] - mean * mean
+            var = cute.arch.fmax(var, 0.0)
+            rstd = cute.math.rsqrt(var + eps, fastmath=True)
+        else:
+            sum_x = row_reduce(
+                x,
+                cute.ReductionOp.ADD,
+                threads_per_row,
+                reduction_buffer[None, None, 0],
+                mbar_ptr + 0 if const_expr(self.cluster_n > 1) else None,
+                init_val=0.0,
+                hook_fn=(
+                    cute.arch.cluster_wait if const_expr(self.cluster_n > 1) else None
+                ),
+            )
+            mean = sum_x / shape[1]
 
-        sum_sq_x_sub_mean = row_reduce(
-            (x - mean) * (x - mean),
-            cute.ReductionOp.ADD,
-            threads_per_row,
-            reduction_buffer[None, None, 1],
-            mbar_ptr + 1 if const_expr(self.cluster_n > 1) else None,
-            init_val=0.0,
-        )
-        rstd = cute.math.rsqrt(sum_sq_x_sub_mean / shape[1] + eps, fastmath=True)
+            if const_expr(reload_from == "smem"):
+                cute.autovec_copy(tXsX, tXrX)
+                x = tXrX.load().to(Float32)
+            elif const_expr(reload_from == "gmem"):
+                cute.copy(copy_atom_load_X, tXgX, tXrX, pred=tXpX)
+                x = tXrX.load().to(Float32)
+
+            sum_sq_x_sub_mean = row_reduce(
+                (x - mean) * (x - mean),
+                cute.ReductionOp.ADD,
+                threads_per_row,
+                reduction_buffer[None, None, 1],
+                mbar_ptr + 1 if const_expr(self.cluster_n > 1) else None,
+                init_val=0.0,
+            )
+            rstd = cute.math.rsqrt(sum_sq_x_sub_mean / shape[1] + eps, fastmath=True)
 
         if const_expr(mRstd is not None):
             if (
@@ -489,9 +1007,9 @@ class LayerNormSM100(_ReductionBase):
                 tXrMean[0] = mean
 
         if const_expr(delay_w_load):
-            cute.copy(copy_atom_load_WB, tWgW, tWrW, pred=tWpW)
+            cute.copy(copy_atom_load_WB, tXgW, tXrW, pred=tXpX)
             if const_expr(mB is not None):
-                cute.copy(copy_atom_load_WB, tBgB, tBrB, pred=tWpW)
+                cute.copy(copy_atom_load_WB, tXgB, tXrB, pred=tXpX)
 
         if const_expr(reload_from == "smem"):
             cute.autovec_copy(tXsX, tXrX)
@@ -508,12 +1026,8 @@ class LayerNormSM100(_ReductionBase):
             y = y + b
 
         tXrO.store(y.to(tXrO.element_type))
-        tOpO = predicate_k(
-            thr_copy_O.partition_S(cX),
-            limit=shape[1],
-        )
         if row < shape[0]:
-            cute.copy(copy_atom_store_O, tXrO, tXgO, pred=tOpO)
+            cute.copy(copy_atom_store_O, tXrO, tXgO, pred=tXpX)
 
     if _KERNEL_ACCEPTS_LAYOUT_ARGS:
 
@@ -558,7 +1072,24 @@ class LayerNormSM100(_ReductionBase):
             mMean: Optional[cute.Tensor],
             eps: Float32,
         ):
-            tiler_mn, tv_layout = self._get_tv_layout()
+            largest_dtype_width = const_expr(
+                max(
+                    mX.element_type.width,
+                    mW.element_type.width,
+                    mB.element_type.width if const_expr(mB is not None) else 0,
+                    mO.element_type.width,
+                    mRstd.element_type.width if const_expr(mRstd is not None) else 0,
+                    mMean.element_type.width if const_expr(mMean is not None) else 0,
+                )
+            )
+            vecsize = math.gcd(self.N, 128 // largest_dtype_width)
+            default_copy_bits_x = vecsize * mX.element_type.width
+            num_copy_bits_x = (
+                int(self.copy_bits_x)
+                if const_expr(self.copy_bits_x is not None)
+                else default_copy_bits_x
+            )
+            tiler_mn, tv_layout = self._get_tv_layout(num_copy_bits=num_copy_bits_x)
             self._kernel_impl(
                 mX,
                 mW,
@@ -775,6 +1306,37 @@ def _layernorm_forward_ptr_into(
     stream = cuda.CUstream(stream_handle)
 
     dtype_x = TORCH2CUTE_DTYPE[x.dtype]
+    # Keep the pointer path aligned with Quack's LayerNorm schedule:
+    # - <=128b vectorization (cp.async-compatible)
+    # - shared-memory staging for X (gmem->smem->rmem) to amortize global latency
+    direct_gmem = False
+    copy_bits_x: Optional[int] = None
+    assumed_align_xo = 16
+
+    # DSv3 hidden sizes are often latency-bound on small M. For these N buckets,
+    # a direct-GMEM schedule (skip gmem->smem cp.async) can reduce overhead.
+    #
+    # Keep the Quack-like staged path for large M where cp.async overlap tends to win.
+    if dtype_x.width == 16:
+        # DSv3 default hidden size (7168) is a common inference hot shape and
+        # benefits from the lower-overhead direct-GMEM path on this SM100.
+        if N == 7168 and M <= 65536:
+            direct_gmem = True
+        elif N == 8192 and M <= 16384:
+            direct_gmem = True
+
+    # DSv3 smallest point (M=4096, N=7168) is latency-sensitive. Increasing
+    # per-row parallelism improves the reduction path and consistently beats
+    # Quack on this machine.
+    tpr_override: Optional[int] = None
+    nt_override: Optional[int] = None
+    if dtype_x.width == 16 and N == 7168 and M <= 4096:
+        tpr_override = 224
+        nt_override = 224
+
+    # NOTE: We previously experimented with a direct-GMEM + 256b vectorized
+    # schedule for N=4096, but it was consistently slower on this GB200.
+    # Keep the pointer path on the Quack-like staged (cp.async) schedule.
     key = (
         "ptr",
         int(N),
@@ -782,16 +1344,36 @@ def _layernorm_forward_ptr_into(
         bias is not None,
         rstd is not None,
         mean is not None,
+        bool(direct_gmem),
+        int(copy_bits_x) if copy_bits_x is not None else None,
+        tpr_override,
+        nt_override,
+        int(assumed_align_xo),
         int(device_index),
     )
     compiled = _PTR_COMPILE_CACHE.get(key)
     if compiled is None:
-        op = LayerNormSM100(dtype_x, int(N))
+        op = LayerNormSM100(
+            dtype_x,
+            int(N),
+            copy_bits_x=copy_bits_x,
+            direct_gmem=direct_gmem,
+        )
+        if tpr_override is not None:
+            op._tpr_override = tpr_override  # type: ignore[attr-defined]
+        if nt_override is not None:
+            op._nt_override = nt_override  # type: ignore[attr-defined]
         ptr_x = rt.make_ptr(
-            dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+            dtype_x,
+            x.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=assumed_align_xo,
         )
         ptr_out = rt.make_ptr(
-            dtype_x, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+            dtype_x,
+            out.data_ptr(),
+            mem_space=rt.AddressSpace.gmem,
+            assumed_align=assumed_align_xo,
         )
         ptr_w = rt.make_ptr(
             cutlass.Float32,
@@ -845,11 +1427,44 @@ def _layernorm_forward_ptr_into(
         )
         _PTR_COMPILE_CACHE[key] = compiled
 
+    launcher = _get_fast_ptr_layernorm_launcher(
+        compiled=compiled,
+        N=int(N),
+        dtype_x=dtype_x,
+        has_bias=bias is not None,
+        has_rstd=rstd is not None,
+        has_mean=mean is not None,
+        device_index=int(device_index),
+        stream_handle=stream_handle,
+        assumed_align_xo=int(assumed_align_xo),
+        eps=float(eps),
+    )
+    ld_val = int(x.stride(0))
+    if launcher is not None:
+        launcher.launch(
+            x=x,
+            weight=weight,
+            bias=bias,
+            out=out,
+            rstd=rstd,
+            mean=mean,
+            M=int(M),
+            ld=ld_val,
+            eps=float(eps),
+        )
+        return
+
     ptr_x = rt.make_ptr(
-        dtype_x, x.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        dtype_x,
+        x.data_ptr(),
+        mem_space=rt.AddressSpace.gmem,
+        assumed_align=assumed_align_xo,
     )
     ptr_out = rt.make_ptr(
-        dtype_x, out.data_ptr(), mem_space=rt.AddressSpace.gmem, assumed_align=16
+        dtype_x,
+        out.data_ptr(),
+        mem_space=rt.AddressSpace.gmem,
+        assumed_align=assumed_align_xo,
     )
     ptr_w = rt.make_ptr(
         cutlass.Float32,
@@ -887,7 +1502,7 @@ def _layernorm_forward_ptr_into(
         if mean is not None
         else None
     )
-    ld = Int32(int(x.stride(0)))
+    ld = Int32(ld_val)
     compiled(
         ptr_x,
         ptr_w,

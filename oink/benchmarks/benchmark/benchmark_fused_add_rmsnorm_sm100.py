@@ -31,6 +31,15 @@ Example:
 DSv3 suite (Oink vs Quack, multi-shape):
   CUDA_VISIBLE_DEVICES=0 python oink/benchmarks/benchmark/benchmark_fused_add_rmsnorm_sm100.py --dtype bf16 --dsv3 \\
     --json /tmp/kernelagent_oink_sm100_suite_bf16/fused_add_rmsnorm_dsv3.json
+
+Quack baseline note:
+- Oink exposes an **in-place** fused op (writes `x` and `residual` in-place).
+- Quack provides an equivalent fused kernel, but typically returns `out` and
+  `residual_out` (out-of-place) and does not expose a public "update my input
+  buffers in-place" API.
+- For integration realism (vLLM-style semantics) we default to timing:
+    Quack fused kernel + 2 explicit copies to apply the in-place updates
+  so the benchmark covers the full semantic cost.
 """
 
 from __future__ import annotations
@@ -177,6 +186,7 @@ def bench_one(
     warmup_ms: int,
     iters_ms: int,
     verify: bool,
+    quack_baseline: str,
 ) -> Dict[str, Any]:
     device = torch.device("cuda")
     x = torch.randn((M, N), device=device, dtype=dtype)
@@ -212,22 +222,39 @@ def bench_one(
     row.update(stats)
 
     if quack_rmsnorm_fwd_mut is not None:
-        out_q = torch.empty_like(x)
-        res_out_q = torch.empty_like(residual)
+        x_q = x.clone()
+        residual_q = residual.clone()
+        out_q = torch.empty_like(x_q)
+        res_out_q = torch.empty_like(residual_q)
 
-        def fn_q():
+        def fn_q_kernel():
             quack_rmsnorm_fwd_mut(
-                x,
+                x_q,
                 w,
                 out_q,
                 None,  # bias
                 None,  # rstd
                 None,  # mean
-                residual,
+                residual_q,
                 res_out_q,
                 1e-6,
                 False,  # is_layernorm
             )
+
+        if quack_baseline == "kernel":
+            fn_q = fn_q_kernel
+        elif quack_baseline == "kernel_inplace":
+
+            def fn_q():
+                fn_q_kernel()
+                # Apply the same in-place semantics as vLLM expects:
+                # - x is overwritten with y
+                # - residual is overwritten with z = x + residual
+                x_q.copy_(out_q)
+                residual_q.copy_(res_out_q)
+
+        else:
+            raise ValueError(f"Unknown quack_baseline: {quack_baseline}")
 
         ms_q = do_bench_triton(fn_q, warmup_ms=warmup_ms, rep_ms=iters_ms)
         gbps_q = bytes_io / (ms_q * 1e-3) / 1e9
@@ -287,6 +314,18 @@ def main() -> None:
     p.add_argument(
         "--iters", type=int, default=200, help="rep_ms for do_bench (default: 200)"
     )
+    p.add_argument(
+        "--quack-baseline",
+        type=str,
+        default="kernel_inplace",
+        choices=["kernel", "kernel_inplace"],
+        help=(
+            "How to time Quack for the in-place fused op.\n"
+            "- kernel: Quack fused kernel only (preallocated out/residual_out).\n"
+            "- kernel_inplace: Quack fused kernel + 2 explicit copies to apply "
+            "in-place semantics (integration-realistic)."
+        ),
+    )
     p.add_argument("--skip-verify", action="store_true")
     p.add_argument("--json", type=str, default=None)
     args = p.parse_args()
@@ -309,6 +348,7 @@ def main() -> None:
                 warmup_ms=int(args.warmup_ms),
                 iters_ms=int(args.iters),
                 verify=not bool(args.skip_verify),
+                quack_baseline=str(args.quack_baseline),
             )
         )
 
@@ -324,7 +364,10 @@ def main() -> None:
                 warmup_ms=int(args.warmup_ms),
                 rep_ms=int(args.iters),
                 method="triton.testing.do_bench(mean)",
-                note="Oink fused_add_rmsnorm_inplace_ vs Quack quack::_rmsnorm_fwd(residual=..., residual_out=...) when available",
+                note=(
+                    "Oink fused_add_rmsnorm_inplace_ vs Quack baseline "
+                    f"({args.quack_baseline}) when available"
+                ),
             ),
         )
 
