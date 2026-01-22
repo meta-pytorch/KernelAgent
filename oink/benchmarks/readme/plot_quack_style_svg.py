@@ -78,7 +78,9 @@ def _gbps_from_row(prefix: str, row: Mapping[str, Any]) -> Optional[float]:
     return None
 
 
-def _aggregate_by_shape(rows: Sequence[Mapping[str, Any]]) -> Dict[Tuple[int, int], Dict[str, float]]:
+def _aggregate_by_shape(
+    rows: Sequence[Mapping[str, Any]],
+) -> Dict[Tuple[int, int], Dict[str, float]]:
     """Aggregate duplicate (M, N) rows using median (more robust than mean)."""
     buckets: dict[tuple[int, int], dict[str, list[float]]] = defaultdict(
         lambda: defaultdict(list)
@@ -199,7 +201,11 @@ def _plot(
                 continue
             ours_y.append(float(rec["ours"]))
             quack_y.append(float(rec["quack"]))
-        max_y = max(max_y, *(v for v in ours_y if math.isfinite(v)), *(v for v in quack_y if math.isfinite(v)))
+        max_y = max(
+            max_y,
+            *(v for v in ours_y if math.isfinite(v)),
+            *(v for v in quack_y if math.isfinite(v)),
+        )
 
         ax.plot(
             x,
@@ -337,7 +343,10 @@ def main() -> None:
         description="Generate Quack-style SVG plots from KernelAgent-Oink suite JSONs."
     )
     p.add_argument(
-        "--in-dir", type=str, required=True, help="Directory containing suite JSON outputs"
+        "--in-dir",
+        type=str,
+        required=True,
+        help="Directory containing suite JSON outputs",
     )
     p.add_argument(
         "--suite",
@@ -362,22 +371,35 @@ def main() -> None:
             "`union` includes every shape across panels (may create gaps)."
         ),
     )
-    p.add_argument("--roofline-json", type=str, default=None, help="Optional /tmp/hbm_roofline_sm100_*.json path")
+    p.add_argument(
+        "--roofline-json",
+        type=str,
+        default=None,
+        help="Optional /tmp/hbm_roofline_sm100_*.json path",
+    )
     p.add_argument("--out", type=str, required=True, help="Output SVG path")
-    p.add_argument("--title", type=str, default=None, help="Optional figure title override")
+    p.add_argument(
+        "--title", type=str, default=None, help="Optional figure title override"
+    )
     args = p.parse_args()
 
     in_dir = os.path.abspath(args.in_dir)
     if not os.path.isdir(in_dir):
         raise SystemExit(f"--in-dir is not a directory: {in_dir}")
 
-    roofline_gbps = _read_roofline_gbps(args.roofline_json) if args.roofline_json else None
+    roofline_gbps = (
+        _read_roofline_gbps(args.roofline_json) if args.roofline_json else None
+    )
 
     panel_files = list(_panel_files_for_suite(str(args.suite)))
     if args.include_layernorm:
         if args.suite != "quack_suite":
-            raise SystemExit("--include-layernorm is only supported for `--suite quack_suite`.")
-        panel_files.append(("LayerNorm (fwd)", _layernorm_file_for_suite(str(args.suite))))
+            raise SystemExit(
+                "--include-layernorm is only supported for `--suite quack_suite`."
+            )
+        panel_files.append(
+            ("LayerNorm (fwd)", _layernorm_file_for_suite(str(args.suite)))
+        )
 
     panels: List[Tuple[str, Dict[Tuple[int, int], Dict[str, float]]]] = []
     for panel_title, filename in panel_files:
@@ -410,7 +432,11 @@ def main() -> None:
             suite_name = "DSv3 CrossEntropy"
         else:
             suite_name = str(args.suite)
-        suffix = " (+LayerNorm)" if (args.suite == "quack_suite" and args.include_layernorm) else ""
+        suffix = (
+            " (+LayerNorm)"
+            if (args.suite == "quack_suite" and args.include_layernorm)
+            else ""
+        )
         if args.suite == "dsv3_cross_entropy":
             title = f"SM100 {dtype.upper()} — {suite_name}{suffix}"
         else:

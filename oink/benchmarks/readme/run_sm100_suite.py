@@ -21,7 +21,9 @@ def _run(cmd: List[str], *, dry_run: bool) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"])
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"]
+    )
     p.add_argument(
         "--out-dir",
         type=str,
@@ -33,7 +35,9 @@ def main() -> None:
         action="store_true",
         help="Skip correctness checks (Oink/Quack vs PyTorch / pure-PyTorch references)",
     )
-    p.add_argument("--dry-run", action="store_true", help="Print commands without executing them")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Print commands without executing them"
+    )
     args = p.parse_args()
 
     # Standardize env for standalone runs outside the vLLM plugin.

@@ -95,16 +95,26 @@ def _summarize_error_stats(rows: Sequence[Dict[str, Any]]) -> str:
     out_rows: List[Dict[str, Any]] = []
     for pfx in prefixes:
         # Per-prefix worst-case across rows.
-        max_abs_vals = [float(r[pfx + "_max_abs"]) for r in rows if (pfx + "_max_abs") in r]
-        p99_abs_vals = [float(r[pfx + "_p99_abs"]) for r in rows if (pfx + "_p99_abs") in r]
-        rel_l2_vals = [float(r[pfx + "_rel_l2"]) for r in rows if (pfx + "_rel_l2") in r]
+        max_abs_vals = [
+            float(r[pfx + "_max_abs"]) for r in rows if (pfx + "_max_abs") in r
+        ]
+        p99_abs_vals = [
+            float(r[pfx + "_p99_abs"]) for r in rows if (pfx + "_p99_abs") in r
+        ]
+        rel_l2_vals = [
+            float(r[pfx + "_rel_l2"]) for r in rows if (pfx + "_rel_l2") in r
+        ]
         if not max_abs_vals and not p99_abs_vals and not rel_l2_vals:
             continue
         out_rows.append(
             {
                 "metric": pfx,
-                "max_abs (max over shapes)": max(max_abs_vals) if max_abs_vals else None,
-                "p99_abs (max over shapes)": max(p99_abs_vals) if p99_abs_vals else None,
+                "max_abs (max over shapes)": max(max_abs_vals)
+                if max_abs_vals
+                else None,
+                "p99_abs (max over shapes)": max(p99_abs_vals)
+                if p99_abs_vals
+                else None,
                 "rel_l2 (max over shapes)": max(rel_l2_vals) if rel_l2_vals else None,
             }
         )
@@ -112,8 +122,15 @@ def _summarize_error_stats(rows: Sequence[Dict[str, Any]]) -> str:
     if not out_rows:
         return ""
 
-    cols = ["metric", "max_abs (max over shapes)", "p99_abs (max over shapes)", "rel_l2 (max over shapes)"]
-    return "\n".join(["", "### Error Stats (vs PyTorch ref)", "", _md_table(out_rows, cols), ""])
+    cols = [
+        "metric",
+        "max_abs (max over shapes)",
+        "p99_abs (max over shapes)",
+        "rel_l2 (max over shapes)",
+    ]
+    return "\n".join(
+        ["", "### Error Stats (vs PyTorch ref)", "", _md_table(out_rows, cols), ""]
+    )
 
 
 def summarize_one(path: str) -> str:
@@ -143,7 +160,9 @@ def summarize_one(path: str) -> str:
         if method is not None:
             parts.append(f"- method: `{method}`")
         if meta.get("warmup_ms") is not None and meta.get("rep_ms") is not None:
-            parts.append(f"- warmup_ms: `{meta.get('warmup_ms')}` | rep_ms: `{meta.get('rep_ms')}`")
+            parts.append(
+                f"- warmup_ms: `{meta.get('warmup_ms')}` | rep_ms: `{meta.get('rep_ms')}`"
+            )
 
     if rows:
         parts.append("")
@@ -153,7 +172,9 @@ def summarize_one(path: str) -> str:
         gm = _geomean(speeds)
         if gm is not None:
             parts.append("")
-            parts.append(f"- geomean speedup vs Quack: `{gm:.3f}x` (over {len(speeds)} shapes)")
+            parts.append(
+                f"- geomean speedup vs Quack: `{gm:.3f}x` (over {len(speeds)} shapes)"
+            )
 
         err_block = _summarize_error_stats(rows)
         if err_block:
@@ -167,9 +188,21 @@ def summarize_one(path: str) -> str:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Summarize KernelAgent-Oink benchmark JSONs into Markdown tables.")
-    p.add_argument("--in-dir", type=str, required=True, help="Directory containing benchmark JSON files")
-    p.add_argument("--out", type=str, default=None, help="Optional output markdown path (default: stdout)")
+    p = argparse.ArgumentParser(
+        description="Summarize KernelAgent-Oink benchmark JSONs into Markdown tables."
+    )
+    p.add_argument(
+        "--in-dir",
+        type=str,
+        required=True,
+        help="Directory containing benchmark JSON files",
+    )
+    p.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="Optional output markdown path (default: stdout)",
+    )
     args = p.parse_args()
 
     in_dir = os.path.abspath(args.in_dir)
@@ -177,7 +210,9 @@ def main() -> None:
         raise SystemExit(f"--in-dir is not a directory: {in_dir}")
 
     json_paths = sorted(
-        os.path.join(in_dir, name) for name in os.listdir(in_dir) if name.endswith(".json")
+        os.path.join(in_dir, name)
+        for name in os.listdir(in_dir)
+        if name.endswith(".json")
     )
     if not json_paths:
         raise SystemExit(f"No .json files found under: {in_dir}")

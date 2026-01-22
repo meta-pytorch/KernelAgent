@@ -85,7 +85,11 @@ def _verify_parity(
     N = int(x.shape[1])
 
     y_acc_ours = ErrorStatsAccumulator(total_elems=M * N)
-    y_acc_quack = ErrorStatsAccumulator(total_elems=M * N) if quack_rmsnorm_fwd is not None else None
+    y_acc_quack = (
+        ErrorStatsAccumulator(total_elems=M * N)
+        if quack_rmsnorm_fwd is not None
+        else None
+    )
 
     with torch.no_grad():
         y_o, rstd_o, res_o = oink_rmsnorm.rmsnorm_forward(
@@ -141,15 +145,20 @@ def _verify_parity(
             assert rstd_q is not None
             torch.testing.assert_close(rstd_q, rstd_ref, **tol_rstd)
         # Stats for rstd are cheap (M elements); compute exact p99 over all rows.
-        rstd_acc_ours = ErrorStatsAccumulator(total_elems=int(rstd_ref.numel()), p99_target_samples=int(rstd_ref.numel()))
+        rstd_acc_ours = ErrorStatsAccumulator(
+            total_elems=int(rstd_ref.numel()), p99_target_samples=int(rstd_ref.numel())
+        )
         rstd_acc_ours.update(rstd_o, rstd_ref)
         stats.update(error_stats_to_row("ours_err_rstd", rstd_acc_ours.finalize()))
         if rstd_q is not None:
             rstd_acc_quack = ErrorStatsAccumulator(
-                total_elems=int(rstd_ref.numel()), p99_target_samples=int(rstd_ref.numel())
+                total_elems=int(rstd_ref.numel()),
+                p99_target_samples=int(rstd_ref.numel()),
             )
             rstd_acc_quack.update(rstd_q, rstd_ref)
-            stats.update(error_stats_to_row("quack_err_rstd", rstd_acc_quack.finalize()))
+            stats.update(
+                error_stats_to_row("quack_err_rstd", rstd_acc_quack.finalize())
+            )
     # Residual output semantics differ slightly across implementations:
     # - Oink returns `None` when residual is None.
     # - Quack returns `x` as a safe alias in that case.
@@ -227,7 +236,9 @@ def main() -> None:
     print(f"Running on {torch.cuda.get_device_name(device)} (SM{sm})")
 
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"])
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["fp16", "bf16", "fp32"]
+    )
     p.add_argument(
         "--weight-dtype",
         type=str,
@@ -236,15 +247,33 @@ def main() -> None:
         help="RMSNorm weight dtype. `same` matches activation dtype (vLLM-style inference).",
     )
     p.add_argument("--eps", type=float, default=1e-6)
-    p.add_argument("--store-rstd", action="store_true", help="Also write rstd (fp32 per row)")
-    p.add_argument("--iters", type=int, default=100, help="Triton do_bench rep_ms (kernel-only).")
+    p.add_argument(
+        "--store-rstd", action="store_true", help="Also write rstd (fp32 per row)"
+    )
+    p.add_argument(
+        "--iters", type=int, default=100, help="Triton do_bench rep_ms (kernel-only)."
+    )
     p.add_argument("--warmup-ms", type=int, default=25)
-    p.add_argument("--csv", type=str, default=None, help="Optional CSV output path; appends rows")
-    p.add_argument("--json", type=str, default=None, help="Optional JSON output path (meta + rows)")
+    p.add_argument(
+        "--csv", type=str, default=None, help="Optional CSV output path; appends rows"
+    )
+    p.add_argument(
+        "--json", type=str, default=None, help="Optional JSON output path (meta + rows)"
+    )
     p.add_argument("--configs", type=str, default="1024x4096,8192x4096")
-    p.add_argument("--quack-suite", action="store_true", help="Run Quack-style batch/seq grid")
-    p.add_argument("--dsv3", action="store_true", help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}")
-    p.add_argument("--skip-verify", action="store_true", help="Skip correctness checks (Oink/Quack vs a pure-PyTorch reference)")
+    p.add_argument(
+        "--quack-suite", action="store_true", help="Run Quack-style batch/seq grid"
+    )
+    p.add_argument(
+        "--dsv3",
+        action="store_true",
+        help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}",
+    )
+    p.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip correctness checks (Oink/Quack vs a pure-PyTorch reference)",
+    )
     args = p.parse_args()
 
     dtype = parse_dtype(args.dtype)
@@ -265,7 +294,7 @@ def main() -> None:
     meta = collect_device_meta(device)
 
     rows_out: List[Dict[str, Any]] = []
-    for (M, N) in cfgs:
+    for M, N in cfgs:
         print(f"bench M={M:<8d} N={N:<6d} dtype={args.dtype} ...", flush=True)
         (ms_oink, gbps_oink), quack, stats = bench_single(
             M=M,

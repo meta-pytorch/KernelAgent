@@ -95,6 +95,7 @@ def bench_one(
     grid = (triton.cdiv(n_elements, block),)
 
     if op == "copy":
+
         def launch():
             _copy_kernel[grid](
                 x,
@@ -106,6 +107,7 @@ def bench_one(
             )
 
     elif op == "triad":
+
         def launch():
             _triad_kernel[grid](
                 x,
@@ -134,20 +136,38 @@ def _print_summary(rows: List[Dict[str, Any]]) -> None:
         return
     best = max(rows, key=lambda r: float(r["tbps"]))
     print("\nSummary (STREAM-like):")
-    print(f"- best_tbps: {best['tbps']:.3f} TB/s  ({best['op']}, BLOCK={best['block']}, warps={best['num_warps']})")
+    print(
+        f"- best_tbps: {best['tbps']:.3f} TB/s  ({best['op']}, BLOCK={best['block']}, warps={best['num_warps']})"
+    )
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"]
+    )
     p.add_argument("--op", type=str, default="copy", choices=["copy", "triad", "both"])
-    p.add_argument("--gb", type=float, default=2.0, help="Size per tensor in GB (default: 2)")
+    p.add_argument(
+        "--gb", type=float, default=2.0, help="Size per tensor in GB (default: 2)"
+    )
     p.add_argument("--warmup-ms", type=int, default=25)
-    p.add_argument("--iters", type=int, default=100, help="rep_ms for do_bench (default: 100)")
-    p.add_argument("--json", type=str, default=None, help="Write JSON results to this path")
-    p.add_argument("--no-sweep", action="store_true", help="Disable tuning sweep; run a single config")
-    p.add_argument("--block", type=int, default=2048, help="BLOCK size when --no-sweep is set")
-    p.add_argument("--warps", type=int, default=8, help="num_warps when --no-sweep is set")
+    p.add_argument(
+        "--iters", type=int, default=100, help="rep_ms for do_bench (default: 100)"
+    )
+    p.add_argument(
+        "--json", type=str, default=None, help="Write JSON results to this path"
+    )
+    p.add_argument(
+        "--no-sweep",
+        action="store_true",
+        help="Disable tuning sweep; run a single config",
+    )
+    p.add_argument(
+        "--block", type=int, default=2048, help="BLOCK size when --no-sweep is set"
+    )
+    p.add_argument(
+        "--warps", type=int, default=8, help="num_warps when --no-sweep is set"
+    )
     args = p.parse_args()
 
     dtype = parse_dtype(args.dtype)
@@ -181,7 +201,9 @@ def main() -> None:
 
     print(f"Running on {props.name} (SM{props.major}{props.minor})")
     print(f"- dtype: {args.dtype} (elem={elem_size}B)")
-    print(f"- n_elements: {n_elements:,}  (~{(n_elements * elem_size) / (1024**3):.2f} GiB per tensor)")
+    print(
+        f"- n_elements: {n_elements:,}  (~{(n_elements * elem_size) / (1024**3):.2f} GiB per tensor)"
+    )
     print(f"- ops: {ops}")
     print(f"- sweep: {sweep}")
 
@@ -212,7 +234,9 @@ def main() -> None:
                     tbps=float(tbps),
                 )
             )
-            print(f"- {op:5s} BLOCK={block:4d} warps={warps}: {tbps:.3f} TB/s  ({ms:.4f} ms)")
+            print(
+                f"- {op:5s} BLOCK={block:4d} warps={warps}: {tbps:.3f} TB/s  ({ms:.4f} ms)"
+            )
 
     _print_summary(rows)
 

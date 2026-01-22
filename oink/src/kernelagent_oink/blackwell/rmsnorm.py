@@ -121,7 +121,9 @@ _ENABLE_STAGE2 = _env_flag("OINK_RMSNORM_ENABLE_STAGE2", default=False)
 # - If you want to force stage-2 even when the pointer path is available (for
 #   experimentation / A-B testing), set this env var **before** importing this
 #   module.
-_FORCE_RMSNORM_STAGE2_FWD = _env_flag("KERNELAGENT_OINK_FORCE_RMSNORM_STAGE2", default=False)
+_FORCE_RMSNORM_STAGE2_FWD = _env_flag(
+    "KERNELAGENT_OINK_FORCE_RMSNORM_STAGE2", default=False
+)
 
 # CuTeDSL stability probe for the experimental cluster_n>1 + direct-GMEM schedule.
 #
@@ -2771,7 +2773,9 @@ def rmsnorm_forward(
         # Preserve stride contracts for torch.compile consistency, even
         # when using the optional stage-2 implementation.
         if y.stride() != x.stride():
-            y_strided = torch.empty_strided(x.shape, x.stride(), device=x.device, dtype=x.dtype)
+            y_strided = torch.empty_strided(
+                x.shape, x.stride(), device=x.device, dtype=x.dtype
+            )
             y_strided.copy_(y)
             y = y_strided
         if residual is not None and residual_out is not None:
@@ -3036,7 +3040,9 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
             )
 
         mX, mdO, mdResO, mdX, mdRes = [
-            cute.make_tensor(t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t)))
+            cute.make_tensor(
+                t.iterator, cute.make_layout(semistatic_shape, stride=new_stride(t))
+            )
             if const_expr(t is not None)
             else None
             for t in (mX, mdO, mdResO, mdX, mdRes)
@@ -3056,7 +3062,9 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
             num_copy_bits=128 // largest_dtype_width * mX.element_type.width
         )
         num_threads = (
-            cute.size(tv_layout, mode=[0]) if _KERNEL_ACCEPTS_LAYOUT_ARGS else self._get_num_threads()
+            cute.size(tv_layout, mode=[0])
+            if _KERNEL_ACCEPTS_LAYOUT_ARGS
+            else self._get_num_threads()
         )
         num_warps = num_threads // cute.arch.WARP_SIZE
         if const_expr(mW is not None):
@@ -3067,7 +3075,9 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
 
         num_blocks = sm_count
         kernel = (
-            self.kernel(mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes, tv_layout, tiler_mn)
+            self.kernel(
+                mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes, tv_layout, tiler_mn
+            )
             if _KERNEL_ACCEPTS_LAYOUT_ARGS
             else self.kernel(mX, mW, mdO, mdResO, mRstd, mdX, mdW, mdB, mdRes)
         )
@@ -3075,7 +3085,9 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
             grid=[num_blocks, self.cluster_n, 1],
             block=[num_threads, 1, 1],
             cluster=[1, self.cluster_n, 1] if self.cluster_n > 1 else None,
-            smem=self._smem_size_in_bytes(tiler_mn, num_warps, do_dtype=mdO.element_type),
+            smem=self._smem_size_in_bytes(
+                tiler_mn, num_warps, do_dtype=mdO.element_type
+            ),
             stream=stream,
         )
 
@@ -3160,8 +3172,8 @@ def _rmsnorm_bwd_sm100(
         if db_partial is not None
         else None
     )
-    rstd_tensor = (
-        from_dlpack(rstd.detach(), assumed_align=4).mark_layout_dynamic(leading_dim=0)
+    rstd_tensor = from_dlpack(rstd.detach(), assumed_align=4).mark_layout_dynamic(
+        leading_dim=0
     )
 
     current_stream = cuda.CUstream(torch.cuda.current_stream().cuda_stream)
@@ -3261,7 +3273,9 @@ def rmsnorm_backward(
     else:
         dw_partial = None
     db_partial = (
-        torch.empty(sm_count, N, device=device, dtype=torch.float32) if has_bias else None
+        torch.empty(sm_count, N, device=device, dtype=torch.float32)
+        if has_bias
+        else None
     )
 
     _rmsnorm_bwd_sm100(

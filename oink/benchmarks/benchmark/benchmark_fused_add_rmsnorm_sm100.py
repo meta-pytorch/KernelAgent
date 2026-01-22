@@ -90,8 +90,16 @@ def _verify_parity(
 
     y_acc_ours = ErrorStatsAccumulator(total_elems=M * N)
     z_acc_ours = ErrorStatsAccumulator(total_elems=M * N)
-    y_acc_quack = ErrorStatsAccumulator(total_elems=M * N) if quack_rmsnorm_fwd_mut is not None else None
-    z_acc_quack = ErrorStatsAccumulator(total_elems=M * N) if quack_rmsnorm_fwd_mut is not None else None
+    y_acc_quack = (
+        ErrorStatsAccumulator(total_elems=M * N)
+        if quack_rmsnorm_fwd_mut is not None
+        else None
+    )
+    z_acc_quack = (
+        ErrorStatsAccumulator(total_elems=M * N)
+        if quack_rmsnorm_fwd_mut is not None
+        else None
+    )
 
     x_o = x.clone()
     r_o = residual.clone()
@@ -141,7 +149,9 @@ def _verify_parity(
     stats.update(error_stats_to_row("ours_err_residual_out", z_acc_ours.finalize()))
     if y_acc_quack is not None and z_acc_quack is not None:
         stats.update(error_stats_to_row("quack_err_y", y_acc_quack.finalize()))
-        stats.update(error_stats_to_row("quack_err_residual_out", z_acc_quack.finalize()))
+        stats.update(
+            error_stats_to_row("quack_err_residual_out", z_acc_quack.finalize())
+        )
     return stats
 
 
@@ -177,7 +187,9 @@ def bench_one(
     row: Dict[str, Any] = dict(
         M=int(M),
         N=int(N),
-        dtype="bf16" if dtype is torch.bfloat16 else ("fp16" if dtype is torch.float16 else "fp32"),
+        dtype="bf16"
+        if dtype is torch.bfloat16
+        else ("fp16" if dtype is torch.float16 else "fp32"),
         ours_ms=float(ms),
         ours_gbps=float(gbps),
         ours_tbps=float(tbps),
@@ -247,7 +259,9 @@ def _print_table(rows: List[Dict[str, Any]]) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
+    p.add_argument(
+        "--dtype", type=str, default="bf16", choices=["bf16", "fp16", "fp32"]
+    )
     p.add_argument("--M", type=int, default=65536)
     p.add_argument("--N", type=int, default=4096)
     p.add_argument(
@@ -256,7 +270,9 @@ def main() -> None:
         help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}",
     )
     p.add_argument("--warmup-ms", type=int, default=25)
-    p.add_argument("--iters", type=int, default=200, help="rep_ms for do_bench (default: 200)")
+    p.add_argument(
+        "--iters", type=int, default=200, help="rep_ms for do_bench (default: 200)"
+    )
     p.add_argument("--skip-verify", action="store_true")
     p.add_argument("--json", type=str, default=None)
     args = p.parse_args()
@@ -266,8 +282,11 @@ def main() -> None:
 
     cfgs = dsv3_configs() if bool(args.dsv3) else [(int(args.M), int(args.N))]
     rows: List[Dict[str, Any]] = []
-    for (M, N) in cfgs:
-        print(f"bench M={M:<8d} N={N:<6d} dtype={_dtype_label(dtype)} fused_add_rmsnorm ...", flush=True)
+    for M, N in cfgs:
+        print(
+            f"bench M={M:<8d} N={N:<6d} dtype={_dtype_label(dtype)} fused_add_rmsnorm ...",
+            flush=True,
+        )
         rows.append(
             bench_one(
                 M=int(M),
