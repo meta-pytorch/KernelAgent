@@ -150,25 +150,39 @@ def bench_single(
     bytes_io = bytes_io_model_softmax(M, N, dtype, mode=mode)
 
     if mode == "fwd":
-        fn_oink = lambda: oink_softmax.softmax_forward(x)
-        fn_quack = None if quack_softmax_fwd is None else (lambda: quack_softmax_fwd(x))
+        def fn_oink():
+            return oink_softmax.softmax_forward(x)
+
+        fn_quack = None
+        if quack_softmax_fwd is not None:
+
+            def fn_quack():
+                return quack_softmax_fwd(x)
+
     elif mode == "bwd":
         with torch.no_grad():
             y_o = oink_softmax.softmax_forward(x)
             y_q = quack_softmax_fwd(x) if quack_softmax_fwd is not None else None
-        fn_oink = lambda: oink_softmax.softmax_backward(dy, y_o)
-        fn_quack = (
-            None
-            if (quack_softmax_bwd is None or y_q is None)
-            else (lambda: quack_softmax_bwd(dy, y_q))
-        )
+
+        def fn_oink():
+            return oink_softmax.softmax_backward(dy, y_o)
+
+        fn_quack = None
+        if quack_softmax_bwd is not None and y_q is not None:
+
+            def fn_quack():
+                return quack_softmax_bwd(dy, y_q)
+
     elif mode == "fwd_bwd":
-        fn_oink = lambda: oink_softmax.softmax_fwd_bwd(dy, x)
-        fn_quack = (
-            None
-            if (quack_softmax_fwd is None or quack_softmax_bwd is None)
-            else (lambda: quack_softmax_bwd(dy, quack_softmax_fwd(x)))
-        )
+        def fn_oink():
+            return oink_softmax.softmax_fwd_bwd(dy, x)
+
+        fn_quack = None
+        if quack_softmax_fwd is not None and quack_softmax_bwd is not None:
+
+            def fn_quack():
+                return quack_softmax_bwd(dy, quack_softmax_fwd(x))
+
     else:
         raise ValueError(f"Unsupported mode: {mode}")
 

@@ -744,9 +744,13 @@ def rmsnorm_forward_with_stage2(
     M, N = x.shape
     dtype = TORCH2CUTE_DTYPE[x.dtype]
 
-    convert_x = lambda t: from_dlpack(t.detach(), assumed_align=32).mark_layout_dynamic(leading_dim=1)
-    mX = convert_x(x)
-    mRes = convert_x(residual) if residual is not None else None
+    def _convert_x(t: Tensor) -> cute.Tensor:
+        return from_dlpack(
+            t.detach(), assumed_align=32
+        ).mark_layout_dynamic(leading_dim=1)
+
+    mX = _convert_x(x)
+    mRes = _convert_x(residual) if residual is not None else None
     out = torch.empty_like(x, dtype=x.dtype)
     mO = from_dlpack(out.detach(), assumed_align=32).mark_layout_dynamic(leading_dim=1)
 

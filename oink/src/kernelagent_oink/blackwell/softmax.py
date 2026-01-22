@@ -27,10 +27,9 @@ The kernels are self-contained and use only local helpers in
 from __future__ import annotations
 
 import importlib.metadata
-import math
 import os
 import re
-from typing import Optional, Type
+from typing import Type
 
 import torch
 from torch import Tensor

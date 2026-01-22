@@ -219,14 +219,16 @@ def bench_single(
     bytes_io = bytes_io_model_ce(M, N, dtype, target_dtype=target.dtype, mode=mode)
 
     if mode == "fwd":
-        fn_oink = lambda: oink_ce.cross_entropy_forward(
-            logits, target, ignore_index=int(ignore_index), reduction="none"
-        )
-        fn_quack = (
-            None
-            if quack_ce_fwd is None
-            else (
-                lambda: quack_ce_fwd(
+        def fn_oink():
+            return oink_ce.cross_entropy_forward(
+                logits, target, ignore_index=int(ignore_index), reduction="none"
+            )
+
+        fn_quack = None
+        if quack_ce_fwd is not None:
+
+            def fn_quack():
+                return quack_ce_fwd(
                     logits,
                     target,
                     target_logit=None,
@@ -235,8 +237,7 @@ def bench_single(
                     return_dx=False,
                     inplace_backward=False,
                 )
-            )
-        )
+
     elif mode == "bwd":
         with torch.no_grad():
             _loss_o, lse_o = oink_ce.cross_entropy_forward(
@@ -254,14 +255,17 @@ def bench_single(
                 )
             else:
                 lse_q = None
-        fn_oink = lambda: oink_ce.cross_entropy_backward(
-            dloss, logits, target, lse_o, ignore_index=int(ignore_index)
-        )
-        fn_quack = (
-            None
-            if (quack_ce_bwd is None or lse_q is None)
-            else (
-                lambda: quack_ce_bwd(
+
+        def fn_oink():
+            return oink_ce.cross_entropy_backward(
+                dloss, logits, target, lse_o, ignore_index=int(ignore_index)
+            )
+
+        fn_quack = None
+        if quack_ce_bwd is not None and lse_q is not None:
+
+            def fn_quack():
+                return quack_ce_bwd(
                     logits,
                     target,
                     dloss,
@@ -269,37 +273,38 @@ def bench_single(
                     ignore_index=int(ignore_index),
                     inplace_backward=False,
                 )
-            )
-        )
+
     elif mode == "fwd_bwd":
-        fn_oink = lambda: oink_ce.cross_entropy_fwd_bwd(
-            dloss,
-            logits,
-            target,
-            ignore_index=int(ignore_index),
-        )
-        fn_quack = (
-            None
-            if (quack_ce_fwd is None or quack_ce_bwd is None)
-            else (
-                lambda: quack_ce_bwd(
+        def fn_oink():
+            return oink_ce.cross_entropy_fwd_bwd(
+                dloss,
+                logits,
+                target,
+                ignore_index=int(ignore_index),
+            )
+
+        fn_quack = None
+        if quack_ce_fwd is not None and quack_ce_bwd is not None:
+
+            def fn_quack():
+                _loss_q, lse_q = quack_ce_fwd(
+                    logits,
+                    target,
+                    target_logit=None,
+                    ignore_index=int(ignore_index),
+                    return_lse=True,
+                    return_dx=False,
+                    inplace_backward=False,
+                )
+                return quack_ce_bwd(
                     logits,
                     target,
                     dloss,
-                    quack_ce_fwd(
-                        logits,
-                        target,
-                        target_logit=None,
-                        ignore_index=int(ignore_index),
-                        return_lse=True,
-                        return_dx=False,
-                        inplace_backward=False,
-                    )[1],
+                    lse_q,
                     ignore_index=int(ignore_index),
                     inplace_backward=False,
                 )
-            )
-        )
+
     else:
         raise ValueError(f"Unsupported mode: {mode}")
 
