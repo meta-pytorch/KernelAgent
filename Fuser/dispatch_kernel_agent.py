@@ -333,6 +333,7 @@ def run(
     jobs: int = 1,
     target_platform: str = "cuda",
     max_iters: int = 10,
+    disable_cuda_math: bool = False,
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -369,6 +370,7 @@ def run(
             max_rounds=max_iters,
             model_name=agent_model,
             target_platform=platform,
+            disable_cuda_math=disable_cuda_math,
         )
         try:
             result = local_agent.generate_kernel(
@@ -457,6 +459,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=get_platform_choices(),
         help="Target platform (default: cuda)",
     )
+    p.add_argument(
+        "--disable-cuda-math",
+        action="store_true",
+        help="Disable cuSolver/cuBLAS library usage in generated kernels",
+    )
     args = p.parse_args(argv)
 
     subgraphs_path = Path(args.subgraphs).resolve()
@@ -485,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_model=args.agent_model,
         jobs=jobs_val,
         target_platform=args.target_platform,
+        disable_cuda_math=args.disable_cuda_math,
     )
     print(str(summary_path))
     return 0

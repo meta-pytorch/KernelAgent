@@ -132,6 +132,7 @@ class VerificationWorker:
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
+        disable_cuda_math: bool = False,
     ):
         """
         Initialize a verification worker.
@@ -146,6 +147,7 @@ class VerificationWorker:
             openai_model: Model name for refinement
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform default: cuda
+            disable_cuda_math: If True, disables cuSolver/cuBLAS library usage
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -155,6 +157,7 @@ class VerificationWorker:
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
         self._platform_config = get_platform(target_platform)
+        self.disable_cuda_math = disable_cuda_math
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -363,6 +366,7 @@ class VerificationWorker:
                     kernel_code=kernel_code,
                     error_info=error_info,
                     history_context=history_context,
+                    disable_cuda_math=self.disable_cuda_math,
                 )
 
                 # Call LLM API

@@ -55,7 +55,9 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
 - DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
+{% if disable_cuda_math %}
 - DO NOT rely on cuSolver/cuBLAS libraries to satisfy the requirements
+{% endif %}
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
