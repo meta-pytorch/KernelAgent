@@ -405,7 +405,7 @@ def compose(
 
         (attempts_dir / f"attempt_{i}.prompt.txt").write_text(prompt, encoding="utf-8")
         response = provider.get_response(
-            model_name, [{"role": "user", "content": prompt}], max_tokens=32000
+            model_name, [{"role": "user", "content": prompt}], max_tokens=50000
         )
         last_usage = response.usage
         raw_text = response.content or ""
