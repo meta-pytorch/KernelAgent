@@ -41,6 +41,7 @@ class TritonKernelAgent:
         high_reasoning_effort: bool = True,
         preferred_provider: BaseProvider | None = None,
         target_platform: PlatformConfig | None = None,
+        no_cusolver: bool = False,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -52,6 +53,7 @@ class TritonKernelAgent:
             model_name: OpenAI model to use (loaded from .env if None)
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform PlatformConfig
+            no_cusolver: If True, disables cuSolver library usage
         """
         # Load environment variables
         load_dotenv()
@@ -87,6 +89,7 @@ class TritonKernelAgent:
         self._platform_config = (
             target_platform if target_platform else get_platform("cuda")
         )
+        self.no_cusolver = no_cusolver
 
         # Setup main logger
         self._setup_logging()
@@ -103,6 +106,7 @@ class TritonKernelAgent:
             openai_model=self.model_name,
             high_reasoning_effort=self.high_reasoning_effort,
             target_platform=self._platform_config.name,
+            no_cusolver=self.no_cusolver,
         )
 
     def _setup_logging(self):
@@ -339,7 +343,9 @@ if __name__ == "__main__":
 
                 # Create prompt with Triton guidelines using template
                 prompt = self.prompt_manager.render_kernel_generation_prompt(
-                    problem_description=problem_description, test_code=test_code
+                    problem_description=problem_description,
+                    test_code=test_code,
+                    no_cusolver=self.no_cusolver,
                 )
 
                 kernels = []
