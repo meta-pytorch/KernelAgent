@@ -68,12 +68,16 @@ def add(x: torch.Tensor, y: torch.Tensor):
 
     # Get the number of streaming multiprocessors and use it to launch a fixed number of blocks
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
-    grid = lambda meta: (
-        min(
-            NUM_SMS,
-            triton.cdiv(M, meta["BLOCK_SIZE_M"]) * triton.cdiv(N, meta["BLOCK_SIZE_N"]),
-        ),
-    )
+
+    def grid(meta):
+        return (
+            min(
+                NUM_SMS,
+                triton.cdiv(M, meta["BLOCK_SIZE_M"])
+                * triton.cdiv(N, meta["BLOCK_SIZE_N"]),
+            ),
+        )
+
     add_kernel[grid](
         x,
         y,

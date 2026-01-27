@@ -35,7 +35,7 @@ def add_kernel(
     BLOCK_SIZE_N: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    _num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     pid_m = pid // num_pid_n
     pid_n = pid % num_pid_n
@@ -58,9 +58,11 @@ def add(x: torch.Tensor, y: torch.Tensor):
     M, N = x.shape
     output = torch.empty((M, N), device=x.device, dtype=torch.float16)
 
-    grid = lambda meta: (
-        triton.cdiv(M, meta["BLOCK_SIZE_M"]) * triton.cdiv(N, meta["BLOCK_SIZE_N"]),
-    )
+    def grid(meta):
+        return (
+            triton.cdiv(M, meta["BLOCK_SIZE_M"]) * triton.cdiv(N, meta["BLOCK_SIZE_N"]),
+        )
+
     add_kernel[grid](
         x,
         y,
