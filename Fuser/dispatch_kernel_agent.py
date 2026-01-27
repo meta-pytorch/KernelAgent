@@ -462,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--no-cusolver",
         action="store_true",
-        help="Disable cuSolver/cuBLAS library usage in generated kernels",
+        help="Disable cuSolver library usage in generated kernels",
     )
     args = p.parse_args(argv)
 
