@@ -331,6 +331,7 @@ class AutoKernelRouter:
         allow_fallback: bool = True,
         target_platform: str | None = None,
         use_router_cache: bool = True,
+        no_cusolver: bool = False,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -354,6 +355,7 @@ class AutoKernelRouter:
         self.allow_fallback = allow_fallback
         self.platform_config = get_platform(target_platform)
         self.use_router_cache = use_router_cache
+        self.no_cusolver = no_cusolver
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -362,6 +364,7 @@ class AutoKernelRouter:
             model_name=self.ka_model,
             high_reasoning_effort=self.ka_high_reasoning,
             target_platform=self.platform_config,
+            no_cusolver=self.no_cusolver,
         )
         try:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
@@ -721,6 +724,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=get_platform_choices(),
         help="Target platform (default: cuda)",
     )
+    p.add_argument(
+        "--no-cusolver",
+        action="store_true",
+        help="Disable cuSolver library usage in generated kernels",
+    )
     args = p.parse_args(argv)
 
     # Load environment variables from .env file
@@ -753,6 +761,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_fallback=(not args.no_fallback),
         target_platform=args.target_platform,
         use_router_cache=(not args.no_router_cache),
+        no_cusolver=args.no_cusolver,
     )
 
     try:
