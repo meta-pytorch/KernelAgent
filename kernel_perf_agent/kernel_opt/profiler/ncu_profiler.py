@@ -90,6 +90,7 @@ def profile_triton_kernel(
     ncu_bin: Optional[str] = None,
     launch_count: int = 20,
     timeout: int = 120,
+    use_sudo: bool = False,
 ) -> Path:
     """
     Profile a Triton kernel using NCU.
@@ -102,6 +103,8 @@ def profile_triton_kernel(
         ncu_bin: Path to NCU binary (default: auto-detect)
         launch_count: Number of kernel launches to profile
         timeout: Timeout in seconds for NCU execution
+        use_sudo: Whether to run NCU with sudo. Can also be enabled via
+            KERNELAGENT_NCU_USE_SUDO=1 environment variable. Default: False
 
     Returns:
         Path to output CSV file
@@ -110,6 +113,9 @@ def profile_triton_kernel(
         RuntimeError: If NCU profiling fails
         FileNotFoundError: If NCU binary or output CSV not found
     """
+    # Check for environment variable override
+    use_sudo = use_sudo or os.environ.get("KERNELAGENT_NCU_USE_SUDO", "0") == "1"
+
     # Resolve paths
     if python_executable is None:
         python_executable = sys.executable
@@ -146,28 +152,32 @@ def profile_triton_kernel(
     )
 
     # Build NCU command
-    cmd = [
-        "sudo",
-        "-E",
-        f"--preserve-env={preserve}",
-        ncu_bin,
-        "--csv",
-        "--page=raw",
-        "--kernel-name-base=demangled",
-        "--target-processes=all",
-        "--replay-mode=kernel",
-        "--profile-from-start=on",
-        f"--log-file={str(csv_path)}",
-        f"--metrics={METRICS}",
-        "--launch-skip=0",
-        f"--launch-count={launch_count}",
-        python_executable,
-        str(benchmark_script),
-    ]
+    cmd = []
+    if use_sudo:
+        cmd.extend(["sudo", "-E", f"--preserve-env={preserve}"])
+
+    cmd.extend(
+        [
+            ncu_bin,
+            "--csv",
+            "--page=raw",
+            "--kernel-name-base=demangled",
+            "--target-processes=all",
+            "--replay-mode=kernel",
+            "--profile-from-start=on",
+            f"--log-file={str(csv_path)}",
+            f"--metrics={METRICS}",
+            "--launch-skip=0",
+            f"--launch-count={launch_count}",
+            python_executable,
+            str(benchmark_script),
+        ]
+    )
 
     print("[NCU] Running profiling...")
     print(f"[NCU] Benchmark: {benchmark_script.name}")
     print(f"[NCU] Output: {csv_path}")
+    print(f"[NCU] Using sudo: {use_sudo}")
     print(f"[NCU] Command: {' '.join(cmd[:10])}... (truncated)")
 
     try:
@@ -182,6 +192,29 @@ def profile_triton_kernel(
 
         if result.returncode != 0:
             error_msg = result.stderr or result.stdout
+
+            # Check for common permission errors
+            permission_errors = [
+                "permission",
+                "ERR_NVGPUCTRPERM",
+                "profiling permissions",
+                "requires root",
+                "access denied",
+            ]
+            is_permission_error = any(
+                err.lower() in error_msg.lower() for err in permission_errors
+            )
+
+            if is_permission_error and not use_sudo:
+                raise RuntimeError(
+                    f"NCU requires elevated permissions on this system.\n"
+                    f"Options to resolve:\n"
+                    f"  1. Rerun with use_sudo=True\n"
+                    f"  2. Set environment variable: KERNELAGENT_NCU_USE_SUDO=1\n"
+                    f"  3. Configure driver permissions: "
+                    f"Original error:\n{error_msg[:500]}"
+                )
+
             raise RuntimeError(
                 f"NCU profiling failed with return code {result.returncode}:\n{error_msg[:500]}"
             )
@@ -202,6 +235,8 @@ def profile_triton_kernel(
 
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"NCU profiling timed out after {timeout} seconds")
+    except RuntimeError:
+        raise
     except Exception as e:
         raise RuntimeError(f"NCU profiling failed: {e}")
 
