@@ -124,7 +124,7 @@ class PromptManager:
         problem_description: str,
         test_code: str,
         triton_guidelines: str | None = None,
-        disable_cuda_math: bool = False,
+        no_cusolver: bool = False,
     ) -> str:
         """
         Render the kernel generation prompt.
@@ -133,7 +133,7 @@ class PromptManager:
             problem_description: Description of the kernel to generate
             test_code: Test code that the kernel must pass
             triton_guidelines: Optional guidelines (if None, loads from template)
-            disable_cuda_math: If True, disables cuSolver/cuBLAS library usage
+            no_cusolver: If True, disables cuSolver library usage
 
         Returns:
             Rendered prompt string
@@ -149,7 +149,7 @@ class PromptManager:
             test_code=test_code,
             triton_guidelines=triton_guidelines,
             kernel_guidance=self.target_platform.kernel_guidance,
-            disable_cuda_math=disable_cuda_math,
+            no_cusolver=no_cusolver,
         )
 
     def render_kernel_refinement_prompt(
@@ -160,7 +160,7 @@ class PromptManager:
         error_info: dict[str, str],
         history_context: str | None = None,
         triton_guidelines: str | None = None,
-        disable_cuda_math: bool = False,
+        no_cusolver: bool = False,
     ) -> str:
         """
         Render the kernel refinement prompt.
@@ -172,7 +172,7 @@ class PromptManager:
             error_info: Dictionary with error information (stdout, stderr)
             history_context: Optional context from previous attempts
             triton_guidelines: Optional guidelines (if None, loads from template)
-            disable_cuda_math: If True, disables cuSolver/cuBLAS library usage
+            no_cusolver: If True, disables cuSolver library usage
 
         Returns:
             Rendered prompt string
@@ -191,7 +191,7 @@ class PromptManager:
             history_context=history_context,
             triton_guidelines=triton_guidelines,
             kernel_guidance=self.target_platform.kernel_guidance,
-            disable_cuda_math=disable_cuda_math,
+            no_cusolver=no_cusolver,
         )
 
     def render_triton_guidelines(self) -> str:
