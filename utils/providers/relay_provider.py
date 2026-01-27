@@ -14,9 +14,10 @@
 
 """Relay provider implementation."""
 
-import requests
 import logging
 import os
+
+import requests
 
 from .base import BaseProvider, LLMResponse
 
@@ -45,14 +46,16 @@ class RelayProvider(BaseProvider):
         except Exception:
             self.is_available_flag = False
 
-    def get_response(
+    def _handle_request(
         self, model_name: str, messages: list[dict[str, str]], **kwargs
-    ) -> LLMResponse:
+    ) -> list[LLMResponse]:
         """
+        Core request handler
+
         Supported kwargs:
         - max_tokens: int (default 8192)
-        - temperature: float (default 0.2)
-        - top_p: float (default 0.95)
+        - temperature: float (default 0.7)
+        - top_p: float (default 1.0)
         - text: dict
         - high_reasoning_effort: bool (default False)
         - reasoning: dict
@@ -66,9 +69,10 @@ class RelayProvider(BaseProvider):
         request_data = {
             "messages": messages,
             "model": model_name,
-            "temperature": kwargs.get("temperature", 0.2),
+            "temperature": kwargs.get("temperature", 0.7),
             "max_tokens": kwargs.get("max_tokens", 8192),
-            "top_p": kwargs.get("top_p", 0.95),
+            "top_p": kwargs.get("top_p", 1.0),
+            "n": kwargs.get("n", 1),
         }
 
         # Add reasoning config if high_reasoning_effort is set
@@ -102,14 +106,24 @@ class RelayProvider(BaseProvider):
         logging.debug(response_data)
         logging.debug("=== END RESPONSE ===\n")
 
-        content = response_data.get("output", "")
-        return LLMResponse(
-            content=content,
-            model=model_name,
-            provider=self.name,
-            # Note: Plugboard doesn't have a response_id, so request_id is used
-            response_id=response_data.get("plugboard_request_id", None),
-        )
+        return [
+            LLMResponse(
+                content=response.get("output", ""),
+                model=model_name,
+                provider=self.name,
+                # Note: Plugboard doesn't have a response_id, so request_id is used
+                response_id=response.get("plugboard_request_id", None),
+            )
+            for response in response_data
+        ]
+
+    def get_response(
+        self,
+        model_name: str,
+        messages: list[dict[str, str]],
+        **kwargs,
+    ) -> LLMResponse:
+        return self._handle_request(model_name, messages, **kwargs)[0]
 
     def get_multiple_responses(
         self,
@@ -118,14 +132,7 @@ class RelayProvider(BaseProvider):
         n: int = 1,
         **kwargs,
     ) -> list[LLMResponse]:
-        return [
-            self.get_response(
-                model_name,
-                messages,
-                temperature=kwargs.get("temperature", 0.7) + i * 0.1,
-            )
-            for i in range(n)
-        ]
+        return self._handle_request(model_name, messages, n=n, **kwargs)
 
     def is_available(self) -> bool:
         return self.is_available_flag
@@ -133,3 +140,6 @@ class RelayProvider(BaseProvider):
     @property
     def name(self) -> str:
         return "relay"
+
+    def supports_multiple_completions(self) -> bool:
+        return True

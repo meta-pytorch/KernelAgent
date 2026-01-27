@@ -54,4 +54,9 @@ AVAILABLE_MODELS = [
         provider_classes=[RelayProvider],
         description="[Relay] Claude 4 Sonnet",
     ),
+    ModelConfig(
+        name="claude-opus-4.5",
+        provider_classes=[RelayProvider],
+        description="Claude 4.5 Opus (Released Nov 2025)",
+    ),
 ]
