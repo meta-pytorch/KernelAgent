@@ -1,0 +1,89 @@
+{#
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+#}
+
+TASK: Optimize the following Triton kernel based on hardware profiling analysis to achieve better performance.
+
+{% if gpu_specs %}
+TARGET GPU:
+{% if gpu_specs.name %}- GPU: {{ gpu_specs.name }}
+{% endif %}
+{% if gpu_specs.architecture %}- Architecture: {{ gpu_specs.architecture }}
+{% endif %}
+{% if gpu_specs.peak_memory_bw_gbps %}- Peak Memory Bandwidth: {{ gpu_specs.peak_memory_bw_gbps }} GB/s
+{% endif %}
+{% if gpu_specs.peak_fp32_tflops %}- Peak FP32: {{ gpu_specs.peak_fp32_tflops }} TFLOPS
+{% endif %}
+{% if gpu_specs.peak_fp16_tflops %}- Peak FP16: {{ gpu_specs.peak_fp16_tflops }} TFLOPS
+{% endif %}
+{% if gpu_specs.peak_bf16_tflops %}- Peak BF16: {{ gpu_specs.peak_bf16_tflops }} TFLOPS
+{% endif %}
+{% if gpu_specs.sm_count %}- SM Count: {{ gpu_specs.sm_count }}
+{% endif %}
+{% if gpu_specs.max_threads_per_sm %}- Max Threads per SM: {{ gpu_specs.max_threads_per_sm }}
+{% endif %}
+{% if gpu_specs.l1_cache_kb %}- L1 Cache per SM: {{ gpu_specs.l1_cache_kb }} KB
+{% endif %}
+{% if gpu_specs.l2_cache_mb %}- L2 Cache (Total): {{ gpu_specs.l2_cache_mb }} MB
+{% endif %}
+{% if gpu_specs.memory_gb %}- Memory: {{ gpu_specs.memory_gb }} GB {{ gpu_specs.memory_type | default('') }}
+{% endif %}
+
+{% endif %}
+PROBLEM DESCRIPTION:
+{{ problem_description }}
+{% if pytorch_baseline_ms %}
+PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms
+{% endif %}
+
+CURRENT KERNEL IMPLEMENTATION:
+```python
+{{ kernel_code }}
+```
+
+OPTIMIZATION STRATEGY ({{ bottleneck_label }}):
+The hardware profiling (NCU) analysis identified the following bottleneck:
+- Category: {{ bottleneck.category | default('unknown') }}
+- Root Cause: {{ bottleneck.root_cause | default('N/A') }}
+- Suggested Optimization: {{ bottleneck.suggestion | default('N/A') }}
+- Expected Improvement: {{ bottleneck.expected_improvement | default('N/A') }}
+
+{% if error_feedback %}
+PREVIOUS ATTEMPT FAILED:
+{{ error_feedback }}
+
+{% endif %}
+PERFORMANCE TARGET:
+{% if target_ms %}
+- Achieve at least 1.25x speedup vs PyTorch Eager (target: <= {{ "%.4f"|format(target_ms) }} ms)
+{% else %}
+- Achieve 20-100% performance improvement over baseline
+{% endif %}
+- Maintain numerical correctness (atol=1e-4 or rtol=1e-4)
+- Preserve public API (same inputs/outputs, shapes, dtypes)
+
+CRITICAL REQUIREMENTS:
+1. Apply the optimization strategy described above to address the identified bottleneck
+2. The implementation must be a complete, valid Python file
+3. The main function must be named 'kernel_function' that wraps the actual Triton kernel
+4. Focus on the specific optimization while maintaining correctness
+5. Keep the wrapper free of PyTorch compute primitives
+
+OUTPUT FORMAT:
+1. Output complete optimized kernel code in ```python blocks
+2. Include only: imports, Triton kernel (@triton.jit), wrapper function (kernel_function)
+3. No testing code, benchmarks, or explanatory comments
+
+Generate the complete optimized kernel implementation:
