@@ -330,6 +330,7 @@ class AutoKernelRouter:
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
         target_platform: str | None = None,
+        use_router_cache: bool = True,
         no_cusolver: bool = False,
     ) -> None:
         self.ka_model = ka_model
@@ -353,6 +354,7 @@ class AutoKernelRouter:
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
         self.platform_config = get_platform(target_platform)
+        self.use_router_cache = use_router_cache
         self.no_cusolver = no_cusolver
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
@@ -464,20 +466,23 @@ class AutoKernelRouter:
         heuristic_prefers_fuser = cx.route_to_fuser()
 
         # Cache lookup by content hash to avoid repeated router calls
+        cache = {}
         code_hash = _file_sha256_text(code)
-        cache = _load_router_cache()
-        cached = cache.get(code_hash)
-
         strategy: str | None = None
         route_conf: float | None = None
         route_cfg: dict[str, Any] = {}
 
-        if isinstance(cached, dict):
-            strategy = (
-                str(cached.get("route_strategy") or cached.get("route") or "") or None
-            )
-            route_conf = cached.get("confidence")
-            route_cfg = cached.get("config") or {}
+        if self.use_router_cache:
+            cache = _load_router_cache()
+            cached = cache.get(code_hash)
+
+            if isinstance(cached, dict):
+                strategy = (
+                    str(cached.get("route_strategy") or cached.get("route") or "")
+                    or None
+                )
+                route_conf = cached.get("confidence")
+                route_cfg = cached.get("config") or {}
 
         if strategy is None:
             # Try LLM-driven decision
@@ -486,11 +491,12 @@ class AutoKernelRouter:
                     problem_path, code, cx
                 )
                 # Persist in cache for future runs
-                cache[code_hash] = info.get("parsed") or {
-                    "route_strategy": strategy,
-                    "confidence": route_conf,
-                }
-                _save_router_cache(cache)
+                if self.use_router_cache:
+                    cache[code_hash] = info.get("parsed") or {
+                        "route_strategy": strategy,
+                        "confidence": route_conf,
+                    }
+                    _save_router_cache(cache)
             except Exception:
                 # No provider or failure; fall back later
                 pass
@@ -708,6 +714,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
     p.add_argument(
+        "--no-router-cache",
+        action="store_true",
+        help="Disable router cache (do not read from or write to cache)",
+    )
+    p.add_argument(
         "--target-platform",
         default="cuda",
         choices=get_platform_choices(),
@@ -749,6 +760,7 @@ def main(argv: list[str] | None = None) -> int:
         dispatch_jobs=args.dispatch_jobs,
         allow_fallback=(not args.no_fallback),
         target_platform=args.target_platform,
+        use_router_cache=(not args.no_router_cache),
         no_cusolver=args.no_cusolver,
     )
 
