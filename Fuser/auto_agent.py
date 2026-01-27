@@ -61,7 +61,7 @@ from triton_kernel_agent.platform_config import (
     get_platform_choices,
     get_platform,
 )
-from utils.providers.models import get_model_provider
+from utils.providers.models import get_model_provider, is_model_available
 
 
 # ------------------------
@@ -136,6 +136,20 @@ def _dotted_name(n: ast.AST) -> str:
         parts.append(cur.id)
     parts.reverse()
     return ".".join(parts)
+
+
+def _validate_cfg_models(cfg) -> None:
+    """Given a router config, remove all unavailable model choices."""
+    if (ka_model := cfg.get("ka_model")) and not is_model_available(ka_model):
+        del cfg["ka_model"]
+
+    if models := cfg.get("llm_models"):
+        remove = [k for k, v in models.items() if not is_model_available(v)]
+        for k in remove:
+            del models[k]
+
+        if not models:
+            del cfg["llm_models"]
 
 
 @dataclass
@@ -478,6 +492,7 @@ class AutoKernelRouter:
             )
             route_conf = cached.get("confidence")
             route_cfg = cached.get("config") or {}
+            _validate_cfg_models(route_cfg)
 
         if strategy is None:
             # Try LLM-driven decision
@@ -490,6 +505,8 @@ class AutoKernelRouter:
                     "route_strategy": strategy,
                     "confidence": route_conf,
                 }
+                route_cfg = cache[code_hash].get("config") or {}
+                _validate_cfg_models(route_cfg)
                 _save_router_cache(cache)
             except Exception:
                 # No provider or failure; fall back later
