@@ -38,6 +38,7 @@ class WorkerManager:
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
+        no_cusolver: bool = False,
     ):
         """
         Initialize the worker manager.
@@ -51,6 +52,7 @@ class WorkerManager:
             openai_model: OpenAI model name
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform ('cuda' or 'xpu')
+            no_cusolver: If True, disables cuSolver library usage
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds
@@ -59,6 +61,7 @@ class WorkerManager:
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
         self.target_platform = target_platform
+        self.no_cusolver = no_cusolver
 
         # Setup logging
         if log_dir is None:
@@ -164,6 +167,7 @@ class WorkerManager:
                     self.openai_model,
                     self.high_reasoning_effort,
                     self.target_platform,
+                    self.no_cusolver,
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -228,6 +232,7 @@ def worker_process(
     openai_model: str,
     high_reasoning_effort: bool,
     target_platform: str,
+    no_cusolver: bool = False,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -247,6 +252,7 @@ def worker_process(
         openai_model=openai_model,
         high_reasoning_effort=high_reasoning_effort,
         target_platform=target_platform,
+        no_cusolver=no_cusolver,
     )
 
     result = worker.run(
