@@ -25,7 +25,7 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover
 from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
+from triton_kernel_agent.platform_config import get_platform_choices, get_platform
 
 
 @dataclass
@@ -48,12 +49,12 @@ class RunArtifacts:
     summary_md: str
     code_text: str
     run_info_md: str
-    zip_path: Optional[Path]
+    zip_path: Path | None
 
 
-def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
+def _list_kernelbench_problems(base: Path) -> list[tuple[str, str]]:
     """Return list of (label, absolute_path) pairs for KernelBench problems."""
-    problems: List[Tuple[str, str]] = []
+    problems: list[tuple[str, str]] = []
     if not base.exists():
         return problems
     for level_dir in sorted(base.glob("level*")):
@@ -80,8 +81,8 @@ def _format_classes_summary(code_text: str) -> str:
         if isinstance(node, ast.Name):
             return node.id
         if isinstance(node, ast.Attribute):
-            parts: List[str] = []
-            cur: Optional[ast.AST] = node
+            parts: list[str] = []
+            cur: ast.AST | None = node
             while isinstance(cur, ast.Attribute):
                 parts.append(cur.attr)
                 cur = cur.value
@@ -91,9 +92,9 @@ def _format_classes_summary(code_text: str) -> str:
             return ".".join(parts)
         return ast.dump(node, include_attributes=False)
 
-    class_lines: List[str] = ["## 🧩 Fusion Module Summary"]
-    classes: List[ast.ClassDef] = [n for n in tree.body if isinstance(n, ast.ClassDef)]
-    functions: List[ast.FunctionDef] = [
+    class_lines: list[str] = ["## 🧩 Fusion Module Summary"]
+    classes: list[ast.ClassDef] = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+    functions: list[ast.FunctionDef] = [
         n for n in tree.body if isinstance(n, ast.FunctionDef)
     ]
 
@@ -134,12 +135,13 @@ def _load_code_from_tar(artifact_path: Path) -> str:
         return extracted.read().decode("utf-8")
 
 
-def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
+def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Path | None:
     if not artifact_path.is_file():
         return None
-    with tarfile.open(artifact_path, "r:gz") as tf, zipfile.ZipFile(
-        zip_path, "w", zipfile.ZIP_DEFLATED
-    ) as zf:
+    with (
+        tarfile.open(artifact_path, "r:gz") as tf,
+        zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf,
+    ):
         for member in tf.getmembers():
             if not member.isfile():
                 continue
@@ -152,7 +154,7 @@ def _create_zip_from_tar(artifact_path: Path, zip_path: Path) -> Optional[Path]:
 
 
 def _compose_run_info(
-    run_dir: Path, summary_reason: str, elapsed: float, winner: Optional[str]
+    run_dir: Path, summary_reason: str, elapsed: float, winner: str | None
 ) -> str:
     lines = ["## 📁 Run Information"]
     lines.append(f"- Run directory: `{run_dir}`")
@@ -173,7 +175,8 @@ def run_fuser_problem(
     llm_timeout: int,
     run_timeout: int,
     enable_reasoning: bool,
-    user_api_key: Optional[str] = None,
+    user_api_key: str | None = None,
+    target_platform: str = "cuda",
 ) -> RunArtifacts:
     """Execute the Fuser orchestrator and collect artifacts."""
     if not problem_path:
@@ -224,6 +227,7 @@ def run_fuser_problem(
             isolated=False,
             deny_network=False,
             enable_reasoning_extras=enable_reasoning,
+            target_platform=target_platform,
         )
 
         run_id = new_run_id()
@@ -415,7 +419,7 @@ class FuserAgentUI:
             return f"*Failed to extract subgraphs: {e}*"
 
     def _compute_torchcompile_subgraphs(
-        self, problem_path: Path, strict: bool = False
+        self, problem_path: Path, strict: bool = False, target_platform: str = "cuda"
     ) -> str:
         """Best-effort torch.compile view in FuserAgent style.
 
@@ -434,8 +438,21 @@ class FuserAgentUI:
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)  # type: ignore
 
-            model = mod.Model(*mod.get_init_inputs()).eval()
-            x = mod.get_inputs()[0]
+            # Determine device based on target platform
+            platform_cfg = get_platform(target_platform)
+            if platform_cfg.name == "xpu":
+                if not hasattr(torch, "xpu") or not torch.xpu.is_available():
+                    return (
+                        "*Intel XPU not available. Install PyTorch with XPU support.*"
+                    )
+            else:
+                if not torch.cuda.is_available():
+                    return "*CUDA not available.*"
+            device = platform_cfg.device_string
+
+            model = mod.Model(*mod.get_init_inputs()).eval().to(device)
+            x = mod.get_inputs()[0].to(device)
+
             # Probe attributes
             has_ct = hasattr(model, "conv_transpose")
             has_conv = hasattr(model, "conv")
@@ -560,29 +577,52 @@ class FuserAgentUI:
                 # Profile compiled model kernel launches
                 try:
                     compiled = torch.compile(model, backend="inductor")
+
+                    # Build activity list based on target platform
                     acts = [ProfilerActivity.CPU]
-                    if torch.cuda.is_available():
+                    if target_platform == "xpu":
+                        # XPU profiling support (requires PyTorch 2.4+ with XPU)
+                        if hasattr(ProfilerActivity, "XPU"):
+                            acts.append(ProfilerActivity.XPU)
+                    elif torch.cuda.is_available():
                         acts.append(ProfilerActivity.CUDA)
+
                     with profile(activities=acts, record_shapes=False) as prof:
                         with torch.no_grad():
                             _ = compiled(x)
-                            if torch.cuda.is_available():
+                            # Synchronize based on platform
+                            if target_platform == "xpu":
+                                if hasattr(torch, "xpu"):
+                                    torch.xpu.synchronize()
+                            elif torch.cuda.is_available():
                                 torch.cuda.synchronize()
+
                     events = prof.key_averages()
-                    # Count and sample names
-                    kde = [
-                        e
-                        for e in events
-                        if hasattr(e, "device_type")
-                        and e.device_type == torch.device("cuda").type
-                    ]
-                    if not kde:
+                    # Count and sample kernel names based on platform
+                    if target_platform == "xpu":
                         kde = [
                             e
                             for e in events
                             if "triton" in (e.key or "").lower()
-                            or "cuda" in (e.key or "").lower()
+                            or "xpu" in (e.key or "").lower()
+                            or "onednn" in (e.key or "").lower()
+                            or "sycl" in (e.key or "").lower()
                         ]
+                    else:
+                        kde = [
+                            e
+                            for e in events
+                            if hasattr(e, "device_type")
+                            and e.device_type == torch.device("cuda").type
+                        ]
+                        if not kde:
+                            kde = [
+                                e
+                                for e in events
+                                if "triton" in (e.key or "").lower()
+                                or "cuda" in (e.key or "").lower()
+                            ]
+
                     names = []
                     for ev in kde:
                         name = ev.key or "?"
@@ -591,18 +631,24 @@ class FuserAgentUI:
                             for s in [
                                 "triton",
                                 "cudnn",
+                                "onednn",
                                 "conv",
                                 "group_norm",
                                 "batch_norm",
                                 "gelu",
                                 "tanh",
+                                "sycl",
                             ]
                         ):
                             names.append(f"{name} x{int(ev.count)}")
                             if len(names) >= 8:
                                 break
+
+                    platform_label = (
+                        "xpu_kernels" if target_platform == "xpu" else "cuda_kernels"
+                    )
                     notes.append(
-                        f"cuda_kernels={len(kde)}; sample: "
+                        f"{platform_label}={len(kde)}; sample: "
                         + (", ".join(names) or "(none)")
                     )
                 except Exception as _e:
@@ -663,8 +709,9 @@ class FuserAgentUI:
         llm_timeout: int,
         run_timeout: int,
         enable_reasoning: bool,
-        user_api_key: Optional[str],
-    ) -> Tuple[str, str, str, str, Optional[str]]:
+        user_api_key: str | None,
+        target_platform: str = "cuda",
+    ) -> tuple[str, str, str, str, str | None]:
         problem_path = custom_problem.strip() or selected_problem
         artifacts = run_fuser_problem(
             problem_path=problem_path,
@@ -675,6 +722,7 @@ class FuserAgentUI:
             run_timeout=run_timeout,
             enable_reasoning=enable_reasoning,
             user_api_key=user_api_key,
+            target_platform=target_platform,
         )
         zip_str = str(artifacts.zip_path) if artifacts.zip_path else None
         return (
@@ -763,6 +811,12 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                     label="Enable reasoning extras",
                     value=True,
                 )
+                platform_dropdown = gr.Dropdown(
+                    choices=get_platform_choices(),
+                    label="Target Platform",
+                    value="cuda",
+                    info="Select GPU platform (CUDA for NVIDIA, XPU for Intel)",
+                )
                 strict_compile_checkbox = gr.Checkbox(
                     label="Strict (compile/profiler)",
                     value=False,
@@ -771,7 +825,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
 
                 generate_button = gr.Button("🚀 Run FuserAgent", variant="primary")
 
-            with gr.Column(scale=1.5):
+            with gr.Column(scale=2):
                 gr.Markdown("## Results")
                 status_output = gr.Markdown(value="*Awaiting run...*")
                 with gr.Tabs():
@@ -800,8 +854,9 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
             llm_timeout: int,
             run_timeout: int,
             reasoning: bool,
+            platform: str,
             strict_compile: bool,
-            api_key: Optional[str],
+            api_key: str | None,
         ):
             selected_path = problem_mapping.get(selected_label, default_problem)
             status, summary, code_text, run_info, zip_path = ui.run(
@@ -814,6 +869,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                 run_timeout=run_timeout,
                 enable_reasoning=reasoning,
                 user_api_key=api_key,
+                target_platform=platform,
             )
             # Compute additional tabs
             try:
@@ -829,7 +885,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                     run_timeout,
                 )
                 tc_md = ui._compute_torchcompile_subgraphs(
-                    problem_path, strict=strict_compile
+                    problem_path, strict=strict_compile, target_platform=platform
                 )
             except Exception as _e:
                 fuser_md = f"*Subgraph extraction error: {_e}*"
@@ -847,8 +903,9 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                 llm_timeout_slider,
                 run_timeout_slider,
                 reasoning_checkbox,
-                api_key_input,
+                platform_dropdown,
                 strict_compile_checkbox,
+                api_key_input,
             ],
             outputs=[
                 status_output,

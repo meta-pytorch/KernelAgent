@@ -14,9 +14,8 @@
 
 """Anthropic provider implementation."""
 
-from typing import List, Dict
 from .base import BaseProvider, LLMResponse
-from ..utils import configure_proxy_environment
+from .env_config import configure_proxy_environment
 
 try:
     from anthropic import Anthropic
@@ -44,7 +43,7 @@ class AnthropicProvider(BaseProvider):
             self.client = Anthropic(api_key=api_key)
 
     def get_response(
-        self, model_name: str, messages: List[Dict[str, str]], **kwargs
+        self, model_name: str, messages: list[dict[str, str]], **kwargs
     ) -> LLMResponse:
         if not self.is_available():
             raise RuntimeError("Anthropic client not available")
@@ -64,8 +63,8 @@ class AnthropicProvider(BaseProvider):
         )
 
     def get_multiple_responses(
-        self, model_name: str, messages: List[Dict[str, str]], n: int = 1, **kwargs
-    ) -> List[LLMResponse]:
+        self, model_name: str, messages: list[dict[str, str]], n: int = 1, **kwargs
+    ) -> list[LLMResponse]:
         return [
             self.get_response(
                 model_name,

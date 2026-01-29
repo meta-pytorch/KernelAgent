@@ -38,13 +38,16 @@ import re
 import sys
 import tarfile
 from pathlib import Path
-from typing import Any, Optional, Tuple, Dict
+from typing import Any
 
 from .cli import _load_dotenv_if_present  # reuse env loader
 from .config import OrchestratorConfig, new_run_id
 from .orchestrator import Orchestrator
 from .paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 from .event_adapter import EventAdapter
+from triton_kernel_agent.platform_config import get_platform_choices
+
+from utils.providers import get_model_provider
 
 
 def _load_code_from_tar(artifact_path: Path) -> str:
@@ -70,7 +73,7 @@ _JSON_BLOCK_RE = re.compile(
 def _extract_json_block(text: str) -> str:
     """Extract the last fenced JSON block or fallback to best-effort slice."""
     matches = list(_JSON_BLOCK_RE.finditer(text))
-    chosen: Optional[re.Match[str]] = None
+    chosen: re.Match[str] | None = None
     for m in reversed(matches):
         lang = (m.group(1) or "").strip().lower()
         if lang == "json":
@@ -137,7 +140,7 @@ def _dedup_by_shape_signature(items: list[dict[str, Any]]) -> list[dict[str, Any
     return out
 
 
-def _build_llm_prompt_for_shapes(fused_code: str, problem_code: str) -> Tuple[str, str]:
+def _build_llm_prompt_for_shapes(fused_code: str, problem_code: str) -> tuple[str, str]:
     system = "Return a single JSON array only."
     user_lines: list[str] = []
     user_lines.append(
@@ -210,7 +213,8 @@ def extract_subgraphs_to_json(
     max_iters: int,
     llm_timeout_s: int,
     run_timeout_s: int,
-) -> Tuple[Path, Path]:
+    target_platform: str = "cuda",
+) -> tuple[Path, Path]:
     """Run Fuser to produce fused code, then use LLM to emit subgraphs JSON.
 
     Returns (run_dir, json_path).
@@ -228,6 +232,7 @@ def extract_subgraphs_to_json(
         isolated=False,
         deny_network=False,
         enable_reasoning_extras=True,
+        target_platform=target_platform,
     )
     run_id = new_run_id()
     base_dir = Path.cwd() / ".fuse"
@@ -251,19 +256,39 @@ def extract_subgraphs_to_json(
 
     # Ask LLM for shapes JSON
     system, user = _build_llm_prompt_for_shapes(fused_code, problem_code)
-    jsonl_path = dirs["orchestrator"] / "subgraphs.stream.jsonl"
-    adapter = EventAdapter(
-        model=model_name,
-        store_responses=False,
-        timeout_s=llm_timeout_s,
-        jsonl_path=jsonl_path,
-    )
-    result = adapter.stream(
-        system_prompt=system,
-        user_prompt=user,
-        extras={"text": {"format": {"type": "text"}}},
-    )
-    output_text = result.get("output_text", "")
+
+    """
+    Temporary MUX to support Relay while we migrate to OpenAI Responses API.
+
+    Uses EventAdapter for OpenAI, otherwise Provider inferface
+    """
+    provider = get_model_provider(model_name)
+    if provider.name != "openai":
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        result = provider.get_response(
+            model_name,
+            messages,
+            max_tokens=16000,
+            text={"format": {"type": "text"}},
+        )
+        output_text = result.content or ""
+    else:
+        jsonl_path = dirs["orchestrator"] / "subgraphs.stream.jsonl"
+        adapter = EventAdapter(
+            model=model_name,
+            store_responses=False,
+            timeout_s=llm_timeout_s,
+            jsonl_path=jsonl_path,
+        )
+        result = adapter.stream(
+            system_prompt=system,
+            user_prompt=user,
+            extras={"text": {"format": {"type": "text"}}},
+        )
+        output_text = result.get("output_text", "")
 
     raw_json = _extract_json_block(output_text)
     try:
@@ -278,9 +303,9 @@ def extract_subgraphs_to_json(
         raise SystemExit("LLM output JSON is not a list")
 
     # Merge duplicates by signature and sum counts
-    grouped: Dict[str, Dict[str, Any]] = {}
+    grouped: dict[str, dict[str, Any]] = {}
 
-    def sig_of(it: Dict[str, Any]) -> str:
+    def sig_of(it: dict[str, Any]) -> str:
         # Build a robust signature from ops + shapes + weights
         ops = it.get("ops") or []
         # normalize ops by sorting keys of each op dict
@@ -298,7 +323,7 @@ def extract_subgraphs_to_json(
         weights_original = it.get("weights_original") or {}
 
         # sort weight dicts by key for stability
-        def sort_w(obj: Any) -> Dict[str, Any]:
+        def sort_w(obj: Any) -> dict[str, Any]:
             if isinstance(obj, dict):
                 return {k: obj[k] for k in sorted(obj.keys())}
             return {}
@@ -345,7 +370,7 @@ def extract_subgraphs_to_json(
     return dirs["run_dir"], out_path
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     _load_dotenv_if_present()
     p = argparse.ArgumentParser(
         description="Extract unique subgraphs with shapes (JSON)"
@@ -358,6 +383,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--max-iters", type=int, default=5)
     p.add_argument("--llm-timeout-s", type=int, default=2400)
     p.add_argument("--run-timeout-s", type=int, default=2400)
+    p.add_argument(
+        "--target-platform",
+        default="cuda",
+        choices=get_platform_choices(),
+        help="Target platform",
+    )
     args = p.parse_args(argv)
 
     try:
@@ -373,6 +404,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_iters=args.max_iters,
         llm_timeout_s=args.llm_timeout_s,
         run_timeout_s=args.run_timeout_s,
+        target_platform=args.target_platform,
     )
     print(str(json_path))
     return 0

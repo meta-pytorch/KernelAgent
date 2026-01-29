@@ -23,7 +23,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 from queue import Empty
-from typing import Any, Dict
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -35,7 +35,7 @@ from .logging_utils import redact, setup_file_logger
 
 # Spawn-safe worker entrypoint (top-level function; pass plain payload)
 def _worker_process_main(
-    cfg_payload: Dict[str, Any],
+    cfg_payload: dict[str, Any],
     problem_path: str,
     winner_queue: Any,
     cancel_event: Any,
@@ -65,6 +65,7 @@ def _worker_process_main(
         stream_dir=_P("."),  # unused by Worker
         workspace_dir=_P(cfg_payload["workspace_dir"]),
         shared_digests_dir=_P(cfg_payload["shared_digests_dir"]),
+        target_platform=cfg_payload["target_platform"],
     )
 
     def _on_delta(s: str) -> None:
@@ -100,6 +101,7 @@ class Orchestrator:
         self.console_threads: list[threading.Thread] = []
         self._stop_console = threading.Event()
         self._stream_mode = cfg.stream_mode
+        self.target_platform = cfg.target_platform
 
     def _make_worker_cfg(self, idx: int) -> WorkerConfig:
         worker_id = f"worker_{idx + 1:02d}"
@@ -121,6 +123,7 @@ class Orchestrator:
             stream_dir=self.orchestrator_dir / "stream.log",
             workspace_dir=wdir,
             shared_digests_dir=digests_dir,
+            target_platform=self.target_platform,
         )
 
     def _start_console_mux(self, queues: dict[str, mp.Queue[str]]) -> None:
@@ -231,6 +234,7 @@ class Orchestrator:
                     "enable_reasoning_extras": wcfg.enable_reasoning_extras,
                     "workspace_dir": str(wcfg.workspace_dir),
                     "shared_digests_dir": str(wcfg.shared_digests_dir),
+                    "target_platform": wcfg.target_platform,
                 }
                 p = mp.Process(
                     target=_worker_process_main,

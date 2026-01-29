@@ -19,7 +19,7 @@ import shutil
 import multiprocessing as mp
 import queue
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 from datetime import datetime
 import logging
 from contextlib import contextmanager
@@ -33,10 +33,12 @@ class WorkerManager:
         num_workers: int = 4,
         max_rounds: int = 10,
         history_size: int = 8,
-        log_dir: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
+        log_dir: str | None = None,
+        openai_api_key: str | None = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
+        target_platform: str = "cuda",
+        no_cusolver: bool = False,
     ):
         """
         Initialize the worker manager.
@@ -49,6 +51,8 @@ class WorkerManager:
             openai_api_key: OpenAI API key for LLM refinement
             openai_model: OpenAI model name
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            target_platform: Target platform ('cuda' or 'xpu')
+            no_cusolver: If True, disables cuSolver library usage
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds
@@ -56,6 +60,8 @@ class WorkerManager:
         self.openai_api_key = openai_api_key
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        self.target_platform = target_platform
+        self.no_cusolver = no_cusolver
 
         # Setup logging
         if log_dir is None:
@@ -71,7 +77,7 @@ class WorkerManager:
         # Setup multiprocessing
         self.success_event = mp.Event()  # Shared event to signal success
         self.result_queue = mp.Queue()  # Queue for collecting results
-        self.workers: List[mp.Process] = []
+        self.workers: list[mp.Process] = []
 
         # Setup logger
         self._setup_logging()
@@ -89,7 +95,7 @@ class WorkerManager:
         self.logger = logging.getLogger(__name__)
 
     @contextmanager
-    def temp_workdirs(self) -> List[Path]:
+    def temp_workdirs(self) -> list[Path]:
         """Create temporary working directories for workers."""
         workdirs = []
         try:
@@ -107,11 +113,11 @@ class WorkerManager:
 
     def run_verification(
         self,
-        kernel_seeds: List[str],
+        kernel_seeds: list[str],
         test_code: str,
         problem_description: str,
-        session_log_dir: Optional[Path] = None,
-    ) -> Optional[Dict[str, Any]]:
+        session_log_dir: Path | None = None,
+    ) -> dict[str, Any | None]:
         """
         Run parallel verification on multiple kernel seeds.
 
@@ -160,6 +166,8 @@ class WorkerManager:
                     self.openai_api_key,
                     self.openai_model,
                     self.high_reasoning_effort,
+                    self.target_platform,
+                    self.no_cusolver,
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -220,9 +228,11 @@ def worker_process(
     history_size: int,
     success_event: mp.Event,
     result_queue: mp.Queue,
-    openai_api_key: Optional[str],
+    openai_api_key: str | None,
     openai_model: str,
     high_reasoning_effort: bool,
+    target_platform: str,
+    no_cusolver: bool = False,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -241,6 +251,8 @@ def worker_process(
         openai_api_key=openai_api_key,
         openai_model=openai_model,
         high_reasoning_effort=high_reasoning_effort,
+        target_platform=target_platform,
+        no_cusolver=no_cusolver,
     )
 
     result = worker.run(

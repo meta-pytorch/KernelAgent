@@ -39,7 +39,7 @@ import json
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 import concurrent.futures as _futures
 
 from dotenv import load_dotenv
@@ -49,8 +49,14 @@ try:
 except Exception:  # pragma: no cover - import-time dependency
     TritonKernelAgent = None  # type: ignore
 
+from triton_kernel_agent.platform_config import (
+    get_platform,
+    get_platform_choices,
+    PlatformConfig,
+)
 
-def _shape_list(shape: Any) -> List[str]:
+
+def _shape_list(shape: Any) -> list[str]:
     if isinstance(shape, list):
         return [str(x) for x in shape]
     return [str(shape)] if shape is not None else []
@@ -69,7 +75,7 @@ def _py_tuple(arr: Any) -> str:
     return f"({', '.join(vals)})"
 
 
-def _pick_weights(item: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
+def _pick_weights(item: dict[str, Any], keys: list[str]) -> dict[str, Any]:
     # Prefer explicit fused/original dicts; fallback to generic 'weights'
     ws = (
         item.get("weights_fused")
@@ -79,7 +85,7 @@ def _pick_weights(item: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
     )
     if not isinstance(ws, dict):
         return {}
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for k in keys:
         if k in ws:
             out[k] = ws[k]
@@ -89,20 +95,20 @@ def _pick_weights(item: Dict[str, Any], keys: List[str]) -> Dict[str, Any]:
     return out
 
 
-def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
+def _build_reference_code(item: dict[str, Any]) -> tuple[str, list[str]]:
     """Return (reference_code_str, param_names) implementing the subgraph.
 
     param_names are additional parameters to reference() beyond the first input(s).
     """
-    ops: List[Dict[str, Any]] = [
+    ops: list[dict[str, Any]] = [
         op for op in (item.get("ops") or []) if isinstance(op, dict)
     ]
-    lines: List[str] = ["import torch", "import torch.nn.functional as F", ""]
-    params: List[str] = []
+    lines: list[str] = ["import torch", "import torch.nn.functional as F", ""]
+    params: list[str] = []
 
     # Determine if multi-input
     inputs_multi = item.get("inputs")
-    input_names: List[str]
+    input_names: list[str]
     if isinstance(inputs_multi, list) and inputs_multi:
         input_names = [f"x{i}" for i in range(len(inputs_multi))]
         header = f"def reference({', '.join(input_names)}"  # weights appended later
@@ -110,7 +116,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
         input_names = ["x"]
         header = "def reference(x"
 
-    body: List[str] = []
+    body: list[str] = []
     cur = input_names[0] if input_names else "x"
 
     for op in ops:
@@ -123,7 +129,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
                 else ("weight" if "weight" in wmap else "conv_weight")
             )
             b = "bias" if "bias" in wmap else None
-            args: List[str] = [cur, w]
+            args: list[str] = [cur, w]
             if b:
                 args.append(b)
             stride = _py_tuple(op.get("stride", (1, 1)))
@@ -142,7 +148,7 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
                 else ("weight" if "weight" in wmap else "conv_transpose_weight")
             )
             b = "bias" if "bias" in wmap else None
-            args: List[str] = [cur, w]
+            args: list[str] = [cur, w]
             if b:
                 args.append(b)
             stride = _py_tuple(op.get("stride", (1, 1)))
@@ -252,7 +258,9 @@ def _build_reference_code(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     return "\n".join(lines) + "\n", params
 
 
-def _synthesize_problem_description(item: Dict[str, Any]) -> str:
+def _synthesize_problem_description(
+    item: dict[str, Any], target_platform: PlatformConfig
+) -> str:
     id_ = str(item.get("id", "unknown"))
     type_ = str(item.get("type", ""))
     layout = item.get("data_layout") or "NCHW"
@@ -266,6 +274,7 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
 
     ref_code, _ = _build_reference_code(item)
 
+    # Get device string for the platform
     header = textwrap.dedent(
         f"""
         Implement a Triton kernel that computes the following subgraph end-to-end.
@@ -274,6 +283,8 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         Type: {type_}
         Data layout: {layout}
         DType: {dtype}
+        Target Platform: {target_platform.name}
+        Device String: {target_platform.device_string}
 
         Shapes:
         - input: {_fmt_shape(inputs_multi[0]) if isinstance(inputs_multi, list) else _fmt_shape(input_shape)}
@@ -291,6 +302,8 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
         - kernel_function must accept input tensor(s) and any required weights/bias parameters (match shapes above).
         - Implement the exact semantics of the listed ops in the given order for the provided shapes.
         - Use {layout} layout and {dtype} dtype semantics.
+        - Allocate inputs, weights, intermediates, and outputs on device='{target_platform.device_string}' and keep them there throughout forward/verification.
+        - CPU is acceptable only for metadata, scalars, and export serialization—avoid `.cpu()` or `.to('cpu')` on compute tensors.
         - The test will import kernel_function and compare to the reference implementation below.
 
         Test tolerance policy (enforced in generated tests):
@@ -314,7 +327,13 @@ def _synthesize_problem_description(item: Dict[str, Any]) -> str:
 
 
 def run(
-    subgraphs_path: Path, out_dir: Path, agent_model: str | None = None, jobs: int = 1
+    subgraphs_path: Path,
+    out_dir: Path,
+    agent_model: str | None = None,
+    jobs: int = 1,
+    target_platform: str = "cuda",
+    max_iters: int = 10,
+    no_cusolver: bool = False,
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -327,25 +346,31 @@ def run(
         )
 
     with subgraphs_path.open("r", encoding="utf-8") as f:
-        items: List[Dict[str, Any]] = json.load(f)
+        items: list[dict[str, Any]] = json.load(f)
     if not isinstance(items, list):
         raise SystemExit("subgraphs.json must be a JSON array")
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    platform = get_platform(target_platform)
+
     # Worker function: create a dedicated agent instance per subgraph to avoid
     # cross-thread state interactions inside the agent/manager.
-    def _handle_one(idx_item: Tuple[int, Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
+    def _handle_one(idx_item: tuple[int, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
         idx, item = idx_item
         sid = str(item.get("id", f"subgraph_{idx}"))
-        pdesc = _synthesize_problem_description(item)
+        pdesc = _synthesize_problem_description(item, target_platform=platform)
         sg_dir = out_dir / sid
         sg_dir.mkdir(parents=True, exist_ok=True)
         (sg_dir / "problem.txt").write_text(pdesc, encoding="utf-8")
 
-        # Pin KernelAgent concurrency defaults: 4 workers, 10 rounds
+        # Pin KernelAgent concurrency defaults: 4 workers, max_iters rounds
         local_agent = TritonKernelAgent(
-            num_workers=4, max_rounds=10, model_name=agent_model
+            num_workers=4,
+            max_rounds=max_iters,
+            model_name=agent_model,
+            target_platform=platform,
+            no_cusolver=no_cusolver,
         )
         try:
             result = local_agent.generate_kernel(
@@ -384,8 +409,8 @@ def run(
 
     # Submit tasks with bounded concurrency
     jobs = max(1, int(jobs or 1))
-    ordered_inputs: List[Tuple[int, Dict[str, Any]]] = list(enumerate(items, start=1))
-    results: Dict[int, Dict[str, Any]] = {}
+    ordered_inputs: list[tuple[int, dict[str, Any]]] = list(enumerate(items, start=1))
+    results: dict[int, dict[str, Any]] = {}
     if jobs == 1:
         for pair in ordered_inputs:
             i, res = _handle_one(pair)
@@ -400,13 +425,13 @@ def run(
                 results[i] = res
 
     # Preserve input order in summary output
-    summary: List[Dict[str, Any]] = [results[i] for i in sorted(results.keys())]
+    summary: list[dict[str, Any]] = [results[i] for i in sorted(results.keys())]
     out_summary = out_dir / "summary.json"
     out_summary.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return out_summary
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     p = argparse.ArgumentParser(
         description="Generate Triton kernels for subgraphs via KernelAgent"
@@ -427,6 +452,17 @@ def main(argv: List[str] | None = None) -> int:
         type=str,
         default="2",
         help="Max concurrent subgraphs to dispatch (default: 2); use 'auto' to match subgraph count",
+    )
+    p.add_argument(
+        "--target-platform",
+        default="cuda",
+        choices=get_platform_choices(),
+        help="Target platform (default: cuda)",
+    )
+    p.add_argument(
+        "--no-cusolver",
+        action="store_true",
+        help="Disable cuSolver library usage in generated kernels",
     )
     args = p.parse_args(argv)
 
@@ -451,7 +487,12 @@ def main(argv: List[str] | None = None) -> int:
         jobs_val = 1
 
     summary_path = run(
-        subgraphs_path, out_dir, agent_model=args.agent_model, jobs=jobs_val
+        subgraphs_path,
+        out_dir,
+        agent_model=args.agent_model,
+        jobs=jobs_val,
+        target_platform=args.target_platform,
+        no_cusolver=args.no_cusolver,
     )
     print(str(summary_path))
     return 0

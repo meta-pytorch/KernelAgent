@@ -47,17 +47,22 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
    - This wrapper is what the test will import and call
 
 **STRICTLY FORBIDDEN - DO NOT CHEAT:**
-- DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, etc.) inside the kernel computation
-- DO NOT use PyTorch operations to perform the actual computation and just return the result
+- DO NOT call PyTorch functions (torch.add, torch.mul, torch.sum, torch.matmul, torch.mm, torch.bmm, torch.einsum, etc.) inside the kernel computation
+- DO NOT use PyTorch operations to perform the actual computation and just return the result (this includes tensor-tensor ops such as x.matmul(y), x.bmm(y), x.mm(y), or x.einsum(...))
+- DO NOT call low-level operator APIs like torch.ops.aten.* (e.g., torch.ops.aten.conv2d, torch.ops.aten.addmm, torch.ops.aten.layer_norm, torch.ops.aten.mean); these are PyTorch compute ops and using them instead of Triton is considered cheating
 - DO NOT implement the logic using pure PyTorch and avoid writing Triton kernel code
+- DO NOT hide PyTorch compute (including torch.ops.aten.* calls or torch.nn/torch.nn.functional usage) inside helper functions that are then called from the wrapper; ALL numerical computation must be implemented in Triton kernels
 - The actual computation MUST be implemented using Triton operations (tl.load, tl.store, tl.sum, etc.)
 - The wrapper function can use PyTorch for tensor creation, memory allocation, and result formatting, but the core computation MUST happen in the Triton kernel
 - DO NOT import or instantiate torch.nn modules, call torch.nn.functional (including aliases like F.*), or use PyTorch activations/pooling helpers to satisfy the requirements
+{% if no_cusolver %}
+- DO NOT rely on cuSolver libraries (torch.linalg.svd, torch.linalg.eigh, etc.) to satisfy the requirements
+{% endif %}
 
 **WHAT IS REQUIRED:**
 - Write actual Triton kernel code using triton.language operations
 - Use tl.load() and tl.store() for memory access
-- Use tl.sum(), tl.max(), tl.min() etc. for reductions  
+- Use tl.sum(), tl.max(), tl.min() etc. for reductions
 - Use proper Triton indexing with tl.program_id(), tl.arange(), etc.
 - Implement the algorithm step-by-step in Triton operations, not PyTorch shortcuts
 
@@ -66,6 +71,10 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 7. Handle edge cases and boundary conditions properly
 8. Explicitly reason about what is being fused inside the wrapper docstring or leading comments so reviewers can confirm you attempted fusion
 9. Keep the wrapper free of PyTorch compute primitives—no torch.nn modules, torch.nn.functional calls, or other high-level PyTorch operators in the execution path
+
+{% if kernel_guidance %}
+{{ kernel_guidance }}
+{% endif %}
 
 Example structure (wrapper can use PyTorch, but kernel must use Triton):
 ```python
@@ -80,14 +89,14 @@ def _actual_kernel(ptr_a, ptr_b, ptr_out, n_elements, BLOCK_SIZE: tl.constexpr):
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
-    
+
     # Load using Triton
     a = tl.load(ptr_a + offsets, mask=mask)
     b = tl.load(ptr_b + offsets, mask=mask)
-    
+
     # Compute using Triton operations (NOT torch.add!)
     result = a + b
-    
+
     # Store using Triton
     tl.store(ptr_out + offsets, result, mask=mask)
 
@@ -96,7 +105,7 @@ def kernel_function(tensor_a, tensor_b):
     # PyTorch operations allowed here for setup
     output = torch.empty_like(tensor_a)
     n_elements = tensor_a.numel()
-    
+
     # Calculate grid and launch Triton kernel
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)

@@ -18,14 +18,15 @@ import os
 import json
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any
 from datetime import datetime
 import logging
 from dotenv import load_dotenv
 
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
-from .providers import get_model_provider
+from utils.providers import BaseProvider, get_model_provider
+from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 
 class TritonKernelAgent:
@@ -33,11 +34,14 @@ class TritonKernelAgent:
 
     def __init__(
         self,
-        num_workers: Optional[int] = None,
-        max_rounds: Optional[int] = None,
-        log_dir: Optional[str] = None,
-        model_name: Optional[str] = None,
+        num_workers: int | None = None,
+        max_rounds: int | None = None,
+        log_dir: str | None = None,
+        model_name: str | None = None,
         high_reasoning_effort: bool = True,
+        preferred_provider: BaseProvider | None = None,
+        target_platform: PlatformConfig | None = None,
+        no_cusolver: bool = False,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -48,6 +52,8 @@ class TritonKernelAgent:
             log_dir: Directory for logs (creates temp if None)
             model_name: OpenAI model to use (loaded from .env if None)
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            target_platform: Target platform PlatformConfig
+            no_cusolver: If True, disables cuSolver library usage
         """
         # Load environment variables
         load_dotenv()
@@ -63,7 +69,7 @@ class TritonKernelAgent:
         # Initialize provider
         self.provider = None
         try:
-            self.provider = get_model_provider(self.model_name)
+            self.provider = get_model_provider(self.model_name, preferred_provider)
             self.logger = logging.getLogger(self.__class__.__name__)
             self.logger.info(
                 f"Initialized provider '{self.provider.name}' for model '{self.model_name}'"
@@ -79,11 +85,17 @@ class TritonKernelAgent:
             self.log_dir = Path.cwd() / "triton_kernel_logs"
         self.log_dir.mkdir(exist_ok=True, parents=True)
 
+        # Normalize to PlatformConfig
+        self._platform_config = (
+            target_platform if target_platform else get_platform("cuda")
+        )
+        self.no_cusolver = no_cusolver
+
         # Setup main logger
         self._setup_logging()
 
         # Initialize prompt manager
-        self.prompt_manager = PromptManager()
+        self.prompt_manager = PromptManager(target_platform=target_platform)
 
         # Initialize worker manager
         self.manager = WorkerManager(
@@ -93,6 +105,8 @@ class TritonKernelAgent:
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_model=self.model_name,
             high_reasoning_effort=self.high_reasoning_effort,
+            target_platform=self._platform_config.name,
+            no_cusolver=self.no_cusolver,
         )
 
     def _setup_logging(self):
@@ -110,7 +124,7 @@ class TritonKernelAgent:
 
     def _extract_code_from_response(
         self, response_text: str, language: str = "python"
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Extract code from LLM response text.
 
@@ -159,7 +173,7 @@ class TritonKernelAgent:
         self.logger.warning("No code block found in LLM response")
         return None
 
-    def _call_llm(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    def _call_llm(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
         Call the LLM provider for the configured model.
 
@@ -181,7 +195,7 @@ class TritonKernelAgent:
         return response.content
 
     def _generate_test(
-        self, problem_description: str, provided_test_code: Optional[str] = None
+        self, problem_description: str, provided_test_code: str | None = None
     ) -> str:
         """
         Generate test code for the problem using OpenAI API.
@@ -304,8 +318,8 @@ if __name__ == "__main__":
         return test_code
 
     def _generate_kernel_seeds(
-        self, problem_description: str, test_code: str, num_seeds: Optional[int] = None
-    ) -> List[str]:
+        self, problem_description: str, test_code: str, num_seeds: int | None = None
+    ) -> list[str]:
         """
         Generate initial kernel implementations using OpenAI API.
 
@@ -329,7 +343,9 @@ if __name__ == "__main__":
 
                 # Create prompt with Triton guidelines using template
                 prompt = self.prompt_manager.render_kernel_generation_prompt(
-                    problem_description=problem_description, test_code=test_code
+                    problem_description=problem_description,
+                    test_code=test_code,
+                    no_cusolver=self.no_cusolver,
                 )
 
                 kernels = []
@@ -421,8 +437,8 @@ def kernel_function(*args, **kwargs):
         return kernels
 
     def generate_kernel(
-        self, problem_description: str, test_code: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, problem_description: str, test_code: str | None = None
+    ) -> dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
 

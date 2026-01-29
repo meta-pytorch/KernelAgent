@@ -15,7 +15,8 @@
 """Prompt Manager for handling Jinja2 templates."""
 
 from pathlib import Path
-from typing import Dict, Optional
+
+from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 try:
     from jinja2 import Environment, FileSystemLoader, Template
@@ -36,18 +37,26 @@ class PromptManager:
     for test generation, kernel generation, and kernel refinement.
     """
 
-    def __init__(self, templates_dir: Optional[str] = None):
+    def __init__(
+        self,
+        templates_dir: str | None = None,
+        target_platform: PlatformConfig | None = None,
+    ):
         """
         Initialize the prompt manager.
 
         Args:
             templates_dir: Path to the templates directory. If None, uses default.
+            target_platform: Target platform PlatformConfig
         """
         if not JINJA2_AVAILABLE:
             raise ImportError(
                 "Jinja2 is not available. Please install it with: pip install jinja2"
             )
 
+        if target_platform is None:
+            target_platform = get_platform("cuda")
+        self.target_platform = target_platform
         # Set up templates directory
         if templates_dir:
             self.templates_dir = Path(templates_dir)
@@ -91,7 +100,7 @@ class PromptManager:
                 raise FileNotFoundError(f"Template file not found: {template_path}")
 
     def render_test_generation_prompt(
-        self, problem_description: str, provided_test_code: Optional[str] = None
+        self, problem_description: str, provided_test_code: str | None = None
     ) -> str:
         """
         Render the test generation prompt.
@@ -107,13 +116,15 @@ class PromptManager:
         return template.render(
             problem_description=problem_description,
             provided_test_code=provided_test_code,
+            device_string=self.target_platform.device_string,
         )
 
     def render_kernel_generation_prompt(
         self,
         problem_description: str,
         test_code: str,
-        triton_guidelines: Optional[str] = None,
+        triton_guidelines: str | None = None,
+        no_cusolver: bool = False,
     ) -> str:
         """
         Render the kernel generation prompt.
@@ -122,6 +133,7 @@ class PromptManager:
             problem_description: Description of the kernel to generate
             test_code: Test code that the kernel must pass
             triton_guidelines: Optional guidelines (if None, loads from template)
+            no_cusolver: If True, disables cuSolver library usage
 
         Returns:
             Rendered prompt string
@@ -136,6 +148,8 @@ class PromptManager:
             problem_description=problem_description,
             test_code=test_code,
             triton_guidelines=triton_guidelines,
+            kernel_guidance=self.target_platform.kernel_guidance,
+            no_cusolver=no_cusolver,
         )
 
     def render_kernel_refinement_prompt(
@@ -143,9 +157,10 @@ class PromptManager:
         problem_description: str,
         test_code: str,
         kernel_code: str,
-        error_info: Dict[str, str],
-        history_context: Optional[str] = None,
-        triton_guidelines: Optional[str] = None,
+        error_info: dict[str, str],
+        history_context: str | None = None,
+        triton_guidelines: str | None = None,
+        no_cusolver: bool = False,
     ) -> str:
         """
         Render the kernel refinement prompt.
@@ -157,6 +172,7 @@ class PromptManager:
             error_info: Dictionary with error information (stdout, stderr)
             history_context: Optional context from previous attempts
             triton_guidelines: Optional guidelines (if None, loads from template)
+            no_cusolver: If True, disables cuSolver library usage
 
         Returns:
             Rendered prompt string
@@ -174,6 +190,8 @@ class PromptManager:
             error_info=error_info,
             history_context=history_context,
             triton_guidelines=triton_guidelines,
+            kernel_guidance=self.target_platform.kernel_guidance,
+            no_cusolver=no_cusolver,
         )
 
     def render_triton_guidelines(self) -> str:

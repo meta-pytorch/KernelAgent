@@ -17,16 +17,19 @@
 import json
 import logging
 import multiprocessing as mp
+import os
 import re
 import subprocess
 import sys
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from .prompt_manager import PromptManager
-from .providers import get_model_provider
+from .worker_util import _run_test_multiprocess
+from utils.providers import get_model_provider
+from triton_kernel_agent.platform_config import get_platform
 
 
 DISALLOWED_TORCH_PATTERNS = [
@@ -66,6 +69,52 @@ DISALLOWED_TORCH_PATTERNS = [
         re.compile(r"\.forward\("),
         "Calling .forward() indicates torch.nn module usage and is not allowed",
     ),
+    (
+        re.compile(r"\btorch\.ops\.aten\b"),
+        "Low-level torch.ops.aten.* calls are not allowed; implement these ops directly in Triton kernels instead of relying on PyTorch compute",
+    ),
+    # Generic tensor-tensor math that must be implemented in Triton kernels
+    (
+        re.compile(r"\btorch\.(matmul|mm|bmm)\s*\("),
+        "PyTorch matmul/mm/bmm tensor-tensor ops are not allowed; implement these in Triton kernels",
+    ),
+    (
+        re.compile(r"\.(matmul|mm|bmm)\s*\("),
+        "Tensor.matmul/mm/bmm methods are not allowed; implement these in Triton kernels",
+    ),
+    (
+        re.compile(r"\btorch\.einsum\s*\("),
+        "torch.einsum is not allowed; implement this contraction with Triton primitives",
+    ),
+    (
+        re.compile(r"\.einsum\s*\("),
+        "Tensor.einsum is not allowed; implement this contraction with Triton primitives",
+    ),
+    # Introspection / frame inspection that can be used to steal test locals
+    (
+        re.compile(r"\bimport\s+inspect\b"),
+        "inspect-based reflection is not allowed inside kernel files",
+    ),
+    (
+        re.compile(r"\binspect\.(stack|currentframe|getouterframes)\s*\("),
+        "inspect stack/frame introspection is not allowed in kernels",
+    ),
+    (
+        re.compile(r"\bsys\._getframe\s*\("),
+        "sys._getframe is not allowed in kernels; do not access caller frames",
+    ),
+    (
+        re.compile(r"\.f_locals\b|\.f_globals\b"),
+        "Accessing frame locals/globals (f_locals/f_globals) from kernels is not allowed",
+    ),
+    (
+        re.compile(r"\bglobals\s*\("),
+        "globals() is not allowed in kernels; avoid depending on ambient test state",
+    ),
+    (
+        re.compile(r"\blocals\s*\("),
+        "locals() is not allowed in kernels; avoid depending on caller scopes",
+    ),
 ]
 
 
@@ -79,9 +128,11 @@ class VerificationWorker:
         log_dir: Path,
         max_rounds: int = 10,
         history_size: int = 8,
-        openai_api_key: Optional[str] = None,
+        openai_api_key: str | None = None,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
+        target_platform: str = "cuda",
+        no_cusolver: bool = False,
     ):
         """
         Initialize a verification worker.
@@ -95,6 +146,8 @@ class VerificationWorker:
             openai_api_key: OpenAI API key for refinement
             openai_model: Model name for refinement
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
+            target_platform: Target platform default: cuda
+            no_cusolver: If True, disables cuSolver library usage
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -103,6 +156,8 @@ class VerificationWorker:
         self.history_size = history_size
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        self._platform_config = get_platform(target_platform)
+        self.no_cusolver = no_cusolver
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -114,6 +169,9 @@ class VerificationWorker:
         # Setup logging early so it is available for any error paths
         self._setup_logging()
 
+        # Initialize prompt manager with resolved config
+        self.prompt_manager = PromptManager(target_platform=self._platform_config)
+
         # Initialize provider (may be unavailable in offline/test environments)
         self.provider = None
         try:
@@ -121,9 +179,6 @@ class VerificationWorker:
         except ValueError as e:
             # Provider not available, will use mock mode
             self.logger.warning(f"Provider not available: {e}")
-
-        # Initialize prompt manager
-        self.prompt_manager = PromptManager()
 
     def _setup_logging(self):
         """Setup worker-specific logging."""
@@ -139,7 +194,7 @@ class VerificationWorker:
 
     def _extract_code_from_response(
         self, response_text: str, language: str = "python"
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Extract code from LLM response text.
 
@@ -210,7 +265,7 @@ class VerificationWorker:
         pattern = re.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|#.*)')
         return re.sub(pattern, "", code)
 
-    def _detect_pytorch_compute(self, kernel_code: str) -> Optional[str]:
+    def _detect_pytorch_compute(self, kernel_code: str) -> str | None:
         """Detect disallowed PyTorch usage inside the kernel wrapper."""
         sanitized = self._strip_comments_and_strings(kernel_code)
         for pattern, message in DISALLOWED_TORCH_PATTERNS:
@@ -218,7 +273,7 @@ class VerificationWorker:
                 return message
         return None
 
-    def _run_test(self) -> Tuple[bool, str, str]:
+    def _run_test(self) -> tuple[bool, str, str]:
         """
         Run the test script and capture results.
 
@@ -237,9 +292,14 @@ class VerificationWorker:
             )
 
             success = result.returncode == 0
-            self.logger.info(
-                f"Test {'passed' if success else 'failed'} with code {result.returncode}"
-            )
+            if success:
+                self.logger.info("Test passed")
+            else:
+                self.logger.error(
+                    "Test failed. Exit code: %s, stderr: %s",
+                    result.returncode,
+                    result.stderr[:500],
+                )
 
             return success, result.stdout, result.stderr
 
@@ -274,7 +334,7 @@ class VerificationWorker:
     def _refine_kernel(
         self,
         kernel_code: str,
-        error_info: Dict[str, str],
+        error_info: dict[str, str],
         problem_description: str,
         test_code: str,
     ) -> str:
@@ -306,6 +366,7 @@ class VerificationWorker:
                     kernel_code=kernel_code,
                     error_info=error_info,
                     history_context=history_context,
+                    no_cusolver=self.no_cusolver,
                 )
 
                 # Call LLM API
@@ -366,7 +427,7 @@ class VerificationWorker:
         test_code: str,
         problem_description: str,
         success_event: mp.Event,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run verification and refinement loop.
 
@@ -420,7 +481,11 @@ class VerificationWorker:
                 continue
 
             # Run test
-            success, stdout, stderr = self._run_test()
+            success, stdout, stderr = (
+                self._run_test()
+                if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
+                else _run_test_multiprocess(self.logger, self.workdir, self.test_file)
+            )
 
             # Log round
             self._log_round(round_num + 1, success, current_kernel, stdout, stderr)

@@ -24,7 +24,8 @@ import random
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+
+from Fuser.runner_util import _run_candidate_multiprocess
 
 STDOUT_MAX_TAIL = 20000  # bytes
 STDERR_MAX_TAIL = 20000  # bytes
@@ -109,54 +110,17 @@ def _write_sitecustomize_block_network(dst_dir: Path) -> None:
     (dst_dir / "sitecustomize.py").write_text(code, encoding="utf-8")
 
 
-def run_candidate(
-    artifacts_code_path: Path,
-    run_root: Path,
-    timeout_s: int,
-    isolated: bool,
-    deny_network: bool,
-    cancel_event: Optional["threading.Event"] = None,
-) -> RunResult:
-    """
-    Execute a candidate program in a fresh run directory under run_root.
-    - Copies artifacts_code_path to run_dir/candidate_main.py
-    - Runs [sys.executable, '-u', 'candidate_main.py'] with optional -I (isolated)
-    - If deny_network, injects sitecustomize.py to block sockets and do NOT use -I
-    - Captures stdout/stderr to files; kills on timeout or cancel_event
-    - Classifies pass/fail according to design precedence
-    """
-    run_dir = (
-        run_root
-        / f"attempt_{int(time.time() * 1000)}_{os.getpid()}_{random.randint(0, 9999):04d}"
-    )
-    run_dir.mkdir(parents=True, exist_ok=False)
-
-    # Prepare working files. We intentionally avoid the name "code.py" here because
-    # Python's stdlib exposes a module with that name, and PyTorch's import stack
-    # (via pdb -> code) would accidentally load the candidate file instead of the
-    # stdlib module, leading to partially initialised torch packages.
-    exec_filename = "candidate_main.py"
-    code_dst = run_dir / exec_filename
-    st = artifacts_code_path.lstat()
-    if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
-        raise ValueError("artifacts_code_path must be a regular file (no symlink)")
-    shutil.copy2(artifacts_code_path, code_dst)
-
-    if deny_network:
-        _write_sitecustomize_block_network(run_dir)
-
-    stdout_path = run_dir / "stdout.txt"
-    stderr_path = run_dir / "stderr.txt"
-
-    argv = [sys.executable, "-u"]
-    if isolated and not deny_network:
-        argv.append("-I")
-    argv.append(exec_filename)
-
-    env = _allowlist_env()
-
-    t_started = time.time()
-    (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
+def _run_candidate(
+    run_dir,
+    argv,
+    env: dict[str, str],
+    stdout_path: Path,
+    stderr_path: Path,
+    t_started: float,
+    timeout_s: float,
+    cancel_event,
+):
+    """Run candidate with subprocess."""
     f_out = stdout_path.open("wb")
     f_err = stderr_path.open("wb")
     try:
@@ -228,6 +192,84 @@ def run_candidate(
             f_err.close()
         except Exception:
             pass
+
+    return rc, t_finished
+
+
+def run_candidate(
+    artifacts_code_path: Path,
+    run_root: Path,
+    timeout_s: int,
+    isolated: bool,
+    deny_network: bool,
+    cancel_event: "threading.Event" | None = None,
+) -> RunResult:
+    """
+    Execute a candidate program in a fresh run directory under run_root.
+    - Copies artifacts_code_path to run_dir/candidate_main.py
+    - Runs [sys.executable, '-u', 'candidate_main.py'] with optional -I (isolated)
+    - If deny_network, injects sitecustomize.py to block sockets and do NOT use -I
+    - Captures stdout/stderr to files; kills on timeout or cancel_event
+    - Classifies pass/fail according to design precedence
+    """
+    run_dir = (
+        run_root
+        / f"attempt_{int(time.time() * 1000)}_{os.getpid()}_{random.randint(0, 9999):04d}"
+    )
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    # Prepare working files. We intentionally avoid the name "code.py" here because
+    # Python's stdlib exposes a module with that name, and PyTorch's import stack
+    # (via pdb -> code) would accidentally load the candidate file instead of the
+    # stdlib module, leading to partially initialised torch packages.
+    exec_filename = "candidate_main.py"
+    code_dst = run_dir / exec_filename
+    st = artifacts_code_path.lstat()
+    if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+        raise ValueError("artifacts_code_path must be a regular file (no symlink)")
+    shutil.copy2(artifacts_code_path, code_dst)
+
+    if deny_network:
+        _write_sitecustomize_block_network(run_dir)
+
+    stdout_path = run_dir / "stdout.txt"
+    stderr_path = run_dir / "stderr.txt"
+
+    argv = [sys.executable, "-u"]
+    if isolated and not deny_network:
+        argv.append("-I")
+    argv.append(exec_filename)
+
+    env = _allowlist_env()
+
+    t_started = time.time()
+    (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
+
+    # Run the candidate (via subprocess or multiprocess)
+    rc, t_finished = (
+        _run_candidate(
+            run_dir,
+            argv,
+            env,
+            stdout_path,
+            stderr_path,
+            t_started,
+            timeout_s,
+            cancel_event,
+        )
+        if os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", "1") == "1"
+        else _run_candidate_multiprocess(
+            exec_filename,
+            run_dir,
+            argv,
+            env,
+            stdout_path,
+            stderr_path,
+            t_started,
+            timeout_s,
+            cancel_event,
+        )
+    )
 
     # Read bounded scan for classification
     out_text, scan_truncated = _read_all_text_bounded(stdout_path, MAX_SCAN_BYTES)
