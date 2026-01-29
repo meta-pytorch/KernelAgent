@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from kernel_perf_agent.kernel_opt.database.docs import (
@@ -25,42 +27,41 @@ from kernel_perf_agent.kernel_opt.database.docs import (
 class OptNode:
     def __init__(self, level: int, dsl: str, opt_desc: str) -> None:
         """Initialize the optimization node with the given level, description, and DSL.
-        :param level: int, Level in the tree
-        :param dsl: str, DSL used in the node
-        :param opt_desc: str, Description of the optimization
-        :param opt_parents: List[str], Parent nodes description
-        :param opt_children: List[OptNode], Children nodes
+
+        Args:
+            level: Level in the tree (0=root, 1=bottleneck type, 2=technique, 3=code example)
+            dsl: DSL used in the node (e.g., "text", "triton")
+            opt_desc: Description of the optimization or code example
         """
-
-        self.level = level  # int, Level in the tree
+        self.level = level
         self.dsl = dsl
-        self.opt_desc = opt_desc  # str, Root node description
-        self.opt_parents = []  # List[str], Parent nodes description
-        self.opt_children = []  # List[OptNode], Children nodes
+        self.opt_desc = opt_desc
+        self.opt_parents: list[OptNode] = []
+        self.opt_children: list[OptNode] = []
 
-    def add_children(self, child_nodes):
-        """Adds a child node to the current node."""
+    def add_children(self, child_nodes: list[OptNode]) -> None:
+        """Adds child nodes to this node."""
         self.opt_children.extend(child_nodes)
 
-    def remove_children(self, child_nodes):
-        """Removes a child node from the current node."""
-        for child in child_nodes:
-            if child in self.opt_children:
-                self.opt_children.remove(child)
-
-    def add_parents(self, parent_nodes):
-        """Adds a child node to the current node."""
+    def add_parents(self, parent_nodes: list[OptNode]) -> None:
+        """Adds parent nodes to this node."""
         self.opt_parents.extend(parent_nodes)
 
-    def remove_parents(self, parent_nodes):
-        """Removes a child node from the current node."""
-        for parent in parent_nodes:
-            if parent in self.opt_parents:
-                self.opt_parents.remove(parent)
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         """String representation of the node for easy printing."""
         return f"OptNode at level {self.level}: ({self.opt_desc})"
+
+
+def add_relation(parent: OptNode, children: list[OptNode]) -> None:
+    """Add parent-child relationship symmetrically.
+
+    Args:
+        parent: The parent node
+        children: List of child nodes to add
+    """
+    parent.add_children(children)
+    for child in children:
+        child.add_parents([parent])
 
 
 class OptHierarchy:
@@ -68,12 +69,15 @@ class OptHierarchy:
         """Initialize the optimization hierarchy with the root node."""
         self.root = OptNode(level=0, dsl="text", opt_desc="root")
 
-    def get_root(self):
+    def get_root(self) -> OptNode:
         return self.root
 
-    def hard_initialize(self, common_path) -> None:
-        """Hard initialize the hierarchy with pre-programmed database."""
+    def hard_initialize(self, common_path: Path) -> None:
+        """Hard initialize the hierarchy with pre-programmed database.
 
+        Args:
+            common_path: Path to the code_samples directory
+        """
         # Level 1 nodes - Latency, Memory, Utilization bottlenecks
         optnode_latency = OptNode(
             level=1,
@@ -102,11 +106,7 @@ class OptHierarchy:
             - Autotuning to identify and apply optimal kernel configurations that maximize resource usage
         """,
         )
-        level_1_opts = [optnode_latency, optnode_memory, optnode_utilization]
-        self.root.add_children(level_1_opts)
-        optnode_latency.add_parents([self.root])
-        optnode_memory.add_parents([self.root])
-        optnode_utilization.add_parents([self.root])
+        add_relation(self.root, [optnode_latency, optnode_memory, optnode_utilization])
 
         # Level 2 nodes - TMA, PID swizzling, persistent programming style
         optnode_host_TMA = OptNode(
@@ -122,26 +122,19 @@ class OptHierarchy:
             level=2, dsl="text", opt_desc=persistence.PERSISTENCE
         )
 
-        optnode_latency.add_children([optnode_persistence])
-        optnode_memory.add_children(
+        add_relation(optnode_latency, [optnode_persistence])
+        add_relation(
+            optnode_memory,
             [
                 optnode_host_TMA,
                 optnode_device_TMA,
                 optnode_PID_swizzling,
                 optnode_persistence,
-            ]
+            ],
         )
-        optnode_utilization.add_children([optnode_persistence])
+        add_relation(optnode_utilization, [optnode_persistence])
 
-        optnode_host_TMA.add_parents([optnode_memory])
-        optnode_device_TMA.add_parents([optnode_memory])
-        optnode_PID_swizzling.add_parents([optnode_memory])
-        optnode_persistence.add_parents(
-            [optnode_latency, optnode_memory, optnode_utilization]
-        )
-
-        # Level 3 nodes - code example of each kernel
-        # common_path="../kernel_opt/database/code_samples/"
+        # Level 3 nodes - code examples
         optnode_matmul = OptNode(
             level=3, dsl="triton", opt_desc=Path(common_path / "matmul.py").read_text()
         )
@@ -174,26 +167,17 @@ class OptHierarchy:
             opt_desc=Path(common_path / "matadd_tma_device.py").read_text(),
         )
 
-        optnode_host_TMA.add_children(
+        add_relation(
+            optnode_host_TMA,
             [
                 optnode_matmul,
                 optnode_matmul_tma_host,
                 optnode_matadd,
                 optnode_matadd_tma_host,
-            ]
+            ],
         )
-        optnode_device_TMA.add_children([optnode_matadd, optnode_matadd_tma_device])
-        optnode_PID_swizzling.add_children(
-            [optnode_matmul, optnode_matmul_pid_swizzling]
+        add_relation(optnode_device_TMA, [optnode_matadd, optnode_matadd_tma_device])
+        add_relation(
+            optnode_PID_swizzling, [optnode_matmul, optnode_matmul_pid_swizzling]
         )
-        optnode_persistence.add_children([optnode_matadd, optnode_matadd_persistence])
-
-        optnode_matmul.add_parents([optnode_host_TMA, optnode_PID_swizzling])
-        optnode_matmul_pid_swizzling.add_parents([optnode_PID_swizzling])
-        optnode_matmul_tma_host.add_parents([optnode_host_TMA])
-        optnode_matadd.add_parents(
-            [optnode_host_TMA, optnode_device_TMA, optnode_persistence]
-        )
-        optnode_matadd_persistence.add_parents([optnode_persistence])
-        optnode_matadd_tma_host.add_parents([optnode_host_TMA])
-        optnode_matadd_tma_device.add_parents([optnode_device_TMA])
+        add_relation(optnode_persistence, [optnode_matadd, optnode_matadd_persistence])
