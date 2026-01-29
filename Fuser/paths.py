@@ -25,14 +25,14 @@ def ensure_abs_regular_file(p: str | Path) -> Path:
     if not path.is_absolute():
         raise PathSafetyError(f"problem path must be absolute: {path}")
     try:
-        st = path.lstat()
+        # Resolve symlinks to get the real path
+        resolved_path = path.resolve()
+        st = resolved_path.stat()
     except FileNotFoundError:
         raise PathSafetyError(f"problem path does not exist: {path}")
-    if stat.S_ISLNK(st.st_mode):
-        raise PathSafetyError(f"problem path must not be a symlink: {path}")
     if not stat.S_ISREG(st.st_mode):
         raise PathSafetyError(f"problem path must be a regular file: {path}")
-    return path
+    return resolved_path
 
 
 def make_run_dirs(base: Path, run_id: str) -> dict[str, Path]:

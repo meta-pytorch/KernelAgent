@@ -84,6 +84,7 @@ def _load_kernels_from_summary(summary_path: Path) -> list[KernelItem]:
     if not isinstance(data, list):
         raise SystemExit("kernels summary must be a JSON array (from dispatch step)")
     items: list[KernelItem] = []
+    summary_dir = summary_path.parent
     for it in data:
         if not isinstance(it, dict):
             continue
@@ -95,6 +96,9 @@ def _load_kernels_from_summary(summary_path: Path) -> list[KernelItem]:
         if not sid or not kpath_str:
             continue
         kpath = Path(kpath_str)
+        # If path is relative, resolve it relative to summary.json location
+        if not kpath.is_absolute():
+            kpath = summary_dir / kpath
         if not kpath.is_file():
             continue
         code = _read_text(kpath)
