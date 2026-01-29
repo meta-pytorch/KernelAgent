@@ -21,40 +21,16 @@ cache sizes, and SM counts for common NVIDIA GPUs.
 
 """
 
-import subprocess
 from typing import Any
 
 from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs_database import (
     GPU_SPECS_DATABASE,
 )
 
-__all__ = ["GPU_SPECS_DATABASE", "query_gpu_name", "get_gpu_specs"]
+__all__ = ["GPU_SPECS_DATABASE", "get_gpu_specs"]
 
 
-def query_gpu_name() -> str | None:
-    """
-    Query GPU name using nvidia-smi.
-
-    Returns:
-        GPU name string, or None if query fails
-    """
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            # Take only the first GPU (nvidia-smi returns one line per GPU)
-            gpu_name = result.stdout.strip().split("\n")[0].strip()
-            return gpu_name
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-        pass
-    return None
-
-
-def get_gpu_specs(gpu_name: str | None = None) -> dict[str, Any]:
+def get_gpu_specs(gpu_name: str) -> dict[str, Any] | None:
     """
     Get GPU specifications for bottleneck analysis.
 
@@ -62,10 +38,11 @@ def get_gpu_specs(gpu_name: str | None = None) -> dict[str, Any]:
     including peak compute performance, memory bandwidth, cache sizes, and SM counts.
 
     Args:
-        gpu_name: GPU name (if None, auto-detect with nvidia-smi)
+        gpu_name: GPU name. Must exactly match a key in GPU_SPECS_DATABASE.
 
     Returns:
-        Dictionary with GPU specifications containing:
+        Dictionary with GPU specifications, or None if GPU is not in the database.
+        When successful, contains:
         - name: GPU name
         - architecture: GPU architecture (e.g., "Ampere", "Hopper")
         - peak_fp32_tflops: Peak FP32 compute performance in TFLOPS
@@ -80,63 +57,33 @@ def get_gpu_specs(gpu_name: str | None = None) -> dict[str, Any]:
         - memory_type: Memory type (e.g., "HBM2e", "GDDR6X")
 
     Examples:
-        >>> specs = get_gpu_specs()  # Auto-detect
-        >>> print(f"Peak BW: {specs['peak_memory_bw_gbps']} GB/s")
-
         >>> specs = get_gpu_specs("NVIDIA A100")
-        >>> print(f"SM Count: {specs['sm_count']}")
+        >>> if specs:
+        ...     print(f"SM Count: {specs['sm_count']}")
     """
-    # Auto-detect if not provided
-    if gpu_name is None:
-        gpu_name = query_gpu_name()
-
-    # Return default if detection failed
-    if gpu_name is None:
-        print("⚠️  GPU auto-detection failed, using A100 specs as fallback")
-        return GPU_SPECS_DATABASE["NVIDIA A100"].copy()
-
-    # Try exact match
     if gpu_name in GPU_SPECS_DATABASE:
         return GPU_SPECS_DATABASE[gpu_name].copy()
 
-    # Try fuzzy match (contains or partial match)
-    gpu_name_lower = gpu_name.lower()
-    for key, specs in GPU_SPECS_DATABASE.items():
-        key_lower = key.lower()
-        # Check if either name contains the other
-        if gpu_name_lower in key_lower or key_lower in gpu_name_lower:
-            print(f"ℹ️  Matched '{gpu_name}' to '{key}' (fuzzy match)")
-            return specs.copy()
-
-    # Fallback to A100 specs with warning
-    print(f"⚠️  Unknown GPU: '{gpu_name}', using A100 specs as fallback")
+    print(f"⚠️  Unknown GPU: '{gpu_name}'. Disable Optimization")
     print(f"    Available GPUs: {', '.join(GPU_SPECS_DATABASE.keys())}")
-    return GPU_SPECS_DATABASE["NVIDIA A100"].copy()
+    return None
 
 
 if __name__ == "__main__":
     print("GPU Specifications Module")
     print("=" * 60)
 
-    # Auto-detect GPU
-    detected_name = query_gpu_name()
-    if detected_name:
-        print(f"\nDetected GPU: {detected_name}")
-    else:
-        print("\nNo GPU detected (nvidia-smi not available)")
-        exit()
-
-    # Get specs
-    specs = get_gpu_specs()
-    print(
-        f"\nUsing specs for: {specs['name']} ({specs.get('architecture', 'Unknown')})"
-    )
-    print(f"  - Peak Memory Bandwidth: {specs['peak_memory_bw_gbps']} GB/s")
-    print(f"  - Peak FP32 Performance: {specs['peak_fp32_tflops']} TFLOPS")
-    print(f"  - SM Count: {specs['sm_count']}")
-
     # Show all available GPUs
-    print(f"\n{'=' * 60}")
     print("Available GPU specifications in database:")
     for gpu_name in sorted(GPU_SPECS_DATABASE.keys()):
         print(f"  - {gpu_name}")
+
+    # Example usage
+    print(f"\n{'=' * 60}")
+    example_gpu = "NVIDIA A100"
+    specs = get_gpu_specs(example_gpu)
+    if specs:
+        print(f"\nExample specs for {example_gpu}:")
+        print(f"  - Peak Memory Bandwidth: {specs['peak_memory_bw_gbps']} GB/s")
+        print(f"  - Peak FP32 Performance: {specs['peak_fp32_tflops']} TFLOPS")
+        print(f"  - SM Count: {specs['sm_count']}")
