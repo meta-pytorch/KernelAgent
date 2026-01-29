@@ -18,8 +18,9 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from mpp.frontend.script_executor import PicklableScriptExecutor
-from mpp.frontend.mpp_frontend import MppFrontend
+import mpp.applications as mpp
+from mpp.container.kernel import KernelLaunchDescriptor
+
 from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
     NcuProfilerResults,
     ProfilerResults,
@@ -94,9 +95,6 @@ class TritonMppProfiler:
 
         from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import METRICS
 
-        frontend = MppFrontend.create_from_script(wrapper_file)
-        profiler = frontend.profiler()
-
         prefix = f"ncu_round_{round_num}"
         csv_path = self.artifacts_dir / f"{prefix}.csv"
         mpp_report_path = self.artifacts_dir / f"ncu_mpp_report_round_{round_num}.txt"
@@ -114,13 +112,14 @@ class TritonMppProfiler:
             ]
         )
 
-        profiler.ncu(
+        mpp.run_ncu(
+            kernel_launch_descriptor=KernelLaunchDescriptor.from_script(str(wrapper_file)),
             output_file=str(mpp_report_path),
             include_source_analysis=False,
             include_detailed_metrics=True,
             ncu_report_file=str(ncu_rep_path),
             additional_args=ncu_args,
-        )
+        )            
 
         if not csv_path.exists():
             self.logger.error(f"❌ NCU did not create output CSV: {csv_path}")
@@ -163,12 +162,11 @@ class TritonMppProfiler:
         self.logger.info(f"[Round {round_num}] Generating SM occupancy plot...")
 
         try:
-            # Create profiler using MppFrontend API
-            frontend = MppFrontend(PicklableScriptExecutor(str(wrapper_file)))
-            profiler = frontend.profiler()
-
             # Generate SM occupancy plot using the new Profiler API
-            profiler.sm_occupancy(plot_file=str(plot_file))
+            mpp.run_sm_occupancy(
+                kernel_launch_descriptor=KernelLaunchDescriptor.from_script(str(wrapper_file)),
+                plot_file=str(plot_file),
+            )
 
             if not plot_file.exists():
                 self.logger.error(f"❌ SM occupancy plot file not created: {plot_file}")
