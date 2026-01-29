@@ -20,6 +20,4 @@ Diagnose Prompt Module for Hardware Bottleneck Analysis.
 from .gpu_specs import get_gpu_specs
 
 
-__all__ = [
-    "get_gpu_specs"
-]
+__all__ = ["get_gpu_specs"]
