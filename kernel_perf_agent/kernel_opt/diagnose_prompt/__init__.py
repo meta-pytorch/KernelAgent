@@ -15,20 +15,11 @@
 """
 Diagnose Prompt Module for Hardware Bottleneck Analysis.
 
-This module provides prompt building utilities for the Judge LLM that
-analyzes NCU profiling metrics to identify performance bottlenecks.
 """
 
 from .gpu_specs import get_gpu_specs
-from .judger_prompts import (
-    build_judge_optimization_prompt,
-    extract_judge_response,
-    validate_judge_response,
-)
+
 
 __all__ = [
-    "get_gpu_specs",
-    "build_judge_optimization_prompt",
-    "extract_judge_response",
-    "validate_judge_response",
+    "get_gpu_specs"
 ]

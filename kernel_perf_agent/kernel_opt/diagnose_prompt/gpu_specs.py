@@ -21,6 +21,7 @@ cache sizes, and SM counts for common NVIDIA GPUs.
 
 """
 
+import logging
 from typing import Any
 
 from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs_database import (
@@ -28,6 +29,8 @@ from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs_database import (
 )
 
 __all__ = ["GPU_SPECS_DATABASE", "get_gpu_specs"]
+
+logger = logging.getLogger(__name__)
 
 
 def get_gpu_specs(gpu_name: str) -> dict[str, Any] | None:
@@ -64,8 +67,11 @@ def get_gpu_specs(gpu_name: str) -> dict[str, Any] | None:
     if gpu_name in GPU_SPECS_DATABASE:
         return GPU_SPECS_DATABASE[gpu_name].copy()
 
-    print(f"⚠️  Unknown GPU: '{gpu_name}'. Disable Optimization")
-    print(f"    Available GPUs: {', '.join(GPU_SPECS_DATABASE.keys())}")
+    logger.warning(
+        "Unknown GPU: '%s'. Disable Optimization. Available GPUs: %s",
+        gpu_name,
+        ", ".join(GPU_SPECS_DATABASE.keys()),
+    )
     return None
 
 
