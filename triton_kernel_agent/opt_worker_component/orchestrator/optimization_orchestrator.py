@@ -294,12 +294,10 @@ class OptimizationOrchestrator:
             self.logger.warning(f"[{round_num}] Profiling failed")
             return None
 
-        ncu_metrics = profiler_results.metrics
-
-        if ncu_metrics:
+        if profiler_results:
             self.logger.info(f"[{round_num}] Analyzing bottleneck...")
             bottleneck_analysis = self.bottleneck_analyzer.analyze_bottleneck(
-                current_kernel, problem_description, ncu_metrics, round_num
+                current_kernel, problem_description, profiler_results, round_num
             )
 
             if bottleneck_analysis:

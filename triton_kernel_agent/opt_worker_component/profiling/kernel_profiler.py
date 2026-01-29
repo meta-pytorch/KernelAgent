@@ -50,9 +50,9 @@ class ProfilerMetadata:
 
 
 @dataclass
-class ProfilerResults:
+class NcuProfilerResults:
     """
-    Results from a kernel profiling run.
+    Results from an NCU kernel profiling run.
 
     This dataclass encapsulates both the metrics DataFrame and the parsed
     metrics dictionary, along with metadata about the profiling run.
@@ -72,6 +72,16 @@ class ProfilerResults:
     def to_json(self) -> str:
         """Convert results to a JSON string."""
         return json.dumps(self.to_dict(), indent=2)
+
+
+@dataclass
+class ProfilerResults:
+    """
+    Results from a kernel profiling run.
+    """
+
+    ncu: NcuProfilerResults | None = None
+    sm_occupancy: str | None = None
 
 
 class KernelProfiler:
@@ -167,8 +177,8 @@ class KernelProfiler:
             >>> results = profiler.profile_kernel(
             ...     Path("kernel.py"), Path("problem.py"), round_num=1
             ... )
-            >>> if results:
-            ...     print(f"DRAM throughput: {results.metrics['dram__throughput']}")
+              >>> if results and results.ncu:
+            ...     print(f"DRAM throughput: {results.ncu.metrics['dram__throughput']}")
         """
         # Create NCU wrapper script
         wrapper_file = self.wrapper_factory.create_ncu_wrapper(
@@ -231,8 +241,8 @@ class KernelProfiler:
 
                 metrics = json.loads(metrics_to_prompt(metrics_df))
 
-                # Build ProfilerResults
-                results = ProfilerResults(
+                # Build NcuProfilerResults
+                ncu_results = NcuProfilerResults(
                     metrics_df=metrics_df,
                     metrics=metrics,
                     metadata=ProfilerMetadata(
@@ -245,10 +255,10 @@ class KernelProfiler:
                 )
 
                 # Save metrics with metadata
-                self._save_profiler_results(results)
+                self._save_profiler_results(ncu_results)
 
                 self.logger.info(f"✅ NCU profiling completed for round {round_num}")
-                return results
+                return ProfilerResults(ncu=ncu_results)
 
             except FileNotFoundError as e:
                 self.logger.error(f"❌ File not found during profiling: {e}")
@@ -305,12 +315,12 @@ class KernelProfiler:
         )
         return None
 
-    def _save_profiler_results(self, results: ProfilerResults) -> None:
+    def _save_profiler_results(self, results: NcuProfilerResults) -> None:
         """
         Save profiling results with metadata to a JSON file.
 
         Args:
-            results: ProfilerResults to save
+            results: NcuProfilerResults to save
         """
         metrics_file = (
             self.logs_dir / f"round{results.metadata.round_num:03d}_ncu_metrics.json"

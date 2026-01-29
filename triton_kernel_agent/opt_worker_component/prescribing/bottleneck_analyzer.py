@@ -14,6 +14,9 @@
 
 """Bottleneck analysis using NCU metrics and LLM."""
 
+from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
+    ProfilerResults,
+)
 import logging
 from pathlib import Path
 from typing import Any
@@ -58,7 +61,7 @@ class BottleneckAnalyzer:
         self,
         kernel_code: str,
         problem_description: str,
-        ncu_metrics: dict[str, Any],
+        profiler_results: ProfilerResults,
         round_num: int,
     ) -> dict[str, Any] | None:
         """
@@ -75,6 +78,8 @@ class BottleneckAnalyzer:
             or None if analysis fails
         """
         try:
+            ncu_metrics = profiler_results.ncu.metrics
+
             # Build the judge prompt
             system_prompt, user_prompt = build_judge_optimization_prompt(
                 kernel_code=kernel_code,
