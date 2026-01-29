@@ -136,7 +136,7 @@ GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "peak_fp16_tflops": 1671.0,  # Without sparsity
         "peak_bf16_tflops": 1671.0,  # Without sparsity
         "peak_memory_bw_gbps": 3900,
-        "sm_count": 114,  # Estimated based on performance
+        "sm_count": 132,
         "max_threads_per_sm": 2048,
         "l1_cache_kb": 256,
         "l2_cache_mb": 50,
