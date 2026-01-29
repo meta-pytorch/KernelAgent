@@ -22,6 +22,69 @@ import time
 from pathlib import Path
 
 
+def run_candidate_remote(
+    run_dir: Path,
+    code_path: Path,
+    remote_url: str,
+    timeout_s: float,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> tuple[int, float]:
+    """Execute a candidate program on a remote server.
+
+    Args:
+        run_dir: Working directory for execution
+        code_path: Path to the candidate code file
+        remote_url: URL of the remote execution server
+        timeout_s: Timeout in seconds
+        stdout_path: Path to write stdout
+        stderr_path: Path to write stderr
+
+    Returns:
+        Tuple of (return_code, finish_timestamp)
+    """
+    try:
+        import requests
+    except ImportError:
+        stderr_path.write_text("requests library is required for remote execution")
+        return -1, time.time()
+
+    try:
+        code = code_path.read_text()
+    except Exception as e:
+        stderr_path.write_text(f"Failed to read candidate code: {e}")
+        return -1, time.time()
+
+    try:
+        response = requests.post(
+            f"{remote_url.rstrip('/')}/execute",
+            json={"code": code, "timeout_s": timeout_s},
+            timeout=timeout_s + 10,
+        )
+
+        t_finished = time.time()
+
+        if response.status_code != 200:
+            stderr_path.write_text(
+                f"Remote server returned status {response.status_code}: {response.text}"
+            )
+            return -1, t_finished
+
+        data = response.json()
+        stdout_path.write_text(data.get("stdout", ""))
+        stderr_path.write_text(data.get("stderr", ""))
+        return data.get("rc", -1), t_finished
+
+    except Exception as e:
+        if "Timeout" in type(e).__name__:
+            stderr_path.write_text(
+                f"Remote execution timed out after {timeout_s} seconds"
+            )
+            return -9, time.time()
+        stderr_path.write_text(f"Remote execution failed: {e}")
+        return -1, time.time()
+
+
 def _kill_process_group(pid: int) -> None:
     """Kill the process group of pid. Similar behavior as os.killpg."""
     try:

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from .prompt_manager import PromptManager
-from .worker_util import _run_test_multiprocess
+from .worker_util import _run_test_multiprocess, run_test_remote
 from utils.providers import get_model_provider
 from triton_kernel_agent.platform_config import get_platform
 
@@ -133,6 +133,7 @@ class VerificationWorker:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
+        remote_url: str | None = None,
     ):
         """
         Initialize a verification worker.
@@ -148,6 +149,7 @@ class VerificationWorker:
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform default: cuda
             no_cusolver: If True, disables cuSolver library usage
+            remote_url: If provided, execute tests on a remote server instead of locally
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -158,6 +160,7 @@ class VerificationWorker:
         self.high_reasoning_effort = high_reasoning_effort
         self._platform_config = get_platform(target_platform)
         self.no_cusolver = no_cusolver
+        self.remote_url = remote_url
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -280,17 +283,28 @@ class VerificationWorker:
         Returns:
             Tuple of (success, stdout, stderr)
         """
-        cmd = [sys.executable, str(self.test_file)]
+        if self.remote_url:
+            success, stdout, stderr = run_test_remote(
+                self.kernel_file, self.test_file, self.remote_url
+            )
+            if success:
+                self.logger.info("Test passed (remote)")
+            else:
+                self.logger.error("Test failed (remote). stderr: %s", stderr[:500])
+            return success, stdout, stderr
 
+        if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") != "1":
+            return _run_test_multiprocess(self.logger, self.workdir, self.test_file)
+
+        cmd = [sys.executable, str(self.test_file)]
         try:
             result = subprocess.run(
                 cmd,
                 cwd=str(self.workdir),
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=30,
             )
-
             success = result.returncode == 0
             if success:
                 self.logger.info("Test passed")
@@ -300,9 +314,7 @@ class VerificationWorker:
                     result.returncode,
                     result.stderr[:500],
                 )
-
             return success, result.stdout, result.stderr
-
         except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
             return False, "", "Test execution timed out after 30 seconds"
@@ -481,11 +493,7 @@ class VerificationWorker:
                 continue
 
             # Run test
-            success, stdout, stderr = (
-                self._run_test()
-                if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
-                else _run_test_multiprocess(self.logger, self.workdir, self.test_file)
-            )
+            success, stdout, stderr = self._run_test()
 
             # Log round
             self._log_round(round_num + 1, success, current_kernel, stdout, stderr)

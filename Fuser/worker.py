@@ -78,12 +78,14 @@ class Worker:
         winner_queue: Any,
         cancel_event: Any,
         on_delta: Callable[[str, None]] | None = None,
+        remote_url: str | None = None,
     ) -> None:
         self.cfg = cfg
         self.problem_path = problem_path
         self.winner_queue = winner_queue
         self.cancel_event = cancel_event
         self.on_delta = on_delta
+        self.remote_url = remote_url
         self.logger = setup_file_logger(
             cfg.workspace_dir / "logs" / "worker.log", name=f"worker-{cfg.worker_id}"
         )
@@ -209,6 +211,7 @@ class Worker:
                 isolated=self.cfg.isolated,
                 deny_network=self.cfg.deny_network,
                 cancel_event=self.cancel_event,
+                remote_url=self.remote_url,
             )
 
             if rr.passed:

@@ -21,6 +21,54 @@ from pathlib import Path
 from logging import Logger
 
 
+def run_test_remote(
+    kernel_file: Path,
+    test_file: Path,
+    remote_url: str,
+    timeout: int = 60,
+) -> tuple[bool, str, str]:
+    """Execute a kernel test on a remote server.
+
+    Args:
+        kernel_file: Path to the kernel implementation file
+        test_file: Path to the test file
+        remote_url: URL of the remote execution server
+        timeout: Maximum time in seconds to wait for remote execution
+
+    Returns:
+        Tuple of (success, stdout, stderr)
+    """
+    try:
+        import requests
+    except ImportError:
+        return False, "", "requests library is required for remote execution"
+
+    try:
+        response = requests.post(
+            f"{remote_url.rstrip('/')}/execute",
+            json={
+                "kernel": kernel_file.read_text(),
+                "test": test_file.read_text(),
+            },
+            timeout=timeout,
+        )
+
+        if response.status_code != 200:
+            return (
+                False,
+                "",
+                f"Remote server returned status {response.status_code}: {response.text}",
+            )
+
+        data = response.json()
+        return data.get("success", False), data.get("stdout", ""), data.get("stderr", "")
+
+    except Exception as e:
+        if "Timeout" in type(e).__name__:
+            return False, "", f"Remote execution timed out after {timeout} seconds"
+        return False, "", f"Remote execution failed: {e}"
+
+
 def _run_test_process(test_file: Path, workdir: Path, result_queue: mp.Queue) -> None:
     """
     Helper function to run test in a separate process.

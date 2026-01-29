@@ -42,6 +42,7 @@ class TritonKernelAgent:
         preferred_provider: BaseProvider | None = None,
         target_platform: PlatformConfig | None = None,
         no_cusolver: bool = False,
+        remote_url: str | None = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -54,6 +55,7 @@ class TritonKernelAgent:
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform PlatformConfig
             no_cusolver: If True, disables cuSolver library usage
+            remote_url: If provided, execute tests on a remote server instead of locally
         """
         # Load environment variables
         load_dotenv()
@@ -65,6 +67,7 @@ class TritonKernelAgent:
             "OPENAI_MODEL", "claude-sonnet-4-20250514"
         )
         self.high_reasoning_effort = high_reasoning_effort
+        self.remote_url = remote_url
 
         # Initialize provider
         self.provider = None
@@ -107,6 +110,7 @@ class TritonKernelAgent:
             high_reasoning_effort=self.high_reasoning_effort,
             target_platform=self._platform_config.name,
             no_cusolver=self.no_cusolver,
+            remote_url=self.remote_url,
         )
 
     def _setup_logging(self):

@@ -25,7 +25,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from Fuser.runner_util import _run_candidate_multiprocess
+from Fuser.runner_util import _run_candidate_multiprocess, run_candidate_remote
 
 STDOUT_MAX_TAIL = 20000  # bytes
 STDERR_MAX_TAIL = 20000  # bytes
@@ -203,6 +203,7 @@ def run_candidate(
     isolated: bool,
     deny_network: bool,
     cancel_event: "threading.Event" | None = None,
+    remote_url: str | None = None,
 ) -> RunResult:
     """
     Execute a candidate program in a fresh run directory under run_root.
@@ -211,6 +212,7 @@ def run_candidate(
     - If deny_network, injects sitecustomize.py to block sockets and do NOT use -I
     - Captures stdout/stderr to files; kills on timeout or cancel_event
     - Classifies pass/fail according to design precedence
+    - If remote_url is provided, executes on a remote server instead of locally
     """
     run_dir = (
         run_root
@@ -245,9 +247,18 @@ def run_candidate(
     t_started = time.time()
     (run_dir / "EXEC_STARTED").write_text(str(t_started), encoding="utf-8")
 
-    # Run the candidate (via subprocess or multiprocess)
-    rc, t_finished = (
-        _run_candidate(
+    # Run the candidate (remote, subprocess, or multiprocess)
+    if remote_url:
+        rc, t_finished = run_candidate_remote(
+            run_dir,
+            code_dst,
+            remote_url,
+            timeout_s,
+            stdout_path,
+            stderr_path,
+        )
+    elif os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", "1") == "1":
+        rc, t_finished = _run_candidate(
             run_dir,
             argv,
             env,
@@ -257,8 +268,8 @@ def run_candidate(
             timeout_s,
             cancel_event,
         )
-        if os.getenv("FUSER_COMPOSE_USE_SYS_EXECUTABLE", "1") == "1"
-        else _run_candidate_multiprocess(
+    else:
+        rc, t_finished = _run_candidate_multiprocess(
             exec_filename,
             run_dir,
             argv,
@@ -269,7 +280,6 @@ def run_candidate(
             timeout_s,
             cancel_event,
         )
-    )
 
     # Read bounded scan for classification
     out_text, scan_truncated = _read_all_text_bounded(stdout_path, MAX_SCAN_BYTES)
