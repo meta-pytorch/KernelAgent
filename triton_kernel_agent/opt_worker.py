@@ -88,6 +88,7 @@ class OptimizationWorker:
         pytorch_baseline_time: float | None = None,
         divergence_threshold: float = 50.0,
         target_platform: str = "cuda",
+        use_triton_mpp: bool = False,
     ):
         """
         Initialize the optimization worker.
@@ -109,6 +110,7 @@ class OptimizationWorker:
             pytorch_baseline_time: Pre-computed PyTorch baseline (ms)
             divergence_threshold: Max % worse performance before reverting
             target_platform: Target platform (cuda, rocm, etc.)
+            use_triton_mpp: Use triton_mpp profiler instead of default
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -124,6 +126,7 @@ class OptimizationWorker:
         self.ncu_bin_path = ncu_bin_path
         self.benchmark_warmup = benchmark_warmup
         self.benchmark_repeat = benchmark_repeat
+        self.use_triton_mpp = use_triton_mpp
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -190,12 +193,28 @@ class OptimizationWorker:
         )
 
         # Profiler
-        self.profiler = KernelProfiler(
-            logger=self.logger,
-            artifacts_dir=self.artifact_dir,
-            logs_dir=self.log_dir,
-            ncu_bin_path=self.ncu_bin_path,
-        )
+        if self.use_triton_mpp:
+            try:
+                from triton_kernel_agent.opt_worker_component.profiling.fb.kernel_profiler import (
+                    TritonMppProfiler,
+                )
+
+                self.profiler = TritonMppProfiler(
+                    logger=self.logger,
+                    artifacts_dir=self.artifact_dir,
+                    logs_dir=self.log_dir,
+                )
+            except ImportError as e:
+                raise ImportError(
+                    f"use_triton_mpp=True but triton-mpp is not available: {e}"
+                ) from e
+        else:
+            self.profiler = KernelProfiler(
+                logger=self.logger,
+                artifacts_dir=self.artifact_dir,
+                logs_dir=self.log_dir,
+                ncu_bin_path=self.ncu_bin_path,
+            )
 
         # Bottleneck analyzer
         self.bottleneck_analyzer = BottleneckAnalyzer(

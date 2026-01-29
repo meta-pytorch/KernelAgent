@@ -110,6 +110,7 @@ def example_optimization():
         # Performance safeguards
         divergence_threshold=50.0,  # Revert if 50% worse
         target_platform="cuda",
+        use_triton_mpp=True,
     )
 
     # Run optimization
