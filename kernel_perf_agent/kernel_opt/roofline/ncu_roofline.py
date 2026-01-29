@@ -22,7 +22,7 @@ NCU SOL metrics directly measure how close performance is to peak:
 - Compute SOL: SM throughput as % of peak
 - Memory SOL: DRAM throughput as % of peak
 
-Updated in January 20226
+Updated in January 2026
 """
 
 import logging
@@ -47,12 +47,12 @@ NCU_ROOFLINE_METRICS = [
 class RooflineConfig:
     """Configuration for roofline analysis."""
 
-    threshold: float = 0.90  # 90% SOL = at roofline
+    threshold_pct: float = 90.0  # SOL % to consider at roofline
     early_stop: bool = True  # Stop optimization when at roofline
     convergence_rounds: int = 5  # Rounds without improvement to trigger stop
     min_improvement_pct: float = 0.1  # Minimum improvement to continue
     tensor_core_threshold: float = 5.0  # Min TC activity % to consider TC usage
-    latency_bound_threshold: float = 60.0  # Both threshold < 60% = latency bound
+    underutilized_threshold: float = 60.0  # Both SOL < this % = underutilized
 
 
 @dataclass
@@ -65,11 +65,11 @@ class RooflineResult:
 
     # Derived efficiency (max of compute/memory SOL)
     efficiency_pct: float  # Primary efficiency metric for decisions
-    at_roofline: bool  # True if efficiency >= threshold
+    at_roofline: bool  # True if efficiency >= threshold_pct
     headroom_pct: float  # 100 - efficiency
 
     # Classification
-    bottleneck: str  # "memory" | "compute" | "latency"
+    bottleneck: str  # "memory" | "compute" | "underutilized"
     uses_tensor_cores: bool  # Whether TC is active
 
     # Data quality
@@ -107,31 +107,20 @@ class RooflineAnalyzer:
         Classify bottleneck based on SOL metrics.
 
         The LOWER SOL value indicates the bottleneck.
+        If both are lower than threshold, the kernel is underutilized (could be occupancy,
+        instruction mix, launch config, dependency stalls, etc.).
         """
-        LATENCY_THRESHOLD = self.config.latency_bound_threshold
+        threshold = self.config.underutilized_threshold
 
-        # Both low = latency bound (neither resource is being utilized)
-        if memory_sol < LATENCY_THRESHOLD and compute_sol < LATENCY_THRESHOLD:
-            return "latency"
+        # Both low = underutilized (neither resource is saturated)
+        if memory_sol < threshold and compute_sol < threshold:
+            return "underutilized"
 
         # Return whichever is lower
         if memory_sol <= compute_sol:
             return "memory"
         else:
             return "compute"
-
-    def _default_result(self) -> RooflineResult:
-        """Return a default result for error cases."""
-        return RooflineResult(
-            compute_sol_pct=0,
-            memory_sol_pct=0,
-            efficiency_pct=0,
-            at_roofline=False,
-            headroom_pct=100,
-            bottleneck="unknown",
-            uses_tensor_cores=False,
-            warnings=["Analysis failed - missing NCU metrics"],
-        )
 
     def analyze(
         self,
@@ -146,18 +135,37 @@ class RooflineAnalyzer:
         Returns:
             RooflineResult with SOL-based efficiency analysis
         """
-        # Extract SOL metrics
-        compute_sol = ncu_metrics.get(
-            "sm__throughput.avg.pct_of_peak_sustained_elapsed", 0
-        )
-        memory_sol = ncu_metrics.get(
-            "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed", 0
-        )
+        warnings: list[str] = []
 
-        # Validate we have meaningful data
-        if compute_sol == 0 and memory_sol == 0:
-            self.logger.warning("No SOL metrics available from NCU")
-            return self._default_result()
+        # Extract SOL metrics with missing-key detection
+        compute_key = "sm__throughput.avg.pct_of_peak_sustained_elapsed"
+        memory_key = "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed"
+
+        compute_missing = compute_key not in ncu_metrics
+        memory_missing = memory_key not in ncu_metrics
+
+        if compute_missing:
+            self.logger.warning("Compute SOL metric missing from NCU data")
+            warnings.append("Compute SOL metric missing")
+        if memory_missing:
+            self.logger.warning("Memory SOL metric missing from NCU data")
+            warnings.append("Memory SOL metric missing")
+
+        # Fail only if both keys are absent
+        if compute_missing and memory_missing:
+            return RooflineResult(
+                compute_sol_pct=0,
+                memory_sol_pct=0,
+                efficiency_pct=0,
+                at_roofline=False,
+                headroom_pct=100,
+                bottleneck="unknown",
+                uses_tensor_cores=False,
+                warnings=["Analysis failed - no SOL metrics in NCU data"],
+            )
+
+        compute_sol = ncu_metrics.get(compute_key, 0)
+        memory_sol = ncu_metrics.get(memory_key, 0)
 
         # Primary efficiency: use max of compute/memory
         efficiency = max(compute_sol, memory_sol)
@@ -169,7 +177,7 @@ class RooflineAnalyzer:
         bottleneck = self._classify_bottleneck(compute_sol, memory_sol)
 
         # Check if at roofline
-        at_roofline = efficiency >= self.config.threshold * 100
+        at_roofline = efficiency >= self.config.threshold_pct
 
         return RooflineResult(
             compute_sol_pct=compute_sol,
@@ -179,6 +187,7 @@ class RooflineAnalyzer:
             headroom_pct=max(0, 100 - efficiency),
             bottleneck=bottleneck,
             uses_tensor_cores=uses_tc,
+            warnings=warnings,
         )
 
     def should_stop(self, result: RooflineResult) -> tuple[bool, str]:
@@ -193,12 +202,12 @@ class RooflineAnalyzer:
         """
         self._efficiency_history.append(result.efficiency_pct)
 
-        # Condition 1: At roofline threshold
-        if result.at_roofline:
+        # Condition 1: At roofline threshold (if early_stop enabled)
+        if self.config.early_stop and result.at_roofline:
             return (
                 True,
                 f"At roofline ({result.efficiency_pct:.1f}% SOL >= "
-                f"{self.config.threshold * 100}%)",
+                f"{self.config.threshold_pct}%)",
             )
 
         # Condition 2: Efficiency converged (no improvement for N rounds)

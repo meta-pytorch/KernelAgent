@@ -14,5 +14,4 @@
 
 """Kernel Performance Agent package."""
 
-# "Kernel Performance Agent package
 __all__ = []
