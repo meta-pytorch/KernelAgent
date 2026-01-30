@@ -738,7 +738,7 @@ def build_interface() -> gr.Blocks:
     ui = FuserAgentUI()
     default_problem = ui.problem_choices[0][1] if ui.problem_choices else ""
 
-    with gr.Blocks(title="KernelFalcon FuserAgent", theme=gr.themes.Soft()) as app:
+    with gr.Blocks(title="KernelFalcon FuserAgent") as app:
         gr.Markdown(
             """
 # 🦅 KernelFalcon — FuserAgent
@@ -947,8 +947,8 @@ def main() -> None:
             ssl_keyfile=str(meta_keyfile),
             ssl_certfile=str(meta_keyfile),
             ssl_verify=False,
-            show_api=False,
             inbrowser=False,
+            theme=gr.themes.Soft(),
         )
     else:
         print(f"🌐 Visit http://{args.host}:{args.port}/")
@@ -957,8 +957,8 @@ def main() -> None:
             show_error=True,
             server_name=args.host,
             server_port=args.port,
-            show_api=False,
             inbrowser=True,
+            theme=gr.themes.Soft(),
         )
 
 
