@@ -88,6 +88,7 @@ class PromptManager:
             "test_generation": "test_generation.j2",
             "kernel_generation": "kernel_generation.j2",
             "kernel_refinement": "kernel_refinement.j2",
+            "kernel_optimization": "kernel_optimization.j2",
             "triton_guidelines": "triton_guidelines.j2",
         }
 
@@ -192,6 +193,64 @@ class PromptManager:
             triton_guidelines=triton_guidelines,
             kernel_guidance=self.target_platform.kernel_guidance,
             no_cusolver=no_cusolver,
+        )
+
+    def render_kernel_optimization_prompt(
+        self,
+        problem_description: str,
+        kernel_code: str,
+        gpu_specs: dict,
+        roofline: dict,
+        category: str,
+        summary: str,
+        reasoning: str,
+        root_cause: dict,
+        recommended_fix: dict,
+        pytorch_baseline_ms: float | None = None,
+        current_best_ms: float | None = None,
+        error_feedback: str | None = None,
+    ) -> str:
+        """
+        Render the kernel optimization prompt.
+
+        Args:
+            problem_description: Description of the problem
+            kernel_code: Current kernel implementation
+            gpu_specs: GPU hardware specifications dict
+            roofline: Roofline analysis result dict with keys:
+                bottleneck, compute_sol_pct, memory_sol_pct, efficiency_pct,
+                headroom_pct, at_roofline, uses_tensor_cores, warnings
+            category: Bottleneck category ("memory", "compute", "underutilized")
+            summary: One-line bottleneck summary
+            reasoning: Explanation citing metrics
+            root_cause: Single root cause dict {"cause": "...", "evidence": [...]}
+            recommended_fix: Single fix dict {"fix": "...", "rationale": "..."}
+            pytorch_baseline_ms: PyTorch Eager baseline time in ms
+            current_best_ms: Current best kernel time in ms (for iterative opt)
+            error_feedback: Error message from previous failed attempt
+
+        Returns:
+            Rendered prompt string
+        """
+        template = self.templates["kernel_optimization"]
+
+        bottleneck = {
+            "category": category,
+            "summary": summary,
+            "reasoning": reasoning,
+            "root_cause": root_cause,
+            "recommended_fix": recommended_fix,
+        }
+
+        return template.render(
+            problem_description=problem_description,
+            kernel_code=kernel_code,
+            gpu_specs=gpu_specs,
+            roofline=roofline,
+            bottleneck=bottleneck,
+            pytorch_baseline_ms=pytorch_baseline_ms,
+            current_best_ms=current_best_ms,
+            error_feedback=error_feedback,
         )
 
     def render_triton_guidelines(self) -> str:
