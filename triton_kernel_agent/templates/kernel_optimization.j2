@@ -1,0 +1,101 @@
+{#
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+#}
+
+TASK: Optimize the following Triton kernel based on hardware profiling analysis to achieve better performance.
+
+{% if gpu_specs %}
+## TARGET GPU
+- GPU: {{ gpu_specs.name }}
+- Architecture: {{ gpu_specs.architecture }}
+- Peak Memory Bandwidth: {{ gpu_specs.peak_memory_bw_gbps }} GB/s
+- Peak FP32: {{ gpu_specs.peak_fp32_tflops }} TFLOPS
+- Peak FP16: {{ gpu_specs.peak_fp16_tflops }} TFLOPS
+- Peak BF16: {{ gpu_specs.peak_bf16_tflops }} TFLOPS
+- SM Count: {{ gpu_specs.sm_count }}
+- Max Threads per SM: {{ gpu_specs.max_threads_per_sm }}
+- L1 Cache per SM: {{ gpu_specs.l1_cache_kb }} KB
+- L2 Cache: {{ gpu_specs.l2_cache_mb }} MB
+- Memory: {{ gpu_specs.memory_gb }} GB {{ gpu_specs.memory_type }}
+{% endif %}
+
+## PROBLEM DESCRIPTION
+{{ problem_description }}
+{% if pytorch_baseline_ms %}
+PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms
+{% endif %}
+
+## CURRENT KERNEL
+```python
+{{ kernel_code }}
+```
+
+{% if roofline %}
+## ROOFLINE ANALYSIS
+- Primary Bottleneck: {{ roofline.bottleneck | upper }}
+- Compute SOL: {{ "%.1f"|format(roofline.compute_sol_pct) }}%
+- Memory SOL: {{ "%.1f"|format(roofline.memory_sol_pct) }}%
+- Efficiency: {{ "%.1f"|format(roofline.efficiency_pct) }}% (headroom: {{ "%.1f"|format(roofline.headroom_pct) }}%)
+- At Roofline: {{ "Yes" if roofline.at_roofline else "No" }}
+- Tensor Cores: {{ "Active" if roofline.uses_tensor_cores else "Inactive" }}
+{%- if roofline.warnings %}
+- Warnings: {{ roofline.warnings | join("; ") }}
+{%- endif %}
+{% endif %}
+
+## BOTTLENECK ANALYSIS
+### Category: {{ bottleneck.category | upper }}
+{{ bottleneck.summary }}
+
+**Reasoning:** {{ bottleneck.reasoning }}
+
+**Root Cause:** {{ bottleneck.root_cause.cause }}
+{%- if bottleneck.root_cause.evidence %}
+  Evidence: {% for e in bottleneck.root_cause.evidence %}{{ e.metric }}={{ e.value }}{% if not loop.last %}, {% endif %}{% endfor %}
+{%- endif %}
+
+**Recommended Fix:** {{ bottleneck.recommended_fix.fix }}
+{%- if bottleneck.recommended_fix.rationale %} ({{ bottleneck.recommended_fix.rationale }}){% endif %}
+
+{% if error_feedback %}
+## PREVIOUS ATTEMPT FAILED
+{{ error_feedback }}
+{% endif %}
+
+## PERFORMANCE TARGET
+{% if pytorch_baseline_ms %}
+- PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms
+{% endif %}
+{% if current_best_ms %}
+- Current best kernel: {{ "%.4f"|format(current_best_ms) }} ms
+- Target: Improve by at least 10% (< {{ "%.4f"|format(current_best_ms * 0.9) }} ms)
+{% else %}
+- Target: Improve by at least 10% over Eager (< {{ "%.4f"|format(pytorch_baseline_ms * 0.9) }} ms)
+{% endif %}
+- Maintain numerical correctness (atol=1e-4 or rtol=1e-4)
+- Preserve public API (same inputs/outputs, shapes, dtypes)
+
+## REQUIREMENTS
+1. Apply the recommended fixes above to address the {{ bottleneck.category | upper }} bottleneck
+2. The implementation must be a complete, valid Python file
+3. Main function must be named 'kernel_function' wrapping the Triton kernel
+4. Keep the wrapper free of PyTorch compute primitives
+
+## OUTPUT FORMAT
+Output complete optimized kernel code in ```python blocks.
+Include only: imports, Triton kernel (@triton.jit), wrapper function (kernel_function).
+No testing code, benchmarks, or explanatory comments.
+
+Generate the complete optimized kernel implementation:
