@@ -95,6 +95,7 @@ class JsonAttemptStore:
                 self._id_index = {a.id: i for i, a in enumerate(self._attempts)}
             except (json.JSONDecodeError, KeyError) as e:
                 import warnings
+
                 warnings.warn(f"Corrupted store at {self.path}, starting fresh: {e}")
                 self._attempts = []
                 self._id_index = {}
