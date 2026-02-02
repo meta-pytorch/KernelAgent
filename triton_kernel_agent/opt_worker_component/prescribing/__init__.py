@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""Prescribing module for kernel optimization."""
 
-__all__ = []
+from .bottleneck_analyzer import BottleneckAnalyzer
+
+__all__ = ["BottleneckAnalyzer"]

@@ -12,13 +12,178 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utility functions for the verification worker."""
+"""Utility functions for the verification and optimization workers."""
 
+import logging
 import multiprocessing as mp
 import os
+import re
+from logging import Logger
 from pathlib import Path
 
-from logging import Logger
+from utils.providers.base import BaseProvider
+
+
+# ------------------------
+# LLM Utilities
+# ------------------------
+
+
+def _call_llm(
+    provider: BaseProvider,
+    model: str,
+    messages: list[dict[str, str]],
+    high_reasoning_effort: bool = True,
+    logger: Logger | None = None,
+    **kwargs,
+) -> str:
+    """
+    Call the LLM provider for the configured model.
+
+    Args:
+        provider: LLM provider instance
+        model: Model name
+        messages: List of message dicts with 'role' and 'content'
+        high_reasoning_effort: Whether to use high reasoning effort
+        logger: Optional logger
+        **kwargs: Additional parameters for the API call
+
+    Returns:
+        Generated response text
+    """
+    if not provider:
+        raise RuntimeError(f"No provider available for model {model}")
+
+    if high_reasoning_effort:
+        kwargs["high_reasoning_effort"] = True
+
+    response = provider.get_response(model, messages, **kwargs)
+    return response.content
+
+
+# ------------------------
+# Code Extraction Utilities
+# ------------------------
+
+
+def _extract_code_from_response(
+    response_text: str,
+    language: str = "python",
+    logger: Logger | None = None,
+) -> str | None:
+    """
+    Extract code from LLM response text.
+
+    Args:
+        response_text: The full LLM response text
+        language: The expected language (default: python)
+        logger: Optional logger for debugging
+
+    Returns:
+        Extracted code or None if no valid code block found
+    """
+    log = logger or logging.getLogger(__name__)
+
+    if not response_text:
+        return None
+
+    # First, try to find code blocks with language markers
+    pattern = rf"```{language}\s*\n(.*?)```"
+    matches = re.findall(pattern, response_text, re.DOTALL)
+
+    if matches:
+        return matches[0].strip()
+
+    # Try generic code blocks without language marker
+    pattern = r"```\s*\n(.*?)```"
+    matches = re.findall(pattern, response_text, re.DOTALL)
+
+    if matches:
+        return matches[0].strip()
+
+    # Fallback: check if response looks like code
+    lines = response_text.strip().split("\n")
+    code_indicators = ["import ", "from ", "def ", "class ", "@", '"""', "'''"]
+    if any(
+        line.strip().startswith(indicator)
+        for line in lines
+        for indicator in code_indicators
+    ):
+        return response_text.strip()
+
+    log.warning("No code block found in LLM response")
+    return None
+
+
+def _extract_history_usage_from_response(
+    response_text: str,
+    logger: Logger | None = None,
+) -> dict[str, str | int | None] | None:
+    """
+    Extract history usage metadata from LLM response.
+
+    Looks for structured comments indicating how the LLM used history.
+
+    Returns:
+        Dict with history_usage, based_on_attempt, evolution_rationale, or None.
+    """
+    if not response_text:
+        return None
+
+    result: dict[str, str | int | None] = {}
+
+    # Look for history usage patterns
+    usage_match = re.search(r"History usage:\s*(\w+)", response_text, re.IGNORECASE)
+    if usage_match:
+        result["history_usage"] = usage_match.group(1)
+
+    # Look for "based on attempt N"
+    attempt_match = re.search(r"based on attempt\s*(\d+)", response_text, re.IGNORECASE)
+    if attempt_match:
+        result["based_on_attempt"] = int(attempt_match.group(1))
+
+    # Look for evolution rationale
+    rationale_match = re.search(
+        r"Evolution rationale:\s*(.+?)(?:\n|$)", response_text, re.IGNORECASE
+    )
+    if rationale_match:
+        result["evolution_rationale"] = rationale_match.group(1).strip()
+
+    return result if result else None
+
+
+# ------------------------
+# File I/O Utilities
+# ------------------------
+
+
+def _write_kernel_file(
+    kernel_file: Path, kernel_code: str, logger: Logger | None = None
+) -> None:
+    """Write kernel code to file."""
+    kernel_file.write_text(kernel_code)
+    if logger:
+        logger.debug(f"Wrote kernel to {kernel_file}")
+
+
+def _save_debug_file(
+    filepath: Path,
+    content: str,
+    logger: Logger | None = None,
+) -> None:
+    """Save content to a file for debugging purposes."""
+    try:
+        filepath.write_text(content)
+        if logger:
+            logger.debug(f"Saved debug file: {filepath}")
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to save debug file {filepath}: {e}")
+
+
+# ------------------------
+# Test Execution Utilities
+# ------------------------
 
 
 def _run_test_process(test_file: Path, workdir: Path, result_queue: mp.Queue) -> None:

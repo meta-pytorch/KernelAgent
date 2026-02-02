@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""Optimization orchestration components."""
 
-__all__ = []
+from .optimization_orchestrator import OptimizationOrchestrator
+
+__all__ = ["OptimizationOrchestrator"]
