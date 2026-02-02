@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""kernel_perf_agent package."""
+"""NCU profiling module for kernel performance analysis."""
 
-# Kernel Perf Agent package
 __all__ = []
