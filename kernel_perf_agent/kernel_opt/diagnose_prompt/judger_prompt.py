@@ -110,11 +110,11 @@ Analyze the NCU metrics and identify {num_bottlenecks} performance bottleneck(s)
         "root_causes": [
             {{
                 "cause": "Description",
-                "evidence": [{{"metric": "name", "value": 0.0, "interpretation": "meaning"}}]
+                "evidence": [{{"metric": "name", "value": 0.0, "interpretation": "meaning"}}],
+                "fixes": [
+                    {{"fix": "Actionable instruction", "rationale": "Why"}}
+                ]
             }}
-        ],
-        "recommended_fixes": [
-            {{"fix": "Actionable instruction", "rationale": "Why"}}
         ]
     }}
 ]
@@ -122,7 +122,7 @@ Analyze the NCU metrics and identify {num_bottlenecks} performance bottleneck(s)
 Requirements:
 - Provide exactly {num_bottlenecks} bottleneck analysis object(s) in the array.
 - Order by importance (most critical first).
-- Each bottleneck should have exactly {num_causes} root cause(s) and {num_fixes} corresponding fix(es).
+- Each bottleneck should have exactly {num_causes} root cause(s), each with {num_fixes} fix(es).
 - Keep summaries and reasoning concise and grounded in the provided metrics.
 """
 
@@ -191,7 +191,7 @@ def build_bottleneck_prompt(
     ncu_metrics: dict[str, Any],
     roofline: RooflineResult,
     gpu_specs: dict[str, Any],
-    num_bottlenecks: int = 2,
+    num_bottlenecks: int = 1,
     num_causes: int = 2,
     num_fixes: int = 1,
 ) -> str:
@@ -204,7 +204,7 @@ def build_bottleneck_prompt(
         gpu_specs: GPU hardware specifications.
         num_bottlenecks: Number of bottlenecks to request.
         num_causes: Number of root causes per bottleneck.
-        num_fixes: Number of recommended fixes per bottleneck.
+        num_fixes: Number of recommended fixes per root cause.
 
     Returns:
         Formatted prompt string for the LLM.
@@ -279,15 +279,28 @@ def _parse_bottleneck_list(
         if category not in BOTTLENECK_CATEGORIES:
             category = fallback_category
 
-        root_causes = [
-            {"cause": rc.get("cause", "Unknown"), "evidence": rc.get("evidence", [])}
-            for rc in item.get("root_causes", [])
-        ]
+        # Parse root causes with nested fixes
+        root_causes = []
+        all_fixes = []
+        for rc in item.get("root_causes", []):
+            cause_fixes = [
+                {"fix": f.get("fix", ""), "rationale": f.get("rationale", "")}
+                for f in rc.get("fixes", [])
+            ]
+            root_causes.append(
+                {
+                    "cause": rc.get("cause", "Unknown"),
+                    "evidence": rc.get("evidence", []),
+                    "fixes": cause_fixes,
+                }
+            )
+            all_fixes.extend(cause_fixes)
 
-        fixes = [
-            {"fix": f.get("fix", ""), "rationale": f.get("rationale", "")}
-            for f in item.get("recommended_fixes", [])
-        ]
+        # Also check for legacy top-level recommended_fixes
+        for f in item.get("recommended_fixes", []):
+            fix_entry = {"fix": f.get("fix", ""), "rationale": f.get("rationale", "")}
+            if fix_entry not in all_fixes:
+                all_fixes.append(fix_entry)
 
         results.append(
             BottleneckResult(
@@ -295,7 +308,7 @@ def _parse_bottleneck_list(
                 summary=item.get("summary", f"{category}-bound"),
                 reasoning=item.get("reasoning", ""),
                 root_causes=root_causes,
-                recommended_fixes=fixes,
+                recommended_fixes=all_fixes,
             )
         )
 
