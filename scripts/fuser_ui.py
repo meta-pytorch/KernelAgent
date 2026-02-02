@@ -41,6 +41,10 @@ from Fuser.config import OrchestratorConfig, new_run_id
 from Fuser.orchestrator import Orchestrator
 from Fuser.paths import ensure_abs_regular_file, make_run_dirs, PathSafetyError
 from triton_kernel_agent.platform_config import get_platform_choices, get_platform
+from utils.providers import (
+    BaseProvider,
+    get_available_models,
+)
 
 
 @dataclass
@@ -177,6 +181,7 @@ def run_fuser_problem(
     enable_reasoning: bool,
     user_api_key: str | None = None,
     target_platform: str = "cuda",
+    provider_class_name: str = "",
 ) -> RunArtifacts:
     """Execute the Fuser orchestrator and collect artifacts."""
     if not problem_path:
@@ -199,19 +204,30 @@ def run_fuser_problem(
             zip_path=None,
         )
 
-    original_env_key = os.environ.get("OPENAI_API_KEY")
+    # Determine provider-specific API key env var
+    requires_api_key = provider_class_name not in ("RelayProvider", "")
+    key_env_var = "OPENAI_API_KEY"
+    if provider_class_name == "AnthropicProvider":
+        key_env_var = "ANTHROPIC_API_KEY"
+
+    original_env_key = os.environ.get(key_env_var)
     temp_key_set = False
-    if user_api_key and user_api_key.strip():
-        os.environ["OPENAI_API_KEY"] = user_api_key.strip()
-        temp_key_set = True
-    elif not original_env_key:
-        return RunArtifacts(
-            status_md="❌ Provide an OpenAI API key (UI input or environment variable).",
-            summary_md="*No summary available.*",
-            code_text="",
-            run_info_md="",
-            zip_path=None,
-        )
+
+    if requires_api_key:
+        if user_api_key and user_api_key.strip():
+            os.environ[key_env_var] = user_api_key.strip()
+            temp_key_set = True
+        elif not original_env_key:
+            provider_label = (
+                "OpenAI" if provider_class_name == "OpenAIProvider" else "Anthropic"
+            )
+            return RunArtifacts(
+                status_md=f"❌ Provide a {provider_label} API key (UI input or {key_env_var} environment variable).",
+                summary_md="*No summary available.*",
+                code_text="",
+                run_info_md="",
+                zip_path=None,
+            )
 
     start_time = time.time()
     try:
@@ -304,9 +320,9 @@ def run_fuser_problem(
     finally:
         if temp_key_set:
             if original_env_key is not None:
-                os.environ["OPENAI_API_KEY"] = original_env_key
+                os.environ[key_env_var] = original_env_key
             else:
-                os.environ.pop("OPENAI_API_KEY", None)
+                os.environ.pop(key_env_var, None)
 
 
 class FuserAgentUI:
@@ -330,6 +346,32 @@ class FuserAgentUI:
                     collected.append((label, abspath))
                     seen.add(abspath)
         self.problem_choices = collected
+
+        # Build model/provider lookup dicts
+        self._model_to_providers: dict[str, list[type[BaseProvider]]] = {}
+        self.name_to_provider: dict[str, type[BaseProvider]] = {}
+        self.model_choices: list[tuple[str, str]] = []
+        for cfg in get_available_models():
+            self._model_to_providers[cfg.name] = cfg.provider_classes
+            self.model_choices.append((cfg.name, cfg.name))
+            for cls in cfg.provider_classes:
+                self.name_to_provider[cls.__name__] = cls
+
+    def _get_provider_choices(self, model_name: str) -> list[tuple[str, str]]:
+        """Return list of (label, class_name) tuples for provider dropdown."""
+        provider_classes = self._model_to_providers.get(model_name, [])
+        return [
+            (provider_cls().name, provider_cls.__name__)
+            for provider_cls in provider_classes
+        ]
+
+    def _provider_env_var(self, class_name: str) -> str:
+        """Return the correct API key env var name for the provider."""
+        if class_name == "OpenAIProvider":
+            return "OPENAI_API_KEY"
+        if class_name == "AnthropicProvider":
+            return "ANTHROPIC_API_KEY"
+        return ""
 
     # ---------- Subgraph helpers ----------
     def _format_fuser_subgraphs_markdown(self, items: list[dict]) -> str:
@@ -711,6 +753,7 @@ class FuserAgentUI:
         enable_reasoning: bool,
         user_api_key: str | None,
         target_platform: str = "cuda",
+        provider_class_name: str = "",
     ) -> tuple[str, str, str, str, str | None]:
         problem_path = custom_problem.strip() or selected_problem
         artifacts = run_fuser_problem(
@@ -723,6 +766,7 @@ class FuserAgentUI:
             enable_reasoning=enable_reasoning,
             user_api_key=user_api_key,
             target_platform=target_platform,
+            provider_class_name=provider_class_name,
         )
         zip_str = str(artifacts.zip_path) if artifacts.zip_path else None
         return (
@@ -752,11 +796,11 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                 gr.Markdown("## Configuration")
 
                 api_key_input = gr.Textbox(
-                    label="🔑 OpenAI API Key (optional)",
-                    placeholder="sk-...",
+                    label="🔑 API Key (optional)",
+                    placeholder="sk-... or anthropic key",
                     type="password",
                     value="",
-                    info="Used only for this session; falls back to environment variable.",
+                    info="Used only for this session; falls back to environment variable. Not needed for Relay provider.",
                 )
 
                 problem_dropdown = gr.Dropdown(
@@ -791,10 +835,38 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                     placeholder="/abs/path/to/problem.py",
                 )
 
-                model_input = gr.Textbox(
-                    label="Model name",
-                    value="gpt-5",
+                # Model dropdown
+                default_model = ui.model_choices[0][1] if ui.model_choices else "gpt-5"
+                model_dropdown = gr.Dropdown(
+                    choices=[name for name, _ in ui.model_choices],
+                    label="Model",
+                    value=default_model,
                     info="Model passed to Fuser workers",
+                )
+
+                # Provider dropdown
+                default_provider_choices = ui._get_provider_choices(default_model)
+                provider_dropdown = gr.Dropdown(
+                    choices=default_provider_choices,
+                    label="Provider",
+                    value=default_provider_choices[0][1]
+                    if default_provider_choices
+                    else None,
+                    info="Select which provider to use for this model",
+                )
+
+                # Update provider dropdown when model changes
+                def update_provider_dropdown(selected_model_name: str | None):
+                    if not selected_model_name:
+                        return gr.update(choices=[], value=None)
+                    new_choices = ui._get_provider_choices(selected_model_name)
+                    new_value = new_choices[0][1] if new_choices else None
+                    return gr.update(choices=new_choices, value=new_value)
+
+                model_dropdown.change(
+                    fn=update_provider_dropdown,
+                    inputs=model_dropdown,
+                    outputs=provider_dropdown,
                 )
 
                 workers_slider = gr.Slider(1, 8, value=4, step=1, label="Workers")
@@ -849,6 +921,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
             selected_label: str,
             custom_path: str,
             model: str,
+            provider_class_name: str,
             workers: int,
             max_iters: int,
             llm_timeout: int,
@@ -870,6 +943,7 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
                 enable_reasoning=reasoning,
                 user_api_key=api_key,
                 target_platform=platform,
+                provider_class_name=provider_class_name,
             )
             # Compute additional tabs
             try:
@@ -897,7 +971,8 @@ Select a KernelBench problem, generate fusion-ready PyTorch subgraphs, and downl
             inputs=[
                 problem_dropdown,
                 custom_path_input,
-                model_input,
+                model_dropdown,
+                provider_dropdown,
                 workers_slider,
                 max_iters_slider,
                 llm_timeout_slider,
