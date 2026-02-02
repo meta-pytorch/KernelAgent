@@ -288,12 +288,11 @@ def main():
     args = _parse_args()
 
     device = torch.device(args.device)
-    dtype_map = {
+    dtype = {
         "float32": torch.float32,
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
-    }
-    dtype = dtype_map[args.dtype]
+    }[args.dtype]
 
     if not args.quiet:
         print("=" * 80)
