@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""
+Diagnose Prompt Module for Hardware Bottleneck Analysis.
 
-__all__ = []
+"""
+
+__all__: list[str] = []
