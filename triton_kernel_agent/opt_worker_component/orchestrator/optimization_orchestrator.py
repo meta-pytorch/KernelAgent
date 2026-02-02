@@ -193,8 +193,8 @@ class OptimizationOrchestrator:
             self.logger.info("=" * 80)
 
             # Profile and analyze bottleneck
-            bottleneck_results, roofline_result, ncu_metrics = self._profile_and_analyze(
-                current_kernel, problem_file, round_num
+            bottleneck_results, roofline_result, ncu_metrics = (
+                self._profile_and_analyze(current_kernel, problem_file, round_num)
             )
 
             if not bottleneck_results:
@@ -214,7 +214,9 @@ class OptimizationOrchestrator:
                 summary=primary.summary,
                 reasoning=primary.reasoning,
                 root_cause=primary.root_causes[0] if primary.root_causes else {},
-                recommended_fix=primary.recommended_fixes[0] if primary.recommended_fixes else {},
+                recommended_fix=primary.recommended_fixes[0]
+                if primary.recommended_fixes
+                else {},
                 pytorch_baseline_ms=pytorch_baseline_time,
                 current_best_ms=best_time,
                 error_feedback=error_feedback if error_feedback else None,
@@ -289,7 +291,9 @@ class OptimizationOrchestrator:
                     roofline_check
                 )
                 if should_stop and self.roofline_analyzer.config.early_stop:
-                    self.logger.info(f"[{round_num}] 🎯 Early termination: {stop_reason}")
+                    self.logger.info(
+                        f"[{round_num}] 🎯 Early termination: {stop_reason}"
+                    )
                     early_stop_reason = stop_reason
                     break
 
@@ -384,18 +388,14 @@ class OptimizationOrchestrator:
         )
 
         if bottleneck_results:
-            strategy_file = (
-                self.artifact_dir / f"round{round_num:03d}_strategy.json"
-            )
+            strategy_file = self.artifact_dir / f"round{round_num:03d}_strategy.json"
             with open(strategy_file, "w") as f:
                 json.dump([r.to_dict() for r in bottleneck_results], f, indent=2)
             return bottleneck_results, roofline_result, ncu_metrics
 
         return None, roofline_result, ncu_metrics
 
-    def _generate_optimized_kernel(
-        self, opt_prompt: str, round_num: int
-    ) -> str | None:
+    def _generate_optimized_kernel(self, opt_prompt: str, round_num: int) -> str | None:
         """Generate optimized kernel from LLM."""
         self.logger.info(f"[{round_num}] Generating optimized kernel...")
         try:
