@@ -61,7 +61,7 @@ from triton_kernel_agent.platform_config import (
     get_platform_choices,
     get_platform,
 )
-from utils.providers.models import get_model_provider
+from utils.providers.models import get_model_provider, is_model_available
 
 
 # ------------------------
@@ -136,6 +136,20 @@ def _dotted_name(n: ast.AST) -> str:
         parts.append(cur.id)
     parts.reverse()
     return ".".join(parts)
+
+
+def _validate_cfg_models(cfg) -> None:
+    """Given a router config, remove all unavailable model choices."""
+    if (ka_model := cfg.get("ka_model")) and not is_model_available(ka_model):
+        del cfg["ka_model"]
+
+    if models := cfg.get("llm_models"):
+        remove = [k for k, v in models.items() if not is_model_available(v)]
+        for k in remove:
+            del models[k]
+
+        if not models:
+            del cfg["llm_models"]
 
 
 @dataclass
@@ -331,6 +345,7 @@ class AutoKernelRouter:
         allow_fallback: bool = True,
         target_platform: str | None = None,
         ignore_router_config: bool = False,
+        use_router_cache: bool = True,
         no_cusolver: bool = False,
     ) -> None:
         self.ka_model = ka_model
@@ -355,6 +370,7 @@ class AutoKernelRouter:
         self.allow_fallback = allow_fallback
         self.platform_config = get_platform(target_platform)
         self.ignore_router_config = ignore_router_config
+        self.use_router_cache = use_router_cache
         self.no_cusolver = no_cusolver
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
@@ -466,20 +482,23 @@ class AutoKernelRouter:
         heuristic_prefers_fuser = cx.route_to_fuser()
 
         # Cache lookup by content hash to avoid repeated router calls
+        cache = {}
         code_hash = _file_sha256_text(code)
-        cache = _load_router_cache()
-        cached = cache.get(code_hash)
-
         strategy: str | None = None
         route_conf: float | None = None
         route_cfg: dict[str, Any] = {}
 
-        if isinstance(cached, dict):
-            strategy = (
-                str(cached.get("route_strategy") or cached.get("route") or "") or None
-            )
-            route_conf = cached.get("confidence")
-            route_cfg = cached.get("config") or {}
+        if self.use_router_cache:
+            cache = _load_router_cache()
+            cached = cache.get(code_hash)
+
+            if isinstance(cached, dict):
+                strategy = (
+                    str(cached.get("route_strategy") or cached.get("route") or "")
+                    or None
+                )
+                route_conf = cached.get("confidence")
+                route_cfg = cached.get("config") or {}
 
         if strategy is None:
             # Try LLM-driven decision
@@ -488,11 +507,14 @@ class AutoKernelRouter:
                     problem_path, code, cx
                 )
                 # Persist in cache for future runs
-                cache[code_hash] = info.get("parsed") or {
-                    "route_strategy": strategy,
-                    "confidence": route_conf,
-                }
-                _save_router_cache(cache)
+                if self.use_router_cache:
+                    cache[code_hash] = info.get("parsed") or {
+                        "route_strategy": strategy,
+                        "confidence": route_conf,
+                    }
+                    route_cfg = cache[code_hash].get("config") or {}
+                    _validate_cfg_models(route_cfg)
+                    _save_router_cache(cache)
             except Exception:
                 # No provider or failure; fall back later
                 pass
@@ -715,6 +737,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Ignore router config. Use CLI-provided model/config arguments",
     )
     p.add_argument(
+        "--no-router-cache",
+        action="store_true",
+        help="Disable router cache (do not read from or write to cache)",
+    )
+    p.add_argument(
         "--target-platform",
         default="cuda",
         choices=get_platform_choices(),
@@ -757,6 +784,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_fallback=(not args.no_fallback),
         target_platform=args.target_platform,
         ignore_router_config=args.ignore_router_config,
+        use_router_cache=(not args.no_router_cache),
         no_cusolver=args.no_cusolver,
     )
 

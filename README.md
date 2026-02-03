@@ -91,8 +91,10 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
   ```bash
   python -m Fuser.auto_agent \
     --problem /abs/path/to/KernelBench/level1/19_ReLU.py \
-    --verify          # ensure final composition test runs
+    --no-router-cache \     # avoid caching or using cached results
+    --verify                # ensure final composition test runs
   ```
+  `--no-router-cache` can be enabled to avoid utilizing any cached router results and prevent writing to the cache.
 
 - **Manually run the pipeline (extract → dispatch → compose)** when you want explicit control over models or concurrency:
   ```bash
@@ -144,7 +146,7 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 
 ## Component Details
 
-- **AutoRouter (`Fuser/auto_agent.py`)**: parses the problem’s AST, looks for attention blocks, transposed convolutions, control flow, and long op chains. It caches decisions under `.fuse/router_cache.json` and can fall back to the other path if the first attempt fails. Use `--ignore-router-config` to manually specify routed execution configs.
+- **AutoRouter (`Fuser/auto_agent.py`)**: parses the problem’s AST, looks for attention blocks, transposed convolutions, control flow, and long op chains. It caches decisions under `.fuse/router_cache.json` and can fall back to the other path if the first attempt fails. Use  `--no-router-cache` to ignore the existing cache and caching new routes. Use `--ignore-router-config` to ignore router-provided tuning and rely on CLI args.
 
 - **Fuser Orchestrator (`Fuser/orchestrator.py`)**: rewrites the PyTorch module into fusable modules, executes them for validation, and packages a tarball of the fused code. Run IDs and directories are managed via `Fuser/paths.py`.
 
