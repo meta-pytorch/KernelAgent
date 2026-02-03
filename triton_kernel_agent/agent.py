@@ -457,14 +457,12 @@ def kernel_function(*args, **kwargs):
         self.logger.info("Starting kernel generation")
         self.logger.info(f"Problem: {problem_description[:100]}...")
 
-        # Always generate test code using LLM (even if test is provided as reference)
-        generated_test_code = self._generate_test(problem_description, test_code)
-        self.logger.info(
-            "Generated test code using LLM" + (" with reference" if test_code else "")
-        )
-
-        # Use the generated test code in standardized format
-        test_code = generated_test_code
+        # Use provided test code if available, otherwise generate it
+        if test_code:
+            self.logger.info("Using provided test code")
+        else:
+            test_code = self._generate_test(problem_description, None)
+            self.logger.info("Generated test code using LLM")
 
         # Log inputs
         import time
