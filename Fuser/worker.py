@@ -16,7 +16,7 @@ import json
 import queue
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional, Any, Callable
+from typing import Any, Callable
 
 from .config import WorkerConfig
 from .event_adapter import EventAdapter
@@ -26,13 +26,15 @@ from .runner import run_candidate
 from .logging_utils import setup_file_logger
 from .dedup import register_digest
 
+from utils.providers import get_model_provider
+
 
 @dataclass
 class WorkerState:
     worker_id: str
     iter_index: int
-    last_response_id: Optional[str]
-    last_error: Optional[str]
+    last_response_id: str | None
+    last_error: str | None
     passed: bool
 
 
@@ -75,7 +77,7 @@ class Worker:
         problem_path: Path,
         winner_queue: Any,
         cancel_event: Any,
-        on_delta: Optional[Callable[[str], None]] = None,
+        on_delta: Callable[[str, None]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.problem_path = problem_path
@@ -117,21 +119,55 @@ class Worker:
             prompt_path = self.dirs["prompts"] / f"iteration_{k}.txt"
             prompt_path.write_text(rp.user, encoding="utf-8")
 
-            # Stream via EventAdapter
-            jsonl_path = self.dirs["responses"] / f"iteration_{k}.stream.jsonl"
-            adapter = EventAdapter(
-                model=self.cfg.model,
-                store_responses=self.cfg.store_responses,
-                timeout_s=self.cfg.llm_timeout_s,
-                jsonl_path=jsonl_path,
-                stop_event=self.cancel_event,
-                on_delta=self.on_delta,
-            )
-            result = adapter.stream(
-                system_prompt=SYSTEM_PROMPT, user_prompt=rp.user, extras=rp.extras
-            )
+            """
+            Temporary MUX to support Relay while we migrate to OpenAI Responses
+            API.
+
+            Uses EventAdapter for OpenAI otherwise Provider inferface
+            """
+            provider = get_model_provider(self.cfg.model)
+            if provider.name != "openai":
+                # Call LLM directly using provider
+                messages: list[dict[str, str]] = [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": rp.user},
+                ]
+                try:
+                    response = provider.get_response(
+                        self.cfg.model, messages, max_tokens=16000, **rp.extras
+                    )
+                    result = {
+                        "output_text": response.content or "",
+                        "response_id": response.response_id or None,
+                        "error": None,
+                    }
+                except Exception as e:
+                    error = f"stream_error: {e.__class__.__name__}: {e}"
+                    result = {
+                        "output_text": "",
+                        "response_id": None,
+                        "error": error,
+                    }
+            else:
+                # Stream via EventAdapter
+                jsonl_path = self.dirs["responses"] / f"iteration_{k}.stream.jsonl"
+                adapter = EventAdapter(
+                    model=self.cfg.model,
+                    store_responses=self.cfg.store_responses,
+                    timeout_s=self.cfg.llm_timeout_s,
+                    jsonl_path=jsonl_path,
+                    stop_event=self.cancel_event,
+                    on_delta=self.on_delta,
+                )
+                result = adapter.stream(
+                    system_prompt=SYSTEM_PROMPT, user_prompt=rp.user, extras=rp.extras
+                )
+
             state.last_response_id = result.get("response_id")
-            _write_json(self.dirs["responses"] / f"iteration_{k}.final.json", result)
+            _write_json(
+                self.dirs["responses"] / f"iteration_{k}.final.json",
+                result,
+            )
 
             if self.cancel_event.is_set():
                 self.logger.info("cancel after streaming; exiting")

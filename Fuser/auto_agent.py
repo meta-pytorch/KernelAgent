@@ -50,14 +50,18 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from dotenv import load_dotenv
 from Fuser.pipeline import run_pipeline
 
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
-from triton_kernel_agent.providers.models import get_model_provider
+from triton_kernel_agent.platform_config import (
+    get_platform_choices,
+    get_platform,
+)
+from utils.providers.models import get_model_provider, is_model_available
 
 
 # ------------------------
@@ -105,7 +109,7 @@ def _file_sha256_text(txt: str) -> str:
     return hashlib.sha256(txt.encode("utf-8")).hexdigest()
 
 
-def _load_router_cache() -> Dict[str, Any]:
+def _load_router_cache() -> dict[str, Any]:
     try:
         if _ROUTER_CACHE_PATH.is_file():
             return json.loads(_ROUTER_CACHE_PATH.read_text(encoding="utf-8"))
@@ -114,7 +118,7 @@ def _load_router_cache() -> Dict[str, Any]:
     return {}
 
 
-def _save_router_cache(cache: Dict[str, Any]) -> None:
+def _save_router_cache(cache: dict[str, Any]) -> None:
     try:
         _ensure_dir(_ROUTER_CACHE_PATH)
         _ROUTER_CACHE_PATH.write_text(json.dumps(cache, indent=2), encoding="utf-8")
@@ -134,6 +138,20 @@ def _dotted_name(n: ast.AST) -> str:
     return ".".join(parts)
 
 
+def _validate_cfg_models(cfg) -> None:
+    """Given a router config, remove all unavailable model choices."""
+    if (ka_model := cfg.get("ka_model")) and not is_model_available(ka_model):
+        del cfg["ka_model"]
+
+    if models := cfg.get("llm_models"):
+        remove = [k for k, v in models.items() if not is_model_available(v)]
+        for k in remove:
+            del models[k]
+
+        if not models:
+            del cfg["llm_models"]
+
+
 @dataclass
 class Complexity:
     has_control_flow: bool
@@ -144,7 +162,7 @@ class Complexity:
     pool_ops: int
     act_ops: int
     chain_len_estimate: int
-    raw_op_names: Dict[str, int]
+    raw_op_names: dict[str, int]
 
     def route_to_fuser(self) -> bool:
         # Primary triggers
@@ -213,7 +231,7 @@ def analyze_problem_code(code: str) -> Complexity:
 
     # AST path: inspect Model.forward for ops and control flow
     has_control_flow = False
-    raw_op_counts: Dict[str, int] = {}
+    raw_op_counts: dict[str, int] = {}
     has_attention_like = False
     has_conv_transpose = False
     has_group_norm = False
@@ -298,19 +316,19 @@ def analyze_problem_code(code: str) -> Complexity:
 class RouteResult:
     route: str  # "kernelagent" or "fuser"
     success: bool
-    details: Dict[str, Any]
-    kernel_code: Optional[str] = None
+    details: dict[str, Any]
+    kernel_code: str | None = None
 
 
 class AutoKernelRouter:
     def __init__(
         self,
-        ka_model: Optional[str] = None,
+        ka_model: str | None = None,
         ka_num_workers: int = 4,
         ka_max_rounds: int = 10,
         ka_high_reasoning: bool = True,
         # Router LLM
-        router_model: Optional[str] = "gpt-5",
+        router_model: str | None = "gpt-5",
         router_high_reasoning: bool = True,
         router_temperature: float = 0.2,
         router_max_tokens: int = 700,
@@ -325,6 +343,10 @@ class AutoKernelRouter:
         verify: bool = True,
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
+        target_platform: str | None = None,
+        ignore_router_config: bool = False,
+        use_router_cache: bool = True,
+        no_cusolver: bool = False,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -346,6 +368,10 @@ class AutoKernelRouter:
         self.verify = verify
         self.dispatch_jobs = dispatch_jobs
         self.allow_fallback = allow_fallback
+        self.platform_config = get_platform(target_platform)
+        self.ignore_router_config = ignore_router_config
+        self.use_router_cache = use_router_cache
+        self.no_cusolver = no_cusolver
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -353,6 +379,8 @@ class AutoKernelRouter:
             max_rounds=self.ka_max_rounds,
             model_name=self.ka_model,
             high_reasoning_effort=self.ka_high_reasoning,
+            target_platform=self.platform_config,
+            no_cusolver=self.no_cusolver,
         )
         try:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
@@ -416,6 +444,7 @@ class AutoKernelRouter:
                 run_timeout_s=self.run_timeout_s,
                 verify=self.verify,
                 compose_max_iters=self.compose_max_iters,
+                target_platform=self.platform_config.name,
             )
         except BaseException as exc:  # catch SystemExit and others
             # Return a structured failure so caller can decide on fallback
@@ -431,7 +460,7 @@ class AutoKernelRouter:
 
         comp = res.get("composition", {}) or {}
         ok = bool(comp.get("verify_passed", not self.verify))
-        kernel_code: Optional[str] = None
+        kernel_code: str | None = None
         try:
             composed_path = comp.get("composed_path")
             if composed_path and Path(composed_path).is_file():
@@ -453,20 +482,23 @@ class AutoKernelRouter:
         heuristic_prefers_fuser = cx.route_to_fuser()
 
         # Cache lookup by content hash to avoid repeated router calls
+        cache = {}
         code_hash = _file_sha256_text(code)
-        cache = _load_router_cache()
-        cached = cache.get(code_hash)
+        strategy: str | None = None
+        route_conf: float | None = None
+        route_cfg: dict[str, Any] = {}
 
-        strategy: Optional[str] = None
-        route_conf: Optional[float] = None
-        route_cfg: Dict[str, Any] = {}
+        if self.use_router_cache:
+            cache = _load_router_cache()
+            cached = cache.get(code_hash)
 
-        if isinstance(cached, dict):
-            strategy = (
-                str(cached.get("route_strategy") or cached.get("route") or "") or None
-            )
-            route_conf = cached.get("confidence")
-            route_cfg = cached.get("config") or {}
+            if isinstance(cached, dict):
+                strategy = (
+                    str(cached.get("route_strategy") or cached.get("route") or "")
+                    or None
+                )
+                route_conf = cached.get("confidence")
+                route_cfg = cached.get("config") or {}
 
         if strategy is None:
             # Try LLM-driven decision
@@ -475,11 +507,14 @@ class AutoKernelRouter:
                     problem_path, code, cx
                 )
                 # Persist in cache for future runs
-                cache[code_hash] = info.get("parsed") or {
-                    "route_strategy": strategy,
-                    "confidence": route_conf,
-                }
-                _save_router_cache(cache)
+                if self.use_router_cache:
+                    cache[code_hash] = info.get("parsed") or {
+                        "route_strategy": strategy,
+                        "confidence": route_conf,
+                    }
+                    route_cfg = cache[code_hash].get("config") or {}
+                    _validate_cfg_models(route_cfg)
+                    _save_router_cache(cache)
             except Exception:
                 # No provider or failure; fall back later
                 pass
@@ -495,8 +530,8 @@ class AutoKernelRouter:
             # Confidence too low or invalid JSON; resort to heuristic
             strategy = "fuser" if heuristic_prefers_fuser else "kernelagent"
 
-        # Apply optional dynamic config from router
-        if isinstance(route_cfg, dict):
+        # Apply optional dynamic config from router (skip if ignore requested)
+        if isinstance(route_cfg, dict) and not self.ignore_router_config:
             # KernelAgent tuning
             self.ka_max_rounds = int(route_cfg.get("ka_max_rounds", self.ka_max_rounds))
             self.ka_num_workers = int(
@@ -545,7 +580,7 @@ class AutoKernelRouter:
     # -------- LLM decision helper --------
     def _llm_decide_route(
         self, problem_path: Path, code: str, cx: Complexity
-    ) -> Tuple[Optional[str], Optional[float], Dict[str, Any]]:
+    ) -> tuple[str | None, float | None, dict[str, Any]]:
         """Ask an LLM to choose a routing STRATEGY and optional budgets.
 
         The LLM must return JSON with keys:
@@ -621,7 +656,7 @@ class AutoKernelRouter:
             f"Features:\n```json\n{json.dumps(feats, indent=2)}\n```\n\n"
             "Problem code:\n```python\n" + code + "\n```\n"
         )
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "max_tokens": self.router_max_tokens,
             "temperature": self.router_temperature,
         }
@@ -636,7 +671,7 @@ class AutoKernelRouter:
         # Best-effort JSON parse
         route = None
         conf = None
-        raw_info: Dict[str, Any] = {"raw": txt}
+        raw_info: dict[str, Any] = {"raw": txt}
         try:
             # If model returned extra text, try to locate JSON object
             first = txt.find("{")
@@ -668,7 +703,7 @@ class AutoKernelRouter:
 # ------------------------
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Auto-router for KernelBench problems (KernelAgent vs Fuser)"
     )
@@ -696,6 +731,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--verify", action="store_true")
     p.add_argument("--dispatch-jobs", type=int, default=2)
     p.add_argument("--no-fallback", action="store_true")
+    p.add_argument(
+        "--ignore-router-config",
+        action="store_true",
+        help="Ignore router config. Use CLI-provided model/config arguments",
+    )
+    p.add_argument(
+        "--no-router-cache",
+        action="store_true",
+        help="Disable router cache (do not read from or write to cache)",
+    )
+    p.add_argument(
+        "--target-platform",
+        default="cuda",
+        choices=get_platform_choices(),
+        help="Target platform (default: cuda)",
+    )
+    p.add_argument(
+        "--no-cusolver",
+        action="store_true",
+        help="Disable cuSolver library usage in generated kernels",
+    )
     args = p.parse_args(argv)
 
     # Load environment variables from .env file
@@ -726,6 +782,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         verify=args.verify,
         dispatch_jobs=args.dispatch_jobs,
         allow_fallback=(not args.no_fallback),
+        target_platform=args.target_platform,
+        ignore_router_config=args.ignore_router_config,
+        use_router_cache=(not args.no_router_cache),
+        no_cusolver=args.no_cusolver,
     )
 
     try:
@@ -748,7 +808,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 1
 
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "route": res.route,
         "success": res.success,
         "details": res.details,

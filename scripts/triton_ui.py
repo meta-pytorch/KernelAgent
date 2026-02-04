@@ -20,16 +20,19 @@ import os
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
+
 
 import gradio as gr
 from dotenv import load_dotenv
 
 
 from triton_kernel_agent import TritonKernelAgent
-from triton_kernel_agent.providers.models import AVAILABLE_MODELS
-from triton_kernel_agent.providers.openai_provider import OpenAIProvider
-from triton_kernel_agent.providers.anthropic_provider import AnthropicProvider
+from triton_kernel_agent.platform_config import get_platform_choices, get_platform
+from utils.providers import (
+    BaseProvider,
+    get_available_models,
+)
 
 
 KERNELBENCH_BASE_PATH = (
@@ -42,9 +45,9 @@ KERNELBENCH_LEVEL_LABELS = {
 
 
 def load_kernelbench_problem_map(
-    levels: Tuple[str, ...] = ("level1", "level2"),
-) -> Dict[str, Path]:
-    problem_map: Dict[str, Path] = {}
+    levels: tuple[str, ...] = ("level1", "level2"),
+) -> dict[str, Path]:
+    problem_map: dict[str, Path] = {}
     for level in levels:
         level_dir = KERNELBENCH_BASE_PATH / level
         if not level_dir.is_dir():
@@ -69,38 +72,53 @@ class TritonKernelUI:
         load_dotenv()
         self.agent = None
         self.last_result = None
-        # Build a mapping from model name -> provider class for quick lookup
-        self._model_to_provider = {
-            cfg.name: cfg.provider_class for cfg in AVAILABLE_MODELS
-        }
 
-    def _provider_env_var_for_model(self, model_name: str) -> str:
-        """Return the correct API key env var name for the selected model."""
-        provider_cls = self._model_to_provider.get(model_name)
-        if provider_cls is OpenAIProvider:
+        self._model_to_providers: dict[str, list[type[BaseProvider]]] = {}
+        self.name_to_provider: dict[str, type[BaseProvider]] = {}
+
+        # Build look up dicts for model and provider choices
+        for cfg in get_available_models():
+            self._model_to_providers[cfg.name] = cfg.provider_classes
+            for cls in cfg.provider_classes:
+                self.name_to_provider[cls.__name__] = cls
+
+    def _get_provider_choices(self, model_name: str) -> list[tuple[str, str]]:
+        """Return list of (label, class_name) tuples for provider dropdown."""
+        provider_classes = self._model_to_providers.get(model_name, [])
+        return [
+            (provider_cls().name, provider_cls.__name__)
+            for provider_cls in provider_classes
+        ]
+
+    def _provider_env_var(self, class_name: str) -> str:
+        """Return the correct API key env var name for the provider."""
+        if class_name == "OpenAIProvider":
             return "OPENAI_API_KEY"
-        if provider_cls is AnthropicProvider:
+        if class_name == "AnthropicProvider":
             return "ANTHROPIC_API_KEY"
-        # Relay provider or unknown default to no key required
         return ""
 
     def generate_kernel(
         self,
         problem_description: str,
-        test_code: Optional[str] = None,
+        test_code: str | None = None,
         model_name: str = "o3-2025-04-16",
+        provider_class_name: str = "",
         high_reasoning_effort: bool = True,
-        user_api_key: Optional[str] = None,
-    ) -> Tuple[str, str, str, str, str, str]:
+        user_api_key: str | None = None,
+        target_platform: str = "cuda",
+    ) -> tuple[str, str, str, str, str, str]:
         """
         Generate a Triton kernel based on the problem description
 
         Args:
             problem_description: Description of the kernel to generate
             test_code: Optional custom test code
-            model_name: OpenAI model to use
+            model_name: Model to use
+            provider_class_name: Provider class name (e.g., OpenAIProvider)
             high_reasoning_effort: Whether to use high reasoning effort
-            user_api_key: Optional OpenAI API key (not saved, used only for this session)
+            user_api_key: Optional API key (not saved, used only for this session)
+            target_platform: Target platform ('cuda' or 'xpu')
 
         Returns:
             - status: Success/failure message
@@ -114,10 +132,11 @@ class TritonKernelUI:
             status = "❌ Please provide a problem description."
             return status, "", "", "", "", ""
 
-        # Determine provider-specific API key env var based on selected model
-        key_env_var = self._provider_env_var_for_model(model_name)
+        # Determine provider-specific API key env var based on selected provider
+        key_env_var = self._provider_env_var(provider_class_name)
         api_key = user_api_key.strip() if user_api_key else None
         env_api_key = os.getenv(key_env_var) if key_env_var else ""
+        provider_cls = self.name_to_provider[provider_class_name]
 
         # For providers that require a key, check availability
         if key_env_var and not (api_key or env_api_key):
@@ -138,7 +157,10 @@ class TritonKernelUI:
                 os.environ[key_env_var] = api_key
 
             agent = TritonKernelAgent(
-                model_name=model_name, high_reasoning_effort=high_reasoning_effort
+                model_name=model_name,
+                high_reasoning_effort=high_reasoning_effort,
+                preferred_provider=provider_cls,
+                target_platform=get_platform(target_platform),
             )
 
             # If provider failed to initialize, return a clear error immediately
@@ -218,7 +240,7 @@ class TritonKernelUI:
                     if key_env_var in os.environ:
                         del os.environ[key_env_var]
 
-    def _format_logs(self, result: Dict[str, Any], generation_time: float) -> str:
+    def _format_logs(self, result: dict[str, Any], generation_time: float) -> str:
         """Format generation logs for display"""
         logs = f"""## Generation Summary
 
@@ -243,11 +265,11 @@ class TritonKernelUI:
 """
         return logs
 
-    def _format_error_logs(self, result: Dict[str, Any], generation_time: float) -> str:
+    def _format_error_logs(self, result: dict[str, Any], generation_time: float) -> str:
         """Format error logs for display"""
         logs = f"""## Generation Failed
 
-**⏱️ Time:** {generation_time:.2f} seconds  
+**⏱️ Time:** {generation_time:.2f} seconds
 **❌ Error:** {result["message"]}
 **📁 Session:** `{os.path.basename(result["session_dir"])}`
 
@@ -265,7 +287,7 @@ class TritonKernelUI:
 """
         return logs
 
-    def _format_session_info(self, result: Dict[str, Any]) -> str:
+    def _format_session_info(self, result: dict[str, Any]) -> str:
         """Format session information"""
         session_path = result["session_dir"]
         session_name = os.path.basename(session_path)
@@ -296,7 +318,7 @@ You can find all generated files in:
 """
         return info
 
-    def _create_download_info(self, result: Dict[str, Any]) -> str:
+    def _create_download_info(self, result: dict[str, Any]) -> str:
         """Create download information"""
         if not result["success"]:
             return ""
@@ -335,7 +357,7 @@ def _create_app() -> gr.Blocks:
     kernelbench_problem_map = load_kernelbench_problem_map()
 
     # Add external problems (manual entries)
-    extra_problem_map: Dict[str, Path] = {}
+    extra_problem_map: dict[str, Path] = {}
     try:
         external_cf = Path(
             "/home/leyuan/workplace/kernel_fuser/external/control_flow.py"
@@ -354,13 +376,13 @@ def _create_app() -> gr.Blocks:
         pass
 
     # Combine: external first, then KernelBench
-    combined_problem_map: Dict[str, Path] = {
+    combined_problem_map: dict[str, Path] = {
         **extra_problem_map,
         **kernelbench_problem_map,
     }
     problem_choices = list(combined_problem_map.keys())
     default_problem_choice = problem_choices[0] if problem_choices else None
-    problem_cache: Dict[str, str] = {}
+    problem_cache: dict[str, str] = {}
 
     if default_problem_choice:
         try:
@@ -384,9 +406,9 @@ def _create_app() -> gr.Blocks:
         gr.Markdown(
             """
         # 🚀 Triton Kernel Agent
-        
+
         **AI-Powered GPU Kernel Generation**
-        
+
         Generate optimized OpenAI Triton kernels from high-level descriptions.
         """
         )
@@ -409,7 +431,7 @@ def _create_app() -> gr.Blocks:
                 CLAUDE_SONNET_4_5_MODEL_NAME = "claude-sonnet-4-5-20250929"
                 CLAUDE_SONNET_4_5_LABEL = "Claude Sonnet 4.5"
                 choices = []
-                for config in AVAILABLE_MODELS:
+                for config in get_available_models():
                     label = config.description
                     if config.name == CLAUDE_SONNET_4_5_MODEL_NAME:
                         label = CLAUDE_SONNET_4_5_LABEL  # Shorten the Anthropic label for clarity
@@ -422,12 +444,30 @@ def _create_app() -> gr.Blocks:
                     interactive=True,
                 )
 
+                # Provider selection (populated based on model)
+                default_provider_choices = ui._get_provider_choices(choices[0][1])
+                provider_dropdown = gr.Dropdown(
+                    choices=default_provider_choices,
+                    label="🔌 Provider",
+                    value=default_provider_choices[0][1],
+                    interactive=True,
+                    info="Select which provider to use for this model",
+                )
+
                 # High reasoning effort checkbox
                 high_reasoning_effort_checkbox = gr.Checkbox(
                     label="🧠 High Reasoning Effort",
                     value=True,
                     info="Use high reasoning effort for better quality (o4-mini and o3 series only)",
                     interactive=True,
+                )
+
+                # Platform dropdown
+                platform_dropdown = gr.Dropdown(
+                    choices=get_platform_choices(),
+                    label="🎯 Target Platform",
+                    value="cuda",
+                    info="CUDA for NVIDIA GPUs, XPU for Intel GPUs",
                 )
 
                 gr.Markdown("## 🧩 Problem Library")
@@ -519,7 +559,7 @@ def _create_app() -> gr.Blocks:
 
         # Event handlers
 
-        def update_problem_descriptor(selection: Optional[str]):
+        def update_problem_descriptor(selection: str | None):
             if not selection:
                 return gr.update()
 
@@ -538,7 +578,13 @@ def _create_app() -> gr.Blocks:
             return gr.update(value=problem_cache[selection])
 
         def generate_with_status(
-            problem_desc, test_code, model_name, high_reasoning_effort, user_api_key
+            problem_desc,
+            test_code,
+            model_name,
+            provider_class_name,
+            high_reasoning_effort,
+            user_api_key,
+            platform,
         ):
             """Wrapper for generate_kernel with status updates"""
             try:
@@ -546,25 +592,36 @@ def _create_app() -> gr.Blocks:
                     problem_desc,
                     test_code,
                     model_name,
+                    provider_class_name,
                     high_reasoning_effort,
                     user_api_key,
+                    platform,
                 )
             except Exception as e:
                 error_msg = f"❌ **UI ERROR**: {str(e)}\n\n**Traceback:**\n{traceback.format_exc()}"
                 return error_msg, "", "", "", "", ""
 
         # Wire up events
-        # Update API key input hint based on selected model/provider
-        def update_api_key_hint(selected_model_name: Optional[str]):
+        # Update provider dropdown when model changes
+        def update_provider_dropdown(selected_model_name: str | None):
             if not selected_model_name:
                 return gr.update()
-            key_env_var = ui._provider_env_var_for_model(selected_model_name)
+            new_choices = ui._get_provider_choices(selected_model_name)
+            new_value = new_choices[0][1] if new_choices else ""
+            return gr.update(choices=new_choices, value=new_value)
+
+        # Update API key input hint based on selected provider
+        def update_api_key_hint(provider_class_name: str | None):
+            if not provider_class_name:
+                return gr.update()
+            key_env_var = ui._provider_env_var(provider_class_name)
             if key_env_var == "OPENAI_API_KEY":
                 return gr.update(
                     label="🔑 OpenAI API Key (Optional)",
                     placeholder="sk-... (or set OPENAI_API_KEY)",
                     info=(
-                        "Used only for this session. You can also set OPENAI_API_KEY in your environment or .env."
+                        "Used only for this session. "
+                        "You can also set OPENAI_API_KEY in your environment or .env."
                     ),
                 )
             elif key_env_var == "ANTHROPIC_API_KEY":
@@ -572,7 +629,8 @@ def _create_app() -> gr.Blocks:
                     label="🔑 Anthropic API Key (Optional)",
                     placeholder="sk-ant-... (or set ANTHROPIC_API_KEY)",
                     info=(
-                        "Used only for this session. You can also set ANTHROPIC_API_KEY in your environment or .env."
+                        "Used only for this session. "
+                        "You can also set ANTHROPIC_API_KEY in your environment or .env."
                     ),
                 )
             else:
@@ -580,13 +638,20 @@ def _create_app() -> gr.Blocks:
                     label="🔑 API Key (Not required for Relay)",
                     placeholder="Relay provider uses local server; no key required.",
                     info=(
-                        "Relay models use a local relay server. Ensure it’s running; no API key needed."
+                        "Relay models use a local relay server. "
+                        "Ensure it's running; no API key needed."
                     ),
                 )
 
         model_dropdown.change(
-            fn=update_api_key_hint,
+            fn=update_provider_dropdown,
             inputs=model_dropdown,
+            outputs=provider_dropdown,
+        )
+
+        provider_dropdown.change(
+            fn=update_api_key_hint,
+            inputs=provider_dropdown,
             outputs=api_key_input,
         )
 
@@ -612,8 +677,10 @@ def _create_app() -> gr.Blocks:
                 problem_input,
                 test_input,
                 model_dropdown,
+                provider_dropdown,
                 high_reasoning_effort_checkbox,
                 api_key_input,
+                platform_dropdown,
             ],
             outputs=[
                 status_output,
@@ -630,13 +697,13 @@ def _create_app() -> gr.Blocks:
         gr.Markdown(
             """
         ---
-        
+
         **💡 Tips:**
         - Be specific about input/output shapes and data types
-        - Include PyTorch equivalent code for reference  
+        - Include PyTorch equivalent code for reference
         - Check the logs for detailed generation information
-        
-        **🔧 Configuration:** 
+
+        **🔧 Configuration:**
         - Provide your OpenAI or Anthropic API key above (not saved; session-only)
         - Or set the appropriate env var in `.env` (OPENAI_API_KEY or ANTHROPIC_API_KEY)
         - The key is only used for this session and automatically cleared
@@ -676,7 +743,6 @@ def main():
             ssl_keyfile=meta_keyfile,
             ssl_certfile=meta_keyfile,
             ssl_verify=False,
-            show_api=False,
             inbrowser=False,  # Don't auto-open browser on remote server
         )
     else:
@@ -691,7 +757,6 @@ def main():
             show_error=True,
             server_name=args.host,
             server_port=args.port,
-            show_api=False,
             inbrowser=True,  # Auto-open browser for local development
         )
 

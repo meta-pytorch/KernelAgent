@@ -16,7 +16,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import Any
 import os
 
 
@@ -27,7 +27,8 @@ class LLMResponse:
     content: str
     model: str
     provider: str
-    usage: Optional[Dict[str, Any]] = None
+    usage: dict[str, Any] | None = None
+    response_id: str | None = None
 
 
 class BaseProvider(ABC):
@@ -44,7 +45,7 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def get_response(
-        self, model_name: str, messages: List[Dict[str, str]], **kwargs
+        self, model_name: str, messages: list[dict[str, str]], **kwargs
     ) -> LLMResponse:
         """
         Get response from the LLM provider.
@@ -61,8 +62,8 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def get_multiple_responses(
-        self, model_name: str, messages: List[Dict[str, str]], n: int = 1, **kwargs
-    ) -> List[LLMResponse]:
+        self, model_name: str, messages: list[dict[str, str]], n: int = 1, **kwargs
+    ) -> list[LLMResponse]:
         """
         Get multiple responses from the LLM provider.
 
@@ -96,7 +97,7 @@ class BaseProvider(ABC):
         """Get the maximum tokens limit for a model."""
         return 8192  # Default limit
 
-    def _get_api_key(self, env_var: str) -> Optional[str]:
+    def _get_api_key(self, env_var: str) -> str | None:
         """Helper to get API key from environment."""
         api_key = os.getenv(env_var)
         if api_key and api_key != "your-api-key-here":

@@ -45,13 +45,19 @@ import os
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from dotenv import load_dotenv
 
+from triton_kernel_agent.platform_config import (
+    get_platform,
+    get_platform_choices,
+    PlatformConfig,
+)
+
 # Reuse KernelAgent provider stack for LLM calls
 try:
-    from triton_kernel_agent.providers.models import get_model_provider
+    from utils.providers.models import get_model_provider
 except Exception:
     get_model_provider = None  # type: ignore
 
@@ -73,11 +79,12 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _load_kernels_from_summary(summary_path: Path) -> List[KernelItem]:
+def _load_kernels_from_summary(summary_path: Path) -> list[KernelItem]:
     data = json.loads(_read_text(summary_path))
     if not isinstance(data, list):
         raise SystemExit("kernels summary must be a JSON array (from dispatch step)")
-    items: List[KernelItem] = []
+    items: list[KernelItem] = []
+    summary_dir = summary_path.parent
     for it in data:
         if not isinstance(it, dict):
             continue
@@ -89,6 +96,9 @@ def _load_kernels_from_summary(summary_path: Path) -> List[KernelItem]:
         if not sid or not kpath_str:
             continue
         kpath = Path(kpath_str)
+        # If path is relative, resolve it relative to summary.json location
+        if not kpath.is_absolute():
+            kpath = summary_dir / kpath
         if not kpath.is_file():
             continue
         code = _read_text(kpath)
@@ -98,8 +108,8 @@ def _load_kernels_from_summary(summary_path: Path) -> List[KernelItem]:
     return items
 
 
-def _summarize_subgraphs_for_prompt(subgraphs: List[Dict[str, Any]]) -> str:
-    lines: List[str] = []
+def _summarize_subgraphs_for_prompt(subgraphs: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
     for it in subgraphs:
         sid = str(it.get("id", "unknown"))
         typ = str(it.get("type", ""))
@@ -126,8 +136,9 @@ def _summarize_subgraphs_for_prompt(subgraphs: List[Dict[str, Any]]) -> str:
 
 def _build_composition_prompt(
     problem_code: str,
-    subgraphs: List[Dict[str, Any]],
-    kernel_items: List[KernelItem],
+    subgraphs: list[dict[str, Any]],
+    kernel_items: list[KernelItem],
+    target_platform: PlatformConfig,
 ) -> str:
     """Create a single user message to instruct composition by the LLM."""
     # Provide a succinct summary of subgraphs up front
@@ -135,19 +146,25 @@ def _build_composition_prompt(
 
     # Include only essential snippets from each kernel to keep token usage sane
     # We include full files for now; callers can trim by model limits.
-    kernels_section_parts: List[str] = []
+    kernels_section_parts: list[str] = []
     for ki in kernel_items:
         kernels_section_parts.append(
             f"### Subgraph {ki.subgraph_id}\n```python\n" + ki.code + "\n```\n"
         )
     kernels_section = "\n".join(kernels_section_parts)
+    # Platform-specific guidance
+    platform_guidance = target_platform.guidance_block
 
     guidance = textwrap.dedent(
-        """
+        f"""
         You are given:
         - The original problem file (PyTorch module and helpers).
         - A decomposition of the model into fusable subgraphs with exact shapes.
         - Working Triton kernels generated for some subgraphs.
+
+        TARGET PLATFORM: {target_platform.name}
+        DEVICE STRING: {target_platform.device_string}
+        {platform_guidance}
 
         Task:
         - Compose an end-to-end Triton implementation that matches the original
@@ -157,6 +174,8 @@ def _build_composition_prompt(
 
         Hard requirements:
         - Return ONE complete Python file only, fenced as a single ```python block.
+        - Allocate inputs, weights, intermediates, and outputs on device='{target_platform.device_string}' and keep them there throughout forward/verification.
+        - CPU is acceptable only for metadata, scalars, and export serialization—avoid `.cpu()` or `.to('cpu')` on compute tensors.
         - Provide at least one @triton.jit kernel and a top-level Python wrapper
           named kernel_function(...). This wrapper must accept the same primary
           input tensor(s) as the model and any required weights/biases with shapes
@@ -177,6 +196,9 @@ def _build_composition_prompt(
           'PASS' on success and exit with code 0. Use allclose with rtol<=1e-3,
           atol<=1e-3 for fp32; for fp16/bf16 allow up to 2e-2.
         - No imports beyond torch, triton, triton.language as tl, and stdlib. No I/O.
+        - Do NOT monkey-patch PyTorch device functions or torch.cuda.is_available()
+        - Do NOT manipulate TRITON_BACKENDS environment variable
+        - Do NOT disable or mock XPU/CUDA drivers
 
         Implementation tips:
         - If merging multiple subgraphs, ensure intermediate tensor shapes match.
@@ -190,7 +212,7 @@ def _build_composition_prompt(
         """
     ).strip()
 
-    user_lines: List[str] = []
+    user_lines: list[str] = []
     user_lines.append(guidance)
     user_lines.append("")
     user_lines.append("SUBGRAPHS (summary):")
@@ -212,19 +234,24 @@ def _build_composition_prompt(
 
 def _build_refinement_prompt(
     problem_code: str,
-    subgraphs: List[Dict[str, Any]],
-    kernel_items: List[KernelItem],
+    subgraphs: list[dict[str, Any]],
+    kernel_items: list[KernelItem],
     previous_code: str,
-    error_info: Dict[str, str],
+    error_info: dict[str, str],
+    target_platform: PlatformConfig,
 ) -> str:
     """Prompt the LLM to refine the previously produced code based on errors."""
     err_tail = error_info.get("stderr_tail", "")
     out_tail = error_info.get("stdout_tail", "")
+
     guidance = textwrap.dedent(
-        """
+        f"""
         You previously produced a composed Triton implementation, but it failed
         to run/compile. Analyze the ERROR_CONTEXT below and re-emit the entire
         corrected single-file implementation as one ```python block.
+
+        TARGET PLATFORM: {target_platform.name}
+        DEVICE STRING: {target_platform.device_string}
 
         Requirements remain the same. Additionally:
         - Fix any Triton compilation/runtime errors. For scalar constants in
@@ -239,7 +266,7 @@ def _build_refinement_prompt(
         """
     ).strip()
 
-    lines: List[str] = []
+    lines: list[str] = []
     lines.append(guidance)
     lines.append("")
     lines.append("ERROR_CONTEXT (stderr tail):\n```\n" + err_tail + "\n```")
@@ -259,7 +286,9 @@ def _build_refinement_prompt(
     return "\n".join(lines)
 
 
-def _auto_patch_common_triton_issues(code: str) -> Tuple[str, bool]:
+def _auto_patch_common_triton_issues(
+    code: str, target_platform: PlatformConfig
+) -> tuple[str, bool]:
     """Apply tiny safe textual patches for known Triton pitfalls.
 
     - Replace tl.broadcast(0.0, ...) or tl.broadcast(1.0, ...) with scalar constants.
@@ -278,6 +307,27 @@ def _auto_patch_common_triton_issues(code: str) -> Tuple[str, bool]:
         if old in patched:
             patched = patched.replace(old, new)
             changed = True
+    # Remove cuda paterns
+    cuda_hacks = target_platform.cuda_hacks_to_strip
+    if cuda_hacks:
+        lines = patched.split("\n")
+        filtered_lines = []
+        skip_until_blank = False
+        for line in lines:
+            # Check if we're in a block to skip
+            if skip_until_blank:
+                if line.strip() == "":
+                    skip_until_blank = False
+                continue
+            # Check if line contains any CUDA hack pattern
+            if any(hack in line for hack in cuda_hacks):
+                changed = True
+                # Start skipping if this is a function definition we need to remove entirely
+                if "def _fake_torch_device" in line:
+                    skip_until_blank = True
+                continue
+            filtered_lines.append(line)
+        patched = "\n".join(filtered_lines)
     return patched, changed
 
 
@@ -289,7 +339,8 @@ def compose(
     model_name: str,
     verify: bool = False,
     max_iters: int = 5,
-) -> Dict[str, Any]:
+    target_platform: str = "cuda",
+) -> dict[str, Any]:
     if get_model_provider is None:
         raise SystemExit(
             "KernelAgent providers unavailable; ensure package import and dependencies"
@@ -297,6 +348,9 @@ def compose(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     provider = get_model_provider(model_name)
+
+    # Platform
+    platform = get_platform(target_platform)
 
     # Load inputs
     problem_code = _read_text(problem_path)
@@ -310,11 +364,13 @@ def compose(
 
     last_usage = None
     last_code = None
-    verify_info: Dict[str, Any] = {}
+    verify_info: dict[str, Any] = {}
 
     for i in range(1, max_iters + 1):
         if i == 1 or last_code is None:
-            prompt = _build_composition_prompt(problem_code, subgraphs, kernels)
+            prompt = _build_composition_prompt(
+                problem_code, subgraphs, kernels, target_platform=platform
+            )
         else:
             # Build refinement using previous error info
             stderr_tail = ""
@@ -344,11 +400,12 @@ def compose(
                 kernels,
                 previous_code=last_code,
                 error_info={"stderr_tail": stderr_tail, "stdout_tail": stdout_tail},
+                target_platform=platform,
             )
 
         (attempts_dir / f"attempt_{i}.prompt.txt").write_text(prompt, encoding="utf-8")
         response = provider.get_response(
-            model_name, [{"role": "user", "content": prompt}], max_tokens=24000
+            model_name, [{"role": "user", "content": prompt}], max_tokens=50000
         )
         last_usage = response.usage
         raw_text = response.content or ""
@@ -357,7 +414,7 @@ def compose(
         extracted = extract_single_python_file(raw_text)
         code = extracted.code
         # Auto-patch trivial Triton pitfalls before running
-        code, changed = _auto_patch_common_triton_issues(code)
+        code, changed = _auto_patch_common_triton_issues(code, platform)
         (attempts_dir / f"attempt_{i}.py").write_text(code, encoding="utf-8")
         last_code = code
 
@@ -388,12 +445,13 @@ def compose(
     composed_path = out_dir / "composed_kernel.py"
     composed_path.write_text(last_code or "", encoding="utf-8")
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "success": bool(verify_info.get("verify_passed", not verify)),
         "composed_path": str(composed_path.resolve()),
         "model": model_name,
         "usage": last_usage,
         "rounds": i,
+        "target_platform": target_platform,
     }
     result.update(verify_info)
 
@@ -404,7 +462,7 @@ def compose(
     return result
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     p = argparse.ArgumentParser(
         description="Compose end-to-end Triton kernel from subgraphs + generated kernels"
@@ -433,6 +491,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Execute generated file and check PASS sentinel",
     )
+    p.add_argument(
+        "--target-platform",
+        default="cuda",
+        choices=get_platform_choices(),
+        help="Target platform (default: cuda)",
+    )
     p.add_argument("--max-iters", type=int, default=5, help="Max LLM refinement rounds")
     args = p.parse_args(argv)
 
@@ -460,6 +524,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             model_name=args.model,
             verify=args.verify,
             max_iters=args.max_iters,
+            target_platform=args.target_platform,
         )
         print(json.dumps(res, indent=2))
         return 0

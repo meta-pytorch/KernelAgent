@@ -14,10 +14,10 @@
 
 """Base provider for OpenAI-compatible APIs."""
 
-from typing import List, Dict, Any, Optional
+from typing import Any
 import logging
 from .base import BaseProvider, LLMResponse
-from ..utils import configure_proxy_environment
+from .env_config import configure_proxy_environment
 
 try:
     from openai import OpenAI
@@ -31,7 +31,7 @@ except ImportError:
 class OpenAICompatibleProvider(BaseProvider):
     """Base provider for OpenAI-compatible APIs."""
 
-    def __init__(self, api_key_env: str, base_url: Optional[str] = None):
+    def __init__(self, api_key_env: str, base_url: str | None = None):
         self.api_key_env = api_key_env
         self.base_url = base_url
         self._original_proxy_env = None
@@ -54,7 +54,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 self.client = OpenAI(api_key=api_key)
 
     def get_response(
-        self, model_name: str, messages: List[Dict[str, str]], **kwargs
+        self, model_name: str, messages: list[dict[str, str]], **kwargs
     ) -> LLMResponse:
         """Get single response."""
         if not self.is_available():
@@ -77,8 +77,8 @@ class OpenAICompatibleProvider(BaseProvider):
         )
 
     def get_multiple_responses(
-        self, model_name: str, messages: List[Dict[str, str]], n: int = 1, **kwargs
-    ) -> List[LLMResponse]:
+        self, model_name: str, messages: list[dict[str, str]], n: int = 1, **kwargs
+    ) -> list[LLMResponse]:
         """Get multiple responses using n parameter."""
         if not self.is_available():
             raise RuntimeError(f"{self.name} client not available")
@@ -103,8 +103,8 @@ class OpenAICompatibleProvider(BaseProvider):
         ]
 
     def _build_api_params(
-        self, model_name: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Dict[str, Any]:
+        self, model_name: str, messages: list[dict[str, str]], **kwargs
+    ) -> dict[str, Any]:
         """Build API parameters for OpenAI-compatible call."""
         params = {
             "model": model_name,

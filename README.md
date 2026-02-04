@@ -21,7 +21,10 @@ Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, includi
 
 ### Requirements
 - Python 3.8 – 3.12
-- Linux or macOS; CUDA‑capable GPU for Triton execution
+- Linux or macOS
+- **GPU Requirements (one of the following):**
+  - **CUDA**: NVIDIA GPU with CUDA support
+  - **XPU**: Intel GPU with oneAPI support (Arc, Data Center GPUs, or integrated Xe graphics)
 - Triton (installed separately: `pip install triton` or nightly from source)
 - PyTorch (https://pytorch.org/get-started/locally/)
 - LLM provider ([OpenAI](https://openai.com/api/), [Anthropic](https://www.anthropic.com/), or a self-hosted relay)
@@ -29,6 +32,24 @@ Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, includi
 ### Install
 ```bash
 pip install -e .
+```
+
+### Platform-Specific PyTorch Installation
+
+#### Intel XPU (Intel GPUs)
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+```
+
+**Note:** Intel XPU support requires:
+- Compatible Intel GPU (Arc series, Data Center GPUs, or integrated Xe graphics)
+- Linux with appropriate Intel GPU drivers
+
+Verify your XPU installation:
+```python
+import torch
+print(torch.xpu.is_available())  # Should print True
+print(torch.xpu.device_count())  # Number of Intel GPUs
 ```
 
 #### (Optional) Install KernelBench for problem examples
@@ -70,8 +91,10 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
   ```bash
   python -m Fuser.auto_agent \
     --problem /abs/path/to/KernelBench/level1/19_ReLU.py \
-    --verify          # ensure final composition test runs
+    --no-router-cache \     # avoid caching or using cached results
+    --verify                # ensure final composition test runs
   ```
+  `--no-router-cache` can be enabled to avoid utilizing any cached router results and prevent writing to the cache.
 
 - **Manually run the pipeline (extract → dispatch → compose)** when you want explicit control over models or concurrency:
   ```bash
@@ -84,6 +107,19 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
     --workers 4 \
     --max-iters 5 \
     --verify
+
+  # For Intel XPU
+  python -m Fuser.pipeline \
+    --problem /abs/path/to/problem.py \
+    --target-platform xpu \
+    --extract-model gpt-5 \
+    --dispatch-model o4-mini \
+    --dispatch-jobs auto \
+    --compose-model o4-mini \
+    --workers 4 \
+    --max-iters 5 \
+    --verify
+
   ```
   `dispatch-jobs auto` matches the number of discovered subgraphs; artifacts are placed under `.fuse/<run_id>/`.
 
@@ -110,7 +146,7 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 
 ## Component Details
 
-- **AutoRouter (`Fuser/auto_agent.py`)**: parses the problem’s AST, looks for attention blocks, transposed convolutions, control flow, and long op chains. It caches decisions under `.fuse/router_cache.json` and can fall back to the other path if the first attempt fails.
+- **AutoRouter (`Fuser/auto_agent.py`)**: parses the problem’s AST, looks for attention blocks, transposed convolutions, control flow, and long op chains. It caches decisions under `.fuse/router_cache.json` and can fall back to the other path if the first attempt fails. Use  `--no-router-cache` to ignore the existing cache and caching new routes. Use `--ignore-router-config` to ignore router-provided tuning and rely on CLI args.
 
 - **Fuser Orchestrator (`Fuser/orchestrator.py`)**: rewrites the PyTorch module into fusable modules, executes them for validation, and packages a tarball of the fused code. Run IDs and directories are managed via `Fuser/paths.py`.
 
@@ -121,6 +157,33 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 - **TritonKernelAgent (`triton_kernel_agent/`)**: manages a pool of verification workers (`worker.py`, `manager.py`). Each worker iteratively asks an LLM for improvements, executes unit tests under sandboxed subprocesses (`Fuser/runner.py`), and enforces strict bans on PyTorch fallbacks. A run succeeds only when the test prints `PASS` (or the sentinel string) and exits with status 0.
 
 - **Composer (`Fuser/compose_end_to_end.py`)**: stitches the verified kernels back into a single Triton program. The composed file contains one or more `@triton.jit` kernels plus a `kernel_function(...)` wrapper and a self-test that replays the original PyTorch problem. With `--verify`, the test is executed immediately and must succeed.
+
+## Platform Support
+
+KernelAgent supports multiple GPU platforms for Triton kernel execution:
+
+| Platform | Device String | Flag | Status |
+|----------|---------------|------|--------|
+| NVIDIA CUDA | `cuda` | `--target-platform cuda` (default) | Fully supported |
+| Intel XPU | `xpu` | `--target-platform xpu` | Supported |
+
+### Intel XPU Notes
+
+When targeting Intel XPU, KernelAgent automatically:
+- Uses `device='xpu'` for all tensor allocations
+- Applies XPU-specific Triton optimizations (subgroup sizes, block sizes)
+- Generates appropriate device availability checks
+- Removes CUDA-specific patterns from generated code
+
+### Verifying Platform Setup
+```python
+# Check CUDA availability
+import torch
+print("CUDA available:", torch.cuda.is_available())
+
+# Check XPU availability
+print("XPU available:", hasattr(torch, 'xpu') and torch.xpu.is_available())
+```
 
 ## Run Artifacts
 
@@ -139,6 +202,18 @@ A successful pipeline run yields a structure similar to:
 ```
 
 These artifacts are designed for reproducibility: you can re-run a single kernel session, inspect prompts/responses, or feed `composed_kernel.py` directly into downstream tooling.
+
+## Example Artifacts
+
+Looking for ready-to-browse outputs? See the curated artifacts repo:
+
+- https://github.com/Laurawly/kernelagent-artifacts
+
+It includes selected L1/L2/L3 problems with:
+- Original problems (PyTorch)
+- Fused subgraphs (`subgraphs.json`) and per‑subgraph Triton kernels
+- Composed end‑to‑end Triton programs and verification logs
+- Minimal examples for quick scanning
 
 ## Repository Layout
 

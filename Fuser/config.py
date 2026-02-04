@@ -14,10 +14,10 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
 import json
 import time
 import uuid
+from triton_kernel_agent.platform_config import PlatformConfig, get_platform
 
 
 @dataclass
@@ -33,11 +33,18 @@ class OrchestratorConfig:
     isolated: bool = False
     deny_network: bool = False
     enable_reasoning_extras: bool = True
+    target_platform: str = "cuda"
 
     def to_json(self) -> str:
         d = asdict(self)
         d["problem_path"] = str(self.problem_path)
         return json.dumps(d, indent=2)
+
+    @property
+    def platform_config(self) -> "PlatformConfig":
+        """Resolve to PlatformConfig at runtime."""
+
+        return get_platform(self.target_platform)
 
 
 @dataclass
@@ -63,13 +70,20 @@ class WorkerConfig:
     stream_dir: Path
     workspace_dir: Path
     shared_digests_dir: Path
+    target_platform: str = "cuda"
+
+    @property
+    def platform_config(self) -> "PlatformConfig":
+        """Resolve to PlatformConfig at runtime."""
+
+        return get_platform(self.target_platform)
 
 
 @dataclass
 class ResultSummary:
     run_id: str
-    winner_worker_id: Optional[str]
-    artifact_path: Optional[str]
+    winner_worker_id: str | None
+    artifact_path: str | None
     reason: str
 
 

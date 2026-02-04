@@ -15,12 +15,11 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Tuple, Optional
 
 
 def register_digest(
     shared_digests_dir: Path, sha256: str, worker_id: str, iter_index: int
-) -> Tuple[str, Optional[str]]:
+) -> tuple[str, str | None]:
     """
     Atomically register a digest in shared_digests_dir.
     Returns (status, owner_worker_id or None), where status is one of:

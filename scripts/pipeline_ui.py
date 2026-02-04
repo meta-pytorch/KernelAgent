@@ -24,23 +24,21 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+
 
 import gradio as gr
 from dotenv import load_dotenv
+from triton_kernel_agent.platform_config import get_platform_choices
 
-from Fuser.pipeline import run_pipeline
-from Fuser.auto_agent import AutoKernelRouter
-from Fuser.code_extractor import extract_single_python_file
-from triton_kernel_agent.providers.models import (
-    get_model_provider,
-    MODEL_NAME_TO_CONFIG,
-)
+# Ensure project root is importable when run as a script.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
+def _list_kernelbench_problems(base: Path) -> list[tuple[str, str]]:
     """Return list of (label, absolute_path) pairs for KernelBench problems."""
-    problems: List[Tuple[str, str]] = []
+    problems: list[tuple[str, str]] = []
     if not base.exists():
         return problems
     for level_dir in sorted(base.glob("level*")):
@@ -54,7 +52,7 @@ def _list_kernelbench_problems(base: Path) -> List[Tuple[str, str]]:
     return problems
 
 
-def _zip_dir(src_dir: Path, zip_path: Path) -> Optional[Path]:
+def _zip_dir(src_dir: Path, zip_path: Path) -> Path | None:
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for root, _dirs, files in os.walk(src_dir):
@@ -84,7 +82,7 @@ class PipelineArtifacts:
     details_md: str
     code_text: str
     run_info_md: str
-    zip_path: Optional[Path]
+    zip_path: Path | None
 
 
 def _write_temp_problem(code: str) -> Path:
@@ -103,6 +101,9 @@ def _maybe_synthesize_problem(desc: str, model_name: str) -> Path:
     - If desc looks like Python (contains 'class Model' or 'def get_inputs'), use it as-is.
     - Else, call LLM to synthesize a KernelBench-compatible problem file.
     """
+    from Fuser.code_extractor import extract_single_python_file
+    from utils.providers.models import get_model_provider
+
     txt = desc.strip()
     if not txt:
         raise ValueError("Empty problem description")
@@ -154,10 +155,14 @@ def run_pipeline_ui(
     compose_max_iters: int,
     verify: bool,
     auto_route: bool = False,
-    router_model: Optional[str] = None,
+    router_model: str | None = None,
     router_high_reasoning: bool = True,
-    user_api_key: Optional[str] = None,
+    user_api_key: str | None = None,
+    target_platform: str = "cuda",
 ) -> PipelineArtifacts:
+    from Fuser.auto_agent import AutoKernelRouter
+    from Fuser.pipeline import run_pipeline
+
     if not problem_path:
         # If no path given, try description
         if not problem_description.strip():
@@ -224,6 +229,7 @@ def run_pipeline_ui(
                 verify=verify,
                 dispatch_jobs=(dispatch_jobs if dispatch_jobs else "1"),
                 allow_fallback=True,
+                target_platform=target_platform,
             )
             rr = router.solve(problem_file)
             elapsed = time.time() - start_time
@@ -324,6 +330,7 @@ def run_pipeline_ui(
             out_root=None,
             verify=verify,
             compose_max_iters=compose_max_iters,
+            target_platform=target_platform,
         )
         elapsed = time.time() - start_time
         run_dir = Path(res.get("run_dir", ".")).resolve()
@@ -445,8 +452,9 @@ class PipelineUI:
         run_timeout: int,
         compose_max_iters: int,
         verify: bool,
-        user_api_key: Optional[str],
-    ) -> Tuple[str, str, str, str, Optional[str]]:
+        user_api_key: str | None,
+        target_platform: str = "cuda",
+    ) -> tuple[str, str, str, str, str | None]:
         problem_mapping = {label: path for label, path in self.problem_choices}
         selected_path = problem_mapping.get(selected_problem_label, "")
         # Use description override if present; otherwise selected path
@@ -468,6 +476,7 @@ class PipelineUI:
             router_model=router_model,
             router_high_reasoning=router_high_reasoning,
             user_api_key=user_api_key,
+            target_platform=target_platform,
         )
         return (
             arts.status_md,
@@ -479,6 +488,8 @@ class PipelineUI:
 
 
 def build_interface() -> gr.Blocks:
+    from utils.providers.models import _get_model_name_to_config
+
     ui = PipelineUI()
     default_problem = ui.problem_choices[0][0] if ui.problem_choices else ""
     default_problem_path = ui.problem_choices[0][1] if ui.problem_choices else ""
@@ -533,7 +544,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
 
                 # Model selectors
                 openai_extract_models = ["gpt-5", "o4-mini"]
-                registry_models = sorted(list(MODEL_NAME_TO_CONFIG.keys())) or [
+                registry_models = sorted(list(_get_model_name_to_config().keys())) or [
                     "gpt-5",
                     "o4-mini",
                 ]
@@ -608,10 +619,16 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
                 verify_checkbox = gr.Checkbox(
                     label="Verify composed kernel", value=True
                 )
+                platform_dropdown = gr.Dropdown(
+                    choices=get_platform_choices(),
+                    label="Target Platform",
+                    value="cuda",
+                    info="CUDA for NVIDIA GPUs, XPU for Intel GPUs",
+                )
 
                 run_button = gr.Button("🚀 Run Pipeline", variant="primary")
 
-            with gr.Column(scale=1.5):
+            with gr.Column(scale=2):
                 gr.Markdown("## Results")
                 status_out = gr.Markdown(value="*Awaiting run...*")
                 details_out = gr.Markdown(value="")
@@ -637,7 +654,8 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
             run_timeout: int,
             compose_max_iters: int,
             verify: bool,
-            api_key: Optional[str],
+            platform: str,
+            api_key: str | None,
         ):
             return ui.run(
                 selected_problem_label=selected_label,
@@ -656,6 +674,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
                 compose_max_iters=compose_max_iters,
                 verify=verify,
                 user_api_key=api_key,
+                target_platform=platform,
             )
 
         run_button.click(
@@ -676,6 +695,7 @@ Run the extract → dispatch → compose pipeline on KernelBench problems and do
                 run_timeout_slider,
                 compose_iters_slider,
                 verify_checkbox,
+                platform_dropdown,
                 api_key_input,
             ],
             outputs=[status_out, details_out, code_out, run_info_out, download_out],
@@ -712,7 +732,6 @@ def main() -> None:
             ssl_keyfile=str(meta_keyfile),
             ssl_certfile=str(meta_keyfile),
             ssl_verify=False,
-            show_api=False,
             inbrowser=False,
         )
     else:
@@ -722,7 +741,6 @@ def main() -> None:
             show_error=True,
             server_name=args.host,
             server_port=args.port,
-            show_api=False,
             inbrowser=True,
         )
 
