@@ -19,12 +19,9 @@ Samplers control how we select:
 - Inspirations: Which kernels to show as few-shot examples to the LLM
 """
 
-from __future__ import annotations
+from typing import Protocol
 
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from ..history import AttemptRecord, AttemptStore
+from ..history import AttemptRecord, AttemptStore
 
 
 class Sampler(Protocol):
@@ -42,8 +39,8 @@ class Sampler(Protocol):
         ...
 
 
-class SimpleSampler:
-    """Example implementation: returns best parent, top-k inspirations."""
+class BestSampler:
+    """Sampler that always returns the best parent and top-k inspirations."""
 
     def __init__(self, store: AttemptStore) -> None:
         self.store = store

@@ -20,27 +20,19 @@ Mutators build prompts for the LLM to optimize kernels, including:
 - Any additional context (bottleneck analysis, inspirations, etc.)
 """
 
-from __future__ import annotations
+from typing import Protocol
 
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from ..history import AttemptRecord
+from ..history import AttemptRecord, AttemptStore
 
 
 class Mutator(Protocol):
     """Interface for building optimization prompts."""
 
-    def build_prompt(
-        self,
-        parent: AttemptRecord,
-        history: list[AttemptRecord] | None = None,
-    ) -> str:
+    def build_prompt(self, parent: AttemptRecord) -> str:
         """Build a prompt for the LLM to optimize the kernel.
 
         Args:
             parent: The kernel to optimize.
-            history: Previous attempts, ordered oldest-first.
         """
         ...
 
@@ -48,19 +40,19 @@ class Mutator(Protocol):
 class SimpleMutator:
     """Minimal mutator: basic prompt with kernel and history."""
 
-    def build_prompt(
-        self,
-        parent: AttemptRecord,
-        history: list[AttemptRecord] | None = None,
-    ) -> str:
+    def __init__(self, store: AttemptStore) -> None:
+        self.store = store
+
+    def build_prompt(self, parent: AttemptRecord) -> str:
         lines = [
             "# Optimize this Triton kernel\n",
             f"Current performance: {parent.time_ms:.4f}ms\n",
         ]
 
+        history = self.store.get_recent(3)
         if history:
             lines.append("\n## Recent attempts:\n")
-            for a in history[-3:]:
+            for a in history:
                 lines.append(f"- [{a.outcome.value}] {a.time_ms:.4f}ms\n")
 
         lines.append("\n## Kernel:\n```python\n")

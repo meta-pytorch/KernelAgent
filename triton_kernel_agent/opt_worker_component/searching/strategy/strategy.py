@@ -20,13 +20,10 @@ Strategies decide:
 - How to select the next generation of candidates
 """
 
-from __future__ import annotations
+from typing import Protocol
 
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from ..history import AttemptRecord, AttemptStore
-    from ..sampling import Sampler
+from ..history import AttemptRecord, AttemptStore
+from ..sampling import Sampler
 
 
 class Strategy(Protocol):

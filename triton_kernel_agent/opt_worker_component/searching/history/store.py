@@ -27,8 +27,6 @@ Thread/process safety:
 - Workers return results via queue; manager calls add()
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Protocol
@@ -41,7 +39,6 @@ class AttemptStore(Protocol):
 
     Implementations must provide:
     - add(): Store a new attempt
-    - get(): Retrieve by ID
     - get_recent(): Get recent attempts for history context
     - get_top_k(): Get best performers for parent selection
     - get_best(): Get single best attempt
@@ -52,12 +49,8 @@ class AttemptStore(Protocol):
         """Store an attempt."""
         ...
 
-    def get(self, attempt_id: str) -> AttemptRecord | None:
-        """Get an attempt by ID."""
-        ...
-
     def get_recent(self, n: int) -> list[AttemptRecord]:
-        """Get the n most recent attempts (newest first)."""
+        """Get the n most recent attempts (oldest first)."""
         ...
 
     def get_top_k(self, k: int) -> list[AttemptRecord]:
@@ -79,7 +72,6 @@ class JsonAttemptStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self._attempts: list[AttemptRecord] = []
-        self._id_index: dict[str, int] = {}
         self._load()
 
     def _load(self) -> None:
@@ -92,13 +84,11 @@ class JsonAttemptStore:
                 with open(self.path) as f:
                     data = json.load(f)
                 self._attempts = [AttemptRecord.from_dict(d) for d in data]
-                self._id_index = {a.id: i for i, a in enumerate(self._attempts)}
             except (json.JSONDecodeError, KeyError) as e:
                 import warnings
 
                 warnings.warn(f"Corrupted store at {self.path}, starting fresh: {e}")
                 self._attempts = []
-                self._id_index = {}
 
     def _save(self) -> None:
         """Save attempts to JSON file."""
@@ -109,19 +99,11 @@ class JsonAttemptStore:
     def add(self, attempt: AttemptRecord) -> None:
         """Store an attempt and persist to disk."""
         self._attempts.append(attempt)
-        self._id_index[attempt.id] = len(self._attempts) - 1
         self._save()
 
-    def get(self, attempt_id: str) -> AttemptRecord | None:
-        """Get an attempt by ID."""
-        idx = self._id_index.get(attempt_id)
-        if idx is not None:
-            return self._attempts[idx]
-        return None
-
     def get_recent(self, n: int) -> list[AttemptRecord]:
-        """Get the n most recent attempts (newest first)."""
-        return list(reversed(self._attempts[-n:]))
+        """Get the n most recent attempts (oldest first)."""
+        return self._attempts[-n:]
 
     def get_top_k(self, k: int) -> list[AttemptRecord]:
         """Get the k best attempts by time_ms (fastest first).

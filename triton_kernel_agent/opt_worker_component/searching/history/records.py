@@ -14,8 +14,6 @@
 
 """Data records for tracking optimization attempts."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -55,7 +53,7 @@ class AttemptRecord:
         }
 
     @staticmethod
-    def from_dict(data: dict) -> AttemptRecord:
+    def from_dict(data: dict) -> "AttemptRecord":
         """Deserialize from dictionary."""
         return AttemptRecord(
             id=data["id"],

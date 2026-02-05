@@ -14,6 +14,6 @@
 
 """Sampling module for selecting parents from optimization history."""
 
-from .sampler import Sampler, SimpleSampler
+from .sampler import BestSampler, Sampler
 
-__all__ = ["Sampler", "SimpleSampler"]
+__all__ = ["Sampler", "BestSampler"]
