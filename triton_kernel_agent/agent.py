@@ -355,7 +355,7 @@ if __name__ == "__main__":
                 messages = [{"role": "user", "content": prompt}]
 
                 # Use provider's multiple response capability
-                max_completion_tokens = 40000
+                max_completion_tokens = 20000
 
                 if self.provider.supports_multiple_completions():
                     # Provider supports native multiple completions
