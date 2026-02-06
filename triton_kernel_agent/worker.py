@@ -308,7 +308,11 @@ class VerificationWorker:
 
         except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
-            return False, "", f"Test execution timed out after {self.test_timeout_s} seconds"
+            return (
+                False,
+                "",
+                f"Test execution timed out after {self.test_timeout_s} seconds",
+            )
         except Exception as e:
             self.logger.error(f"Test execution error: {e}")
             return False, "", str(e)
