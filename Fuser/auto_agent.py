@@ -347,6 +347,7 @@ class AutoKernelRouter:
         ignore_router_config: bool = False,
         use_router_cache: bool = True,
         no_cusolver: bool = False,
+        test_timeout_s: int = 30,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -372,6 +373,7 @@ class AutoKernelRouter:
         self.ignore_router_config = ignore_router_config
         self.use_router_cache = use_router_cache
         self.no_cusolver = no_cusolver
+        self.test_timeout_s = test_timeout_s
 
     def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
         agent = TritonKernelAgent(
@@ -381,6 +383,7 @@ class AutoKernelRouter:
             high_reasoning_effort=self.ka_high_reasoning,
             target_platform=self.platform_config,
             no_cusolver=self.no_cusolver,
+            test_timeout_s=self.run_timeout_s,
         )
         try:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
@@ -445,6 +448,7 @@ class AutoKernelRouter:
                 verify=self.verify,
                 compose_max_iters=self.compose_max_iters,
                 target_platform=self.platform_config.name,
+                test_timeout_s=self.test_timeout_s,
             )
         except BaseException as exc:  # catch SystemExit and others
             # Return a structured failure so caller can decide on fallback
@@ -716,6 +720,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ka-workers", type=int, default=4)
     p.add_argument("--ka-rounds", type=int, default=10)
     p.add_argument("--no-ka-high-reasoning", action="store_true")
+    p.add_argument("--test-timeout-s", type=int, default=30)
     p.add_argument("--router-model", default="gpt-5")
     p.add_argument("--no-router-high-reasoning", action="store_true")
     p.add_argument("--router-temp", type=float, default=0.2)
@@ -786,6 +791,7 @@ def main(argv: list[str] | None = None) -> int:
         ignore_router_config=args.ignore_router_config,
         use_router_cache=(not args.no_router_cache),
         no_cusolver=args.no_cusolver,
+        test_timeout_s=args.run_timeout_s,
     )
 
     try:
