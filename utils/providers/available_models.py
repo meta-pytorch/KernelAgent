@@ -64,4 +64,9 @@ AVAILABLE_MODELS = [
         provider_classes=[RelayProvider],
         description="Claude 4.5 Opus (Released Nov 2025)",
     ),
+    ModelConfig(
+        name="gpt-5-2",
+        provider_classes=[RelayProvider],
+        description="GPT-5.2 flagship model (Dec 2025) - Note the name is different from the OpenAI model",
+    ),
 ]
