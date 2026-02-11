@@ -109,10 +109,10 @@ def oink_rmsnorm(
     assert weight.dim() == 1, "weight must be 1D [N]"
 
     sm = _get_sm(x.device)
+    _rms = _get_rmsnorm_mod()
     if sm >= 100:
         # Use the tuned CuTeDSL SM100 kernel. The public API already
         # contains all necessary gating and layout checks internally.
-        _rms = _get_rmsnorm_mod()
         y, _rstd, _res = _rms.rmsnorm_forward(
             x,
             weight=weight,
@@ -124,7 +124,6 @@ def oink_rmsnorm(
         return y
 
     # Fallback: reference implementation (correctness-first).
-    _rms = _get_rmsnorm_mod()
     return _rms.rmsnorm_ref(
         x,
         w=weight,
@@ -184,39 +183,40 @@ def oink_fused_add_rms_norm(
     assert weight.dim() == 1, "weight must be 1D [N]"
 
     sm = _get_sm(x.device)
-    if sm >= 100:
-        _rms = _get_rmsnorm_mod()
-        # Prefer the lowest-overhead in-place entrypoint (returns None).
-        if hasattr(_rms, "fused_add_rmsnorm_inplace_"):
-            _rms.fused_add_rmsnorm_inplace_(  # type: ignore[misc]
-                x,
-                residual,
-                weight,
-                eps=eps,
-            )
-            return None
-        # Backward-compatible wrapper (returns (x, residual)).
-        if hasattr(_rms, "fused_add_rmsnorm_forward_inplace"):
-            _rms.fused_add_rmsnorm_forward_inplace(  # type: ignore[misc]
-                x,
-                residual,
-                weight,
-                eps=eps,
-            )
-            return None
+    _rms = _get_rmsnorm_mod()
 
-        # Extremely defensive fallback if the Oink module doesn't provide
-        # the in-place entrypoint.
-        y, z = _rms.fused_add_rmsnorm_forward(x, residual, weight, eps=eps)
+    if sm < 100:
+        # Non-SM100 fallback: keep semantics in-place (correctness-first).
+        residual.add_(x)
+        y = _rms.rmsnorm_ref(residual, w=weight, b=None, residual=None, eps=eps)
         x.copy_(y)
-        residual.copy_(z)
         return None
 
-    # Non-SM100 fallback: keep semantics in-place (correctness-first).
-    residual.add_(x)
-    _rms = _get_rmsnorm_mod()
-    y = _rms.rmsnorm_ref(residual, w=weight, b=None, residual=None, eps=eps)
+    # SM100+: prefer the lowest-overhead in-place entrypoint (returns None).
+    if hasattr(_rms, "fused_add_rmsnorm_inplace_"):
+        _rms.fused_add_rmsnorm_inplace_(  # type: ignore[misc]
+            x,
+            residual,
+            weight,
+            eps=eps,
+        )
+        return None
+
+    # Backward-compatible wrapper (returns (x, residual)).
+    if hasattr(_rms, "fused_add_rmsnorm_forward_inplace"):
+        _rms.fused_add_rmsnorm_forward_inplace(  # type: ignore[misc]
+            x,
+            residual,
+            weight,
+            eps=eps,
+        )
+        return None
+
+    # Extremely defensive fallback if the Oink module doesn't provide
+    # the in-place entrypoint.
+    y, z = _rms.fused_add_rmsnorm_forward(x, residual, weight, eps=eps)
     x.copy_(y)
+    residual.copy_(z)
     return None
 
 

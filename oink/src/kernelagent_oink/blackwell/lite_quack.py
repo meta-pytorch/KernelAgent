@@ -19,16 +19,22 @@ RMSNorm CuteDSL kernels depend on.
 This module intentionally avoids importing the `quack` package so that
 KernelAgent Oink SM100 kernels can run without Quack installed, while keeping
 numerical behaviour and performance identical to the reference kernels.
+
+Reference implementation provenance:
+- Quack repo: https://github.com/Dao-AILab/quack
+- Base commit: c227eb56abc1b434f366d31b9d4a6ab4f00e8900
+  ("[RmsNorm] Compile with tvm-ffi and fake tensors")
 """
 
 from __future__ import annotations
 
+import importlib.metadata
 import math
 import operator
-import importlib.metadata
 import re
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, Optional, Tuple, Type
+from typing import Type
 
 import cuda.bindings.driver as cuda  # type: ignore
 import torch
@@ -53,7 +59,7 @@ def _parse_version_tuple(version: str) -> tuple[int, int, int]:
     return nums[0], nums[1], nums[2]
 
 
-def _cutlass_dsl_version() -> Optional[tuple[int, int, int]]:
+def _cutlass_dsl_version() -> tuple[int, int, int] | None:
     try:
         return _parse_version_tuple(importlib.metadata.version("nvidia-cutlass-dsl"))
     except Exception:
@@ -216,7 +222,7 @@ def atomic_add_tensor_f32(
     src: cute.Tensor,
     dst: cute.Tensor,
     *,
-    pred: Optional[cute.Tensor] = None,
+    pred: cute.Tensor | None = None,
 ) -> None:
     """Atomic-add a register fragment into a GMEM tile (float32)."""
     if const_expr(pred is None):
@@ -297,7 +303,7 @@ def coord_offset_i64(
 
 @cute.jit
 def fill_oob(
-    tXsX: cute.Tensor, tXpX: Optional[cute.Tensor], fill_value: cutlass.Numeric
+    tXsX: cute.Tensor, tXpX: cute.Tensor | None, fill_value: cutlass.Numeric
 ) -> None:
     """Fill out-of-bounds values in shared memory tensor."""
     tXrX_fill = cute.make_fragment_like(tXsX[(None, 0), None, 0])
@@ -334,7 +340,7 @@ def f32x2_to_i64(a: Float32, b: Float32, *, loc=None, ip=None) -> cutlass.Int64:
 
 
 @dsl_user_op
-def i64_to_f32x2(c: cutlass.Int64, *, loc=None, ip=None) -> Tuple[Float32, Float32]:
+def i64_to_f32x2(c: cutlass.Int64, *, loc=None, ip=None) -> tuple[Float32, Float32]:
     """Unpack a single i64 into two f32 values, inverse of f32x2_to_i64."""
     vec_i64x1 = vector.from_elements(
         T.vector(1, T.i64()),
@@ -403,7 +409,7 @@ def cluster_reduce(
     reduction_buffer: cute.Tensor,
     mbar_ptr: cute.Pointer,
     init_val: cute.Numeric = 0.0,
-    phase: Optional[cutlass.Int32] = None,
+    phase: cutlass.Int32 | None = None,
 ) -> cute.Numeric:
     """reduction_buffer has shape (num_warps / warps_per_row, (warps_per_row, cluster_n))."""
     cta_rank_in_cluster = cute.arch.block_idx_in_cluster()
@@ -439,8 +445,8 @@ def block_or_cluster_reduce(
     val: cute.Numeric,
     op: Callable,
     reduction_buffer: cute.Tensor,
-    mbar_ptr: Optional[cute.Pointer],
-    phase: Optional[cutlass.Int32] = None,
+    mbar_ptr: cute.Pointer | None,
+    phase: cutlass.Int32 | None = None,
     init_val: cute.Numeric = 0.0,
 ) -> cute.Numeric:
     """Perform either block or cluster reduction based on whether mbar_ptr is provided."""
@@ -456,11 +462,11 @@ def row_reduce(
     x: cute.TensorSSA | cute.Numeric,
     op: cute.ReductionOp,
     threads_per_row: cutlass.Constexpr[int],
-    reduction_buffer: Optional[cute.Tensor] = None,
-    mbar_ptr: Optional[cute.Pointer] = None,
-    phase: Optional[cutlass.Int32] = None,
+    reduction_buffer: cute.Tensor | None = None,
+    mbar_ptr: cute.Pointer | None = None,
+    phase: cutlass.Int32 | None = None,
     init_val: cute.Numeric = 0.0,
-    hook_fn: Optional[Callable] = None,
+    hook_fn: Callable | None = None,
 ) -> cute.Numeric:
     """reduction_buffer must have shape (num_warps / warps_per_row, (warps_per_row, cluster_n))."""
     if cutlass.const_expr(isinstance(x, cute.TensorSSA)):
@@ -503,11 +509,11 @@ def row_reduce(
 def row_reduce_add(
     x: cute.TensorSSA | cute.Numeric,
     threads_per_row: cutlass.Constexpr[int],
-    reduction_buffer: Optional[cute.Tensor] = None,
-    mbar_ptr: Optional[cute.Pointer] = None,
-    phase: Optional[cutlass.Int32] = None,
+    reduction_buffer: cute.Tensor | None = None,
+    mbar_ptr: cute.Pointer | None = None,
+    phase: cutlass.Int32 | None = None,
     init_val: cute.Numeric = 0.0,
-    hook_fn: Optional[Callable] = None,
+    hook_fn: Callable | None = None,
 ) -> cute.Numeric:
     """Specialized row_reduce for ADD reductions.
 
@@ -548,12 +554,12 @@ def row_reduce_add(
 def online_softmax_reduce(
     x: cute.TensorSSA,
     threads_per_row: cutlass.Constexpr[int],
-    reduction_buffer: Optional[cute.Tensor] = None,
-    mbar_ptr: Optional[cute.Pointer] = None,
-    hook_fn: Optional[Callable] = None,
-    phase: Optional[cutlass.Int32] = None,
+    reduction_buffer: cute.Tensor | None = None,
+    mbar_ptr: cute.Pointer | None = None,
+    hook_fn: Callable | None = None,
+    phase: cutlass.Int32 | None = None,
     return_exp_x: bool = False,
-) -> tuple[Float32, Float32, Optional[cute.TensorSSA]]:
+) -> tuple[Float32, Float32, cute.TensorSSA | None]:
     """Online softmax reduction over a row.
 
     This mirrors quack.reduce.online_softmax_reduce and computes:
@@ -691,7 +697,7 @@ def copy(
     src: cute.Tensor,
     dst: cute.Tensor,
     *,
-    pred: Optional[cute.Tensor] = None,
+    pred: cute.Tensor | None = None,
     num_copy_elems: int = 1,
     is_async: bool = False,
     loc=None,
@@ -733,7 +739,7 @@ class ReductionBase:
 
     def _get_tv_layout(
         self, num_copy_bits: int = 128
-    ) -> Tuple[cute.Shape, cute.Layout]:
+    ) -> tuple[cute.Shape, cute.Layout]:
         """Return (tiler_mn, tv_layout) for SM100 reduction kernels.
 
         This intentionally mirrors Quack's `ReductionBase._get_tiled_copy(...)`:
@@ -822,7 +828,7 @@ class ReductionBase:
         smem: cutlass.utils.SmemAllocator,
         tv_layout: cute.Layout,
         is_persistent: bool = False,
-    ) -> Tuple[cute.Tensor, Optional[cute.Pointer]]:
+    ) -> tuple[cute.Tensor, cute.Pointer | None]:
         reduction_buffer = smem.allocate_tensor(
             self.reduction_dtype,
             self._get_reduction_buffer_layout(tv_layout, self.cluster_n),
@@ -841,7 +847,7 @@ class ReductionBase:
     def _initialize_cluster(
         self,
         tidx: cutlass.Int32,
-        mbar_ptr: Optional[cute.Pointer],
+        mbar_ptr: cute.Pointer | None,
         num_warps: int,
         is_persistent: bool = False,
     ) -> None:
@@ -924,14 +930,14 @@ class RMSNormBackward(ReductionBase):
     def __call__(
         self,
         mX: cute.Tensor,
-        mW: Optional[cute.Tensor],
+        mW: cute.Tensor | None,
         mdO: cute.Tensor,
-        mdResO: Optional[cute.Tensor],
+        mdResO: cute.Tensor | None,
         mRstd: cute.Tensor,
         mdX: cute.Tensor,
-        mdW: Optional[cute.Tensor],
-        mdRes: Optional[cute.Tensor],
-        mdB: Optional[cute.Tensor],
+        mdW: cute.Tensor | None,
+        mdRes: cute.Tensor | None,
+        mdB: cute.Tensor | None,
         sm_count: Int32,
         stream: cuda.CUstream,
     ):
@@ -980,6 +986,9 @@ class RMSNormBackward(ReductionBase):
             )
             mW = cute.make_tensor(mW.iterator, mW_expanded_layout)
 
+        # NOTE: `sm_count` is the launch grid x-dimension. When `cluster_n > 1`,
+        # this is effectively a "cluster count" heuristic (total CTAs =
+        # sm_count * cluster_n), matching Quack's naming/launch shape.
         num_blocks = sm_count
         kernel = (
             self.kernel(
@@ -1002,14 +1011,14 @@ class RMSNormBackward(ReductionBase):
     def _kernel_impl(
         self,
         mX: cute.Tensor,
-        mW: Optional[cute.Tensor],
+        mW: cute.Tensor | None,
         mdO: cute.Tensor,
-        mdResO: Optional[cute.Tensor],
+        mdResO: cute.Tensor | None,
         mRstd: cute.Tensor,
         mdX: cute.Tensor,
-        mdW: Optional[cute.Tensor],
-        mdB: Optional[cute.Tensor],
-        mdRes: Optional[cute.Tensor],
+        mdW: cute.Tensor | None,
+        mdB: cute.Tensor | None,
+        mdRes: cute.Tensor | None,
         tv_layout: cute.Layout,
         tiler_mn: cute.Shape,
     ):
@@ -1326,14 +1335,14 @@ class RMSNormBackward(ReductionBase):
         def kernel(
             self,
             mX: cute.Tensor,
-            mW: Optional[cute.Tensor],
+            mW: cute.Tensor | None,
             mdO: cute.Tensor,
-            mdResO: Optional[cute.Tensor],
+            mdResO: cute.Tensor | None,
             mRstd: cute.Tensor,
             mdX: cute.Tensor,
-            mdW: Optional[cute.Tensor],
-            mdB: Optional[cute.Tensor],
-            mdRes: Optional[cute.Tensor],
+            mdW: cute.Tensor | None,
+            mdB: cute.Tensor | None,
+            mdRes: cute.Tensor | None,
             tv_layout: cute.Layout,
             tiler_mn: cute.Shape,
         ):
@@ -1356,14 +1365,14 @@ class RMSNormBackward(ReductionBase):
         def kernel(
             self,
             mX: cute.Tensor,
-            mW: Optional[cute.Tensor],
+            mW: cute.Tensor | None,
             mdO: cute.Tensor,
-            mdResO: Optional[cute.Tensor],
+            mdResO: cute.Tensor | None,
             mRstd: cute.Tensor,
             mdX: cute.Tensor,
-            mdW: Optional[cute.Tensor],
-            mdB: Optional[cute.Tensor],
-            mdRes: Optional[cute.Tensor],
+            mdW: cute.Tensor | None,
+            mdB: cute.Tensor | None,
+            mdRes: cute.Tensor | None,
         ):
             largest_dtype_width = const_expr(
                 max(
@@ -1400,8 +1409,8 @@ class RMSNormBackward(ReductionBase):
 def get_sm_count(
     N: int,
     device: torch.device,
-    M: Optional[int] = None,
-    dtype: Optional[torch.dtype] = None,
+    M: int | None = None,
+    dtype: torch.dtype | None = None,
 ) -> int:
     """
     SM count heuristic for reduction-style kernels.

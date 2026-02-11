@@ -40,6 +40,18 @@ from typing import Optional, Tuple
 
 _HERE = os.path.dirname(__file__)
 
+# NOTE: This module is a heavily adapted / vendored variant of Quack's SM100
+# RMSNorm kernels (https://github.com/Dao-AILab/quack). The goal is to keep
+# the runtime dependency surface minimal (no Quack install required) while
+# preserving Quack-style numerics and performance where applicable.
+#
+# The original Quack implementation has evolved; for provenance, this copy was
+# initially derived from Quack commit c227eb56abc1b434f366d31b9d4a6ab4f00e8900
+# (\"[RmsNorm] Compile with tvm-ffi and fake tensors\") and then modified for:
+# - vLLM plugin integration / torch.custom_op wrappers
+# - stride-preserving pointer entrypoints for padded-row layouts
+# - DSv3-specific tuning knobs and correctness-first fallbacks
+
 # CuTeDSL caches generated MLIR into a tempdir under a global default
 # (`/tmp/$USER/cutlass_python_cache`). The cache bytecode format can differ across
 # `nvidia-cutlass-dsl` versions (e.g. 4.3.2 vs 4.3.4), and cross-version cache
@@ -78,6 +90,9 @@ from cutlass import Float32, Int32, const_expr  # noqa: E402
 from cutlass.cute import runtime as rt  # noqa: E402
 from cutlass.cute.runtime import from_dlpack  # noqa: E402
 
+# Shared env-var parsing utility (accepts common false-y strings like "0", "off").
+from kernelagent_oink.blackwell.fast_launch import _env_flag  # noqa: E402
+
 # Simple compile cache declared early so direct execution works
 _PTR_COMPILE_CACHE = {}
 
@@ -113,13 +128,6 @@ def _reduce_partial_sum_fp32(partial: Tensor, *, device_index: int) -> Tensor:
     assert partial.dim() == 2
     ones = _get_dw_reduce_ones(device_index, int(partial.shape[0]))
     return torch.mm(ones, partial).squeeze(0)
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    val = os.environ.get(name)
-    if val is None:
-        return default
-    return val.strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 # Fast-launch uses a few private-ish CuTeDSL internals (packed args plumbing and
@@ -361,11 +369,11 @@ def _direct_gmem_from_policy(*, default: bool) -> bool:
 
 def _copy_bits_from_policy(*, default: int, can_use_256: bool) -> int:
     """Resolve copy width (in bits) from the (import-time) policy string."""
-    if _COPY_BITS_POLICY in {"64"}:
+    if _COPY_BITS_POLICY == "64":
         return 64
-    if _COPY_BITS_POLICY in {"128"}:
+    if _COPY_BITS_POLICY == "128":
         return 128
-    if _COPY_BITS_POLICY in {"256"} and can_use_256:
+    if _COPY_BITS_POLICY == "256" and can_use_256:
         return 256
     return default
 
@@ -414,7 +422,6 @@ def _set_runtime_ptr(ptr: object, device_ptr: int) -> None:
     # This relies on internal CuTeDSL runtime pointer fields (`_desc`, `_pointer`,
     # etc.). If these internals change in a future CuTeDSL upgrade, callers
     # should catch AttributeError and fall back to the regular launch path.
-    device_ptr = int(device_ptr)
     ptr._pointer = device_ptr  # type: ignore[attr-defined]
     if getattr(ptr, "_c_pointer", None) is None:
         ptr.__c_pointers__()  # type: ignore[attr-defined]
@@ -1564,11 +1571,7 @@ class RMSNormSM100:
         elif N <= 4096:
             return 128
         elif N <= 8192:
-            # Allow an override (used by 2-rows/CTA path for N≈6k/8k)
-            try:
-                return self._tpr_override  # type: ignore[attr-defined]
-            except Exception:
-                return 128
+            return 128
         elif N <= 16384:
             return 256
         else:

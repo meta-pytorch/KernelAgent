@@ -42,13 +42,11 @@ def _env_truthy(name: str) -> bool:
 
 
 def _infer_cuda_device_index() -> int:
-    local_rank = os.environ.get("LOCAL_RANK")
-    if local_rank is not None:
-        try:
-            return int(local_rank)
-        except ValueError:
-            pass
-    return 0
+    local_rank = os.environ.get("LOCAL_RANK", "0").strip()
+    try:
+        return int(local_rank)
+    except ValueError:
+        return 0
 
 
 def _compute_cutedsl_arch(major: int, minor: int) -> str:
@@ -88,6 +86,7 @@ def register(*, force: bool = False) -> None:
 
     try:
         if not torch.cuda.is_available():
+            logger.debug("Oink plugin: torch.cuda.is_available() is False; skipping")
             return
         device_index = _infer_cuda_device_index()
         major, minor = torch.cuda.get_device_capability(device_index)
