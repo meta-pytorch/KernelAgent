@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""Sampling module for selecting parents from optimization history."""
 
-__all__ = []
+from .sampler import BestSampler, Sampler
+
+__all__ = ["Sampler", "BestSampler"]

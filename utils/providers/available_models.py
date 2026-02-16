@@ -33,6 +33,11 @@ AVAILABLE_MODELS = [
         provider_classes=[RelayProvider, OpenAIProvider],
         description="GPT-5 flagship model (Released Aug 2025)",
     ),
+    ModelConfig(
+        name="gpt-5.2",
+        provider_classes=[OpenAIProvider],
+        description="GPT-5.2 flagship model (Released Dec 2025)",
+    ),
     # Anthropic Claude 4 Models (Latest)
     ModelConfig(
         name="claude-opus-4-1-20250805",
@@ -58,5 +63,10 @@ AVAILABLE_MODELS = [
         name="claude-opus-4.5",
         provider_classes=[RelayProvider],
         description="Claude 4.5 Opus (Released Nov 2025)",
+    ),
+    ModelConfig(
+        name="gpt-5-2",
+        provider_classes=[RelayProvider],
+        description="GPT-5.2 flagship model (Dec 2025) - Note the name is different from the OpenAI model",
     ),
 ]

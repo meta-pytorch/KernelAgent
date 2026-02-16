@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""Strategy module for controlling the optimization loop."""
 
-__all__ = []
+from .strategy import SimpleStrategy, Strategy
+
+__all__ = ["Strategy", "SimpleStrategy"]

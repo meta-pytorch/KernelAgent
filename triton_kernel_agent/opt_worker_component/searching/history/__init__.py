@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""History module for tracking optimization attempts.
 
-__all__ = []
+Provides persistent storage for kernel optimization attempts, enabling:
+- Resume: Continue runs after interruption
+- History: Track what was tried and outcomes
+- Learning: Use past attempts to guide exploration
+"""
+
+from .records import AttemptRecord, Outcome
+from .store import AttemptStore, JsonAttemptStore
+
+__all__ = ["AttemptRecord", "Outcome", "AttemptStore", "JsonAttemptStore"]

@@ -67,6 +67,9 @@ METRICS = ",".join(
         "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
         "smsp__warp_issue_stalled_branch_resolving_per_warp_active.pct",
         "smsp__sass_average_branch_targets_threads_uniform.pct",
+        # new metrics for SOL
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+        "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
     ]
 )
 
@@ -255,12 +258,8 @@ def _apply_selection_policy(
     Returns:
         DataFrame with a single row based on the policy
     """
-    if df.empty:
+    if len(df) <= 1:
         return df
-
-    if len(df) == 1:
-        return df
-
     if policy == MetricSelectionPolicy.FIRST:
         return df.iloc[[0]]
     elif policy == MetricSelectionPolicy.LAST:
@@ -317,7 +316,7 @@ def load_ncu_metrics(
     extra_keep: Optional[Sequence[str]] = ("Kernel Name",),
     coerce_numeric: bool = True,
     name_list: Optional[Sequence[str]] = None,
-    select: Union[str, MetricSelectionPolicy] = MetricSelectionPolicy.LAST,
+    select: MetricSelectionPolicy = MetricSelectionPolicy.LAST,
 ) -> pd.DataFrame:
     """
     Load and parse NCU metrics from CSV file.
@@ -328,31 +327,18 @@ def load_ncu_metrics(
         extra_keep: Additional columns to keep (e.g., "Kernel Name")
         coerce_numeric: Convert metric values to numeric
         name_list: Filter by kernel names (substring match)
-        select: Selection policy when multiple rows per name.
-                Can be MetricSelectionPolicy enum or string ("first", "last", "max_cycles")
+        select: Selection policy when multiple rows per name
 
     Returns:
         DataFrame with parsed metrics
 
     Raises:
         FileNotFoundError: If CSV file not found
-        ValueError: If no requested columns found in CSV or invalid select value
+        ValueError: If no requested columns found in CSV
     """
     csv_path = Path(csv_path)
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
-
-    # Convert string to enum if needed
-    if isinstance(select, str):
-        try:
-            policy = MetricSelectionPolicy(select)
-        except ValueError:
-            raise ValueError(
-                f"Invalid select value: {select}. "
-                f"Must be one of: {[p.value for p in MetricSelectionPolicy]}"
-            )
-    else:
-        policy = select
 
     df = pd.read_csv(csv_path, comment="=", low_memory=False)
 
@@ -383,14 +369,11 @@ def load_ncu_metrics(
             .apply(pd.to_numeric, errors="coerce")
         )
 
-    # Filter by kernel name list if provided
-    if name_list:
-        sub = _filter_by_kernel_names(sub, name_list, policy, keep_cols)
-    else:
-        # Apply selection to all rows if no name filter
-        sub = _apply_selection_policy(sub, policy)
-
-    return sub
+    return (
+        _filter_by_kernel_names(sub, name_list, select, keep_cols)
+        if name_list
+        else _apply_selection_policy(sub, select)
+    )
 
 
 def metrics_to_prompt(

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Kernel Performance Agent package."""
+"""Mutation module for building kernel optimization prompts."""
 
-__all__ = []
+from .mutator import Mutator, SimpleMutator
+
+__all__ = ["Mutator", "SimpleMutator"]
