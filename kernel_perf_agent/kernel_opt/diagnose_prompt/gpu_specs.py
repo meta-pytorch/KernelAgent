@@ -65,7 +65,10 @@ def get_gpu_specs(gpu_name: str) -> dict[str, Any] | None:
         ...     print(f"SM Count: {specs['sm_count']}")
     """
     if gpu_name in GPU_SPECS_DATABASE:
-        return GPU_SPECS_DATABASE[gpu_name].copy()
+        # GPU_SPECS_DATABASE is a MappingProxyType (read-only), so we return a
+        # mutable copy to allow callers to modify the result without affecting
+        # the database.
+        return dict(GPU_SPECS_DATABASE[gpu_name])
 
     logger.warning(
         "Unknown GPU: '%s'. Disable Optimization. Available GPUs: %s",

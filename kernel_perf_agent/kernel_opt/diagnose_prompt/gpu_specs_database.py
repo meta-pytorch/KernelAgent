@@ -27,7 +27,9 @@ Sources:
 Last Updated: January 2026
 """
 
-GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
+from types import MappingProxyType
+
+_GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
     # NVIDIA A100 SKUs - SXM4 Variants
     "NVIDIA A100 SXM4 40GB": {
         "name": "NVIDIA A100 SXM4 40GB",
@@ -180,3 +182,6 @@ GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "tdp_w": 360,
     },
 }
+
+# Make database read-only to prevent accidental modification
+GPU_SPECS_DATABASE = MappingProxyType(_GPU_SPECS_DATABASE)
