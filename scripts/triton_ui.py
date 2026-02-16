@@ -269,7 +269,7 @@ class TritonKernelUI:
         """Format error logs for display"""
         logs = f"""## Generation Failed
 
-**⏱️ Time:** {generation_time:.2f} seconds  
+**⏱️ Time:** {generation_time:.2f} seconds
 **❌ Error:** {result["message"]}
 **📁 Session:** `{os.path.basename(result["session_dir"])}`
 
@@ -406,9 +406,9 @@ def _create_app() -> gr.Blocks:
         gr.Markdown(
             """
         # 🚀 Triton Kernel Agent
-        
+
         **AI-Powered GPU Kernel Generation**
-        
+
         Generate optimized OpenAI Triton kernels from high-level descriptions.
         """
         )
@@ -679,8 +679,8 @@ def _create_app() -> gr.Blocks:
                 model_dropdown,
                 provider_dropdown,
                 high_reasoning_effort_checkbox,
-                platform_dropdown,
                 api_key_input,
+                platform_dropdown,
             ],
             outputs=[
                 status_output,
@@ -697,13 +697,13 @@ def _create_app() -> gr.Blocks:
         gr.Markdown(
             """
         ---
-        
+
         **💡 Tips:**
         - Be specific about input/output shapes and data types
-        - Include PyTorch equivalent code for reference  
+        - Include PyTorch equivalent code for reference
         - Check the logs for detailed generation information
-        
-        **🔧 Configuration:** 
+
+        **🔧 Configuration:**
         - Provide your OpenAI or Anthropic API key above (not saved; session-only)
         - Or set the appropriate env var in `.env` (OPENAI_API_KEY or ANTHROPIC_API_KEY)
         - The key is only used for this session and automatically cleared

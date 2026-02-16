@@ -67,6 +67,9 @@ METRICS = ",".join(
         "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
         "smsp__warp_issue_stalled_branch_resolving_per_warp_active.pct",
         "smsp__sass_average_branch_targets_threads_uniform.pct",
+        # new metrics for SOL
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+        "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
     ]
 )
 
