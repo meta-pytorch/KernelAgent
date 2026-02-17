@@ -14,15 +14,11 @@
 
 """Utility functions for the verification and optimization workers."""
 
-import logging
 import multiprocessing as mp
 import os
 import re
 from logging import Logger
 from pathlib import Path
-
-from utils.providers.base import BaseProvider
-
 
 # ------------------------
 # LLM Utilities
