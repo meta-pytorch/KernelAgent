@@ -42,6 +42,7 @@ class TritonKernelAgent:
         preferred_provider: BaseProvider | None = None,
         target_platform: PlatformConfig | None = None,
         no_cusolver: bool = False,
+        test_timeout_s: int = 30,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -90,6 +91,7 @@ class TritonKernelAgent:
             target_platform if target_platform else get_platform("cuda")
         )
         self.no_cusolver = no_cusolver
+        self.test_timeout_s = test_timeout_s
 
         # Setup main logger
         self._setup_logging()
@@ -107,6 +109,7 @@ class TritonKernelAgent:
             high_reasoning_effort=self.high_reasoning_effort,
             target_platform=self._platform_config.name,
             no_cusolver=self.no_cusolver,
+            test_timeout_s=self.test_timeout_s,
         )
 
     def _setup_logging(self):

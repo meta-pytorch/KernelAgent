@@ -26,7 +26,7 @@ Updated in January 2026
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -47,7 +47,7 @@ NCU_ROOFLINE_METRICS = [
 class RooflineConfig:
     """Configuration for roofline analysis."""
 
-    threshold_pct: float = 90.0  # SOL % to consider at roofline
+    threshold_pct: float = 95.0  # SOL % to consider at roofline
     early_stop: bool = True  # Stop optimization when at roofline
     convergence_rounds: int = 5  # Rounds without improvement to trigger stop
     min_improvement_pct: float = 0.1  # Minimum improvement to continue
@@ -74,6 +74,10 @@ class RooflineResult:
 
     # Data quality
     warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return asdict(self)
 
 
 class RooflineAnalyzer:

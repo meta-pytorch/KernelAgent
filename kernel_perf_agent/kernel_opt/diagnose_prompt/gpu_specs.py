@@ -60,12 +60,15 @@ def get_gpu_specs(gpu_name: str) -> dict[str, Any] | None:
         - memory_type: Memory type (e.g., "HBM2e", "GDDR6X")
 
     Examples:
-        >>> specs = get_gpu_specs("NVIDIA A100")
+        >>> specs = get_gpu_specs("NVIDIA A100 SXM4 80GB")
         >>> if specs:
         ...     print(f"SM Count: {specs['sm_count']}")
     """
     if gpu_name in GPU_SPECS_DATABASE:
-        return GPU_SPECS_DATABASE[gpu_name].copy()
+        # GPU_SPECS_DATABASE is a MappingProxyType (read-only), so we return a
+        # mutable copy to allow callers to modify the result without affecting
+        # the database.
+        return dict(GPU_SPECS_DATABASE[gpu_name])
 
     logger.warning(
         "Unknown GPU: '%s'. Disable Optimization. Available GPUs: %s",
@@ -86,7 +89,7 @@ if __name__ == "__main__":
 
     # Example usage
     print(f"\n{'=' * 60}")
-    example_gpu = "NVIDIA A100"
+    example_gpu = "NVIDIA A100 SXM4 80GB"
     specs = get_gpu_specs(example_gpu)
     if specs:
         print(f"\nExample specs for {example_gpu}:")

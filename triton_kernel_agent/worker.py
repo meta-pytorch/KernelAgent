@@ -133,6 +133,7 @@ class VerificationWorker:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
+        test_timeout_s: int = 30,
     ):
         """
         Initialize a verification worker.
@@ -148,6 +149,7 @@ class VerificationWorker:
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform default: cuda
             no_cusolver: If True, disables cuSolver library usage
+            test_timeout_s: Timeout in seconds for test execution
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -158,6 +160,7 @@ class VerificationWorker:
         self.high_reasoning_effort = high_reasoning_effort
         self._platform_config = get_platform(target_platform)
         self.no_cusolver = no_cusolver
+        self.test_timeout_s = test_timeout_s
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -288,7 +291,7 @@ class VerificationWorker:
                 cwd=str(self.workdir),
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=self.test_timeout_s,
             )
 
             success = result.returncode == 0
@@ -305,7 +308,11 @@ class VerificationWorker:
 
         except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
-            return False, "", "Test execution timed out after 30 seconds"
+            return (
+                False,
+                "",
+                f"Test execution timed out after {self.test_timeout_s} seconds",
+            )
         except Exception as e:
             self.logger.error(f"Test execution error: {e}")
             return False, "", str(e)

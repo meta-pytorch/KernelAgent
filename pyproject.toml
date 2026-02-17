@@ -32,6 +32,7 @@ dependencies = [
     "python-dotenv",
     "gradio>=5.5.0",
     "requests",
+    "numpy",
 ]
 
 [project.optional-dependencies]
