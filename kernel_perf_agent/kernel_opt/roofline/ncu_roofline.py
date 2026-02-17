@@ -121,7 +121,7 @@ class RooflineAnalyzer:
             return "underutilized"
 
         # Return whichever is lower
-        if memory_sol <= compute_sol:
+        if memory_sol >= compute_sol:
             return "memory"
         else:
             return "compute"
