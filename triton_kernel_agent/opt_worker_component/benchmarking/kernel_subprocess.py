@@ -133,7 +133,9 @@ def _extract_model_params(model: torch.nn.Module) -> tuple[dict[str, Any], list]
                     params.setdefault(attr, val)
 
     # Top-level bias on the model itself (for fusion kernels like Conv+ReLU+BiasAdd)
-    if hasattr(model, "bias") and isinstance(model.bias, (torch.Tensor, torch.nn.Parameter)):
+    if hasattr(model, "bias") and isinstance(
+        model.bias, (torch.Tensor, torch.nn.Parameter)
+    ):
         params["add_bias"] = model.bias
         params.setdefault("bias", model.bias)
 
@@ -297,11 +299,15 @@ def _prepare_kernel(
     try:
         sig = inspect.signature(kernel_function)
         kernel_params = [
-            name for name, p in sig.parameters.items()
-            if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            name
+            for name, p in sig.parameters.items()
+            if p.kind
+            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
         ]
         param_kinds = [p.kind for p in sig.parameters.values()]
-        has_var_positional = any(k == inspect.Parameter.VAR_POSITIONAL for k in param_kinds)
+        has_var_positional = any(
+            k == inspect.Parameter.VAR_POSITIONAL for k in param_kinds
+        )
         has_var_keyword = any(k == inspect.Parameter.VAR_KEYWORD for k in param_kinds)
         if _MODEL_PARAM_NAMES.intersection(kernel_params):
             needs_model = True
@@ -309,9 +315,17 @@ def _prepare_kernel(
         if not needs_model and (has_var_positional or has_var_keyword):
             try:
                 src = inspect.getsource(kernel_function)
-                needs_model = any(kw in src for kw in ("weight", "is_weight",
-                                                         "w.shape", "w.ndim",
-                                                         "kernel_size", "dilation"))
+                needs_model = any(
+                    kw in src
+                    for kw in (
+                        "weight",
+                        "is_weight",
+                        "w.shape",
+                        "w.ndim",
+                        "kernel_size",
+                        "dilation",
+                    )
+                )
             except (OSError, TypeError):
                 pass
     except Exception:
@@ -341,8 +355,18 @@ def _prepare_kernel(
                         pos_args = list(args) + list(all_weights)
                         config_kwargs = {}
                         for k, v in model_params.items():
-                            if k not in ('weight', 'w', 'bias', 'conv_bias', 'add_bias'):
-                                if isinstance(v, (tuple, list)) and len(v) >= 1 and all(e == v[0] for e in v):
+                            if k not in (
+                                "weight",
+                                "w",
+                                "bias",
+                                "conv_bias",
+                                "add_bias",
+                            ):
+                                if (
+                                    isinstance(v, (tuple, list))
+                                    and len(v) >= 1
+                                    and all(e == v[0] for e in v)
+                                ):
                                     v = v[0]
                                 config_kwargs[k] = v
                         return original_fn(*pos_args, **config_kwargs)
@@ -358,7 +382,11 @@ def _prepare_kernel(
                         for pname in kernel_params:
                             if pname in model_params:
                                 v = model_params[pname]
-                                if isinstance(v, (tuple, list)) and len(v) >= 1 and all(e == v[0] for e in v):
+                                if (
+                                    isinstance(v, (tuple, list))
+                                    and len(v) >= 1
+                                    and all(e == v[0] for e in v)
+                                ):
                                     v = v[0]
                                 bound[pname] = v
                             elif positional_idx < len(args):
@@ -401,11 +429,11 @@ def main():
     # Auto-detect dtype from kernel source (matches NCU wrapper's dtype inference)
     try:
         kernel_source = args.kernel.read_text()
-        if 'bfloat16' in kernel_source.lower():
+        if "bfloat16" in kernel_source.lower():
             dtype = torch.bfloat16
-        elif 'float16' in kernel_source.lower() or 'half' in kernel_source.lower():
+        elif "float16" in kernel_source.lower() or "half" in kernel_source.lower():
             dtype = torch.float16
-        elif 'float32' in kernel_source.lower():
+        elif "float32" in kernel_source.lower():
             dtype = torch.float32
     except Exception:
         pass
