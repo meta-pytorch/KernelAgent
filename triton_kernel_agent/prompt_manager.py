@@ -292,7 +292,11 @@ class PromptManager:
 
     def _inline_reflexion_prompt(self, attempt) -> str:
         """Generate inline reflexion prompt when template is not available."""
-        config_str = ", ".join(f"{k}={v}" for k, v in attempt.config_changes.items()) if attempt.config_changes else "no changes"
+        config_str = (
+            ", ".join(f"{k}={v}" for k, v in attempt.config_changes.items())
+            if attempt.config_changes
+            else "no changes"
+        )
 
         return f"""Analyze this kernel optimization attempt and generate a self-reflection.
 
@@ -320,7 +324,6 @@ Respond with JSON containing:
     "avoid_patterns": ["pattern to avoid"],
     "try_patterns": ["pattern to try next"]
 }}"""
-
 
     def render_triton_guidelines(self) -> str:
         """
