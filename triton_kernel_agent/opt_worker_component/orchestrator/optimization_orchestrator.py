@@ -302,7 +302,9 @@ class OptimizationOrchestrator:
         if best_round_num > 0:
             final_kernel_file = self.artifact_dir / f"kernel_round_{best_round_num}.py"
             if final_kernel_file.exists():
-                self.logger.info(f"Profiling final best kernel (round {best_round_num})...")
+                self.logger.info(
+                    f"Profiling final best kernel (round {best_round_num})..."
+                )
                 final_profiler_results = self.profiler.profile_kernel(
                     final_kernel_file, problem_file, best_round_num
                 )
