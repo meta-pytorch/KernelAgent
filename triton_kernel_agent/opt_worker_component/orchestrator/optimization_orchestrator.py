@@ -228,9 +228,9 @@ class OptimizationOrchestrator:
                 summary=primary.summary,
                 reasoning=primary.reasoning,
                 root_cause=primary.root_causes[0] if primary.root_causes else {},
-                recommended_fix=primary.recommended_fixes[0]
-                if primary.recommended_fixes
-                else {},
+                recommended_fix=(
+                    primary.recommended_fixes[0] if primary.recommended_fixes else {}
+                ),
                 pytorch_baseline_ms=pytorch_baseline_time,
                 current_best_ms=best_time,
                 error_feedback=error_feedback if error_feedback else None,
@@ -354,12 +354,14 @@ class OptimizationOrchestrator:
             self.logger.info(f"📊 Baseline time: {best_time:.4f} ms")
 
         # PyTorch baseline
-        if self.pytorch_baseline_time is not None and self.pytorch_baseline_time != float("inf"):
-                self.logger.info(
-                    f"📊 PyTorch baseline: {pytorch_baseline_time:.4f} ms (pre-computed)"
-                )
-        else:
-             pytorch_baseline_time = None
+        if (
+            self.pytorch_baseline_time is not None
+            and self.pytorch_baseline_time != float("inf")
+        ):
+            self.logger.info(
+                f"📊 PyTorch baseline: {self.pytorch_baseline_time:.4f} ms (pre-computed)"
+            )
+
         else:
             pytorch_results = self.benchmarker.benchmark_pytorch(problem_file)
             pytorch_baseline_time = pytorch_results.get("time_ms", float("inf"))
