@@ -39,6 +39,7 @@ class WorkerManager:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
+        test_timeout_s: int = 30,
     ):
         """
         Initialize the worker manager.
@@ -53,6 +54,7 @@ class WorkerManager:
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform ('cuda' or 'xpu')
             no_cusolver: If True, disables cuSolver library usage
+            test_timeout_s: Timeout in seconds for test execution
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds
@@ -62,6 +64,7 @@ class WorkerManager:
         self.high_reasoning_effort = high_reasoning_effort
         self.target_platform = target_platform
         self.no_cusolver = no_cusolver
+        self.test_timeout_s = test_timeout_s
 
         # Setup logging
         if log_dir is None:
@@ -168,6 +171,7 @@ class WorkerManager:
                     self.high_reasoning_effort,
                     self.target_platform,
                     self.no_cusolver,
+                    self.test_timeout_s,
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -233,6 +237,7 @@ def worker_process(
     high_reasoning_effort: bool,
     target_platform: str,
     no_cusolver: bool = False,
+    test_timeout_s: int = 30,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -253,6 +258,7 @@ def worker_process(
         high_reasoning_effort=high_reasoning_effort,
         target_platform=target_platform,
         no_cusolver=no_cusolver,
+        test_timeout_s=test_timeout_s,
     )
 
     result = worker.run(

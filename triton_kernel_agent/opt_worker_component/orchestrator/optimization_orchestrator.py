@@ -197,6 +197,20 @@ class OptimizationOrchestrator:
                 self._profile_and_analyze(current_kernel, problem_file, round_num)
             )
 
+            # Log roofline for the kernel we just profiled
+            roofline_check = None
+            if ncu_metrics:
+                flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
+                roofline_check = self.roofline_analyzer.analyze(
+                    ncu_metrics=flat_metrics,
+                )
+                self.logger.info(
+                    f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
+                    f"{roofline_check.bottleneck}-bound, {roofline_check.efficiency_pct:.1f}% SOL "
+                    f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
+                    f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
+                )
+
             if not bottleneck_results:
                 self.logger.warning(
                     f"[{round_num}] No analysis available, skipping round"
@@ -214,9 +228,9 @@ class OptimizationOrchestrator:
                 summary=primary.summary,
                 reasoning=primary.reasoning,
                 root_cause=primary.root_causes[0] if primary.root_causes else {},
-                recommended_fix=primary.recommended_fixes[0]
-                if primary.recommended_fixes
-                else {},
+                recommended_fix=(
+                    primary.recommended_fixes[0] if primary.recommended_fixes else {}
+                ),
                 pytorch_baseline_ms=pytorch_baseline_time,
                 current_best_ms=best_time,
                 error_feedback=error_feedback if error_feedback else None,
@@ -272,21 +286,8 @@ class OptimizationOrchestrator:
                 if ncu_metrics:
                     best_ncu_metrics = ncu_metrics
 
-            # Roofline check for early termination
-            if ncu_metrics:
-                # Get Triton kernel metrics (filter out PyTorch kernels)
-                flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
-                roofline_check = self.roofline_analyzer.analyze(
-                    ncu_metrics=flat_metrics,
-                )
-
-                self.logger.info(
-                    f"[{round_num}] Roofline: {roofline_check.bottleneck}-bound, "
-                    f"{roofline_check.efficiency_pct:.1f}% SOL "
-                    f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
-                    f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
-                )
-
+            # Early termination check (using roofline computed at start of round)
+            if ncu_metrics and roofline_check:
                 should_stop, stop_reason = self.roofline_analyzer.should_stop(
                     roofline_check
                 )
@@ -296,6 +297,29 @@ class OptimizationOrchestrator:
                     )
                     early_stop_reason = stop_reason
                     break
+
+        # Profile the final kernel to get its roofline
+        if best_round_num > 0:
+            final_kernel_file = self.artifact_dir / f"kernel_round_{best_round_num}.py"
+            if final_kernel_file.exists():
+                self.logger.info(
+                    f"Profiling final best kernel (round {best_round_num})..."
+                )
+                final_profiler_results = self.profiler.profile_kernel(
+                    final_kernel_file, problem_file, best_round_num
+                )
+                if final_profiler_results and final_profiler_results.metrics:
+                    best_ncu_metrics = final_profiler_results.metrics
+                    final_flat_metrics = _get_triton_kernel_metrics(best_ncu_metrics)
+                    final_roofline = self.roofline_analyzer.analyze(
+                        ncu_metrics=final_flat_metrics,
+                    )
+                    self.logger.info(
+                        f"Final roofline (kernel_round_{best_round_num}): "
+                        f"{final_roofline.bottleneck}-bound, {final_roofline.efficiency_pct:.1f}% SOL "
+                        f"(Compute: {final_roofline.compute_sol_pct:.1f}%, "
+                        f"Memory: {final_roofline.memory_sol_pct:.1f}%)"
+                    )
 
         # Final results
         return self._finalize_results(
@@ -330,14 +354,14 @@ class OptimizationOrchestrator:
             self.logger.info(f"📊 Baseline time: {best_time:.4f} ms")
 
         # PyTorch baseline
-        if self.pytorch_baseline_time is not None:
-            pytorch_baseline_time = self.pytorch_baseline_time
-            if pytorch_baseline_time != float("inf"):
-                self.logger.info(
-                    f"📊 PyTorch baseline: {pytorch_baseline_time:.4f} ms (pre-computed)"
-                )
-            else:
-                pytorch_baseline_time = None
+        if (
+            self.pytorch_baseline_time is not None
+            and self.pytorch_baseline_time != float("inf")
+        ):
+            self.logger.info(
+                f"📊 PyTorch baseline: {self.pytorch_baseline_time:.4f} ms (pre-computed)"
+            )
+
         else:
             pytorch_results = self.benchmarker.benchmark_pytorch(problem_file)
             pytorch_baseline_time = pytorch_results.get("time_ms", float("inf"))
@@ -533,6 +557,7 @@ class OptimizationOrchestrator:
             self.logger.info(f"   Speedup vs PyTorch: {pytorch_speedup:.2f}x")
 
         self.logger.info(f"   Improvement: {improvement_percent:.1f}%")
+        self.logger.info("")
 
         # Save best kernel
         best_kernel_file = self.output_dir / "best_kernel.py"
