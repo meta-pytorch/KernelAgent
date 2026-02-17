@@ -352,14 +352,12 @@ class OptimizationOrchestrator:
             self.logger.info(f"📊 Baseline time: {best_time:.4f} ms")
 
         # PyTorch baseline
-        if self.pytorch_baseline_time is not None:
-            pytorch_baseline_time = self.pytorch_baseline_time
-            if pytorch_baseline_time != float("inf"):
+        if self.pytorch_baseline_time is not None and self.pytorch_baseline_time != float("inf"):
                 self.logger.info(
                     f"📊 PyTorch baseline: {pytorch_baseline_time:.4f} ms (pre-computed)"
                 )
-            else:
-                pytorch_baseline_time = None
+        else:
+             pytorch_baseline_time = None
         else:
             pytorch_results = self.benchmarker.benchmark_pytorch(problem_file)
             pytorch_baseline_time = pytorch_results.get("time_ms", float("inf"))
