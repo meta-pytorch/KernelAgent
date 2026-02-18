@@ -365,7 +365,9 @@ class VerificationWorker:
                         if round_data.get("stderr"):
                             history_context += f"Error: {round_data['stderr'][:2000]}\n"
                         if round_data.get("stdout"):
-                            history_context += f"Output: {round_data['stdout'][:1000]}\n"
+                            history_context += (
+                                f"Output: {round_data['stdout'][:1000]}\n"
+                            )
 
                 # Create refinement prompt using template
                 prompt = self.prompt_manager.render_kernel_refinement_prompt(
@@ -593,7 +595,6 @@ class VerificationWorker:
         if success:
             self.logger.info("✅ Verification passed on first attempt")
             return True, current_kernel, ""
-
 
         # Refinement loop
         for attempt in range(1, max_refine_attempts + 1):
