@@ -12,4 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Searching infrastructure for Optimization Kernel."""
+"""Searching infrastructure for kernel optimization.
+
+Provides program database, search strategies, and mutation strategies.
+"""
+
+from .history import (
+    JSONProgramDatabase,
+    ProgramDatabase,
+    ProgramEntry,
+    ProgramMetrics,
+)
+from .strategy import BeamSearchStrategy, GreedyStrategy, SearchStrategy
+
+__all__ = [
+    # Database
+    "ProgramDatabase",
+    "JSONProgramDatabase",
+    "ProgramEntry",
+    "ProgramMetrics",
+    # Strategies
+    "SearchStrategy",
+    "BeamSearchStrategy",
+    "GreedyStrategy",
+]

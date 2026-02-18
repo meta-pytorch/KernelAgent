@@ -12,15 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""History module for tracking optimization attempts.
+"""History module for tracking optimization programs.
 
-Provides persistent storage for kernel optimization attempts, enabling:
-- Resume: Continue runs after interruption
-- History: Track what was tried and outcomes
-- Learning: Use past attempts to guide exploration
+Provides persistent storage for kernel programs discovered during optimization,
+enabling resume, cross-pollination, and trajectory analysis.
 """
 
 from .records import AttemptRecord, Outcome
-from .store import AttemptStore, JsonAttemptStore
+from .store import ProgramDatabase
+from .models import ProgramEntry, ProgramMetrics
+from .json_db import JSONProgramDatabase
 
-__all__ = ["AttemptRecord", "Outcome", "AttemptStore", "JsonAttemptStore"]
+__all__ = [
+    "AttemptRecord",
+    "Outcome",
+    "ProgramDatabase",
+    "JSONProgramDatabase",
+    "ProgramEntry",
+    "ProgramMetrics",
+]

@@ -12,55 +12,109 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Strategies for controlling the optimization search loop.
+"""Protocol for search strategies controlling the optimization loop.
 
 Strategies decide:
-- Which parent to optimize next
+- Which parent to optimize next (candidate selection)
+- How many workers to spawn per round
 - When to stop (convergence, plateau, max rounds)
-- How to select the next generation of candidates
 """
 
-from typing import Protocol
+import logging
+from typing import Any, Protocol
 
-from ..history import AttemptRecord, AttemptStore
-from ..sampling import Sampler
+from ..history.models import ProgramEntry
 
 
-class Strategy(Protocol):
-    """Interface for optimization loop control."""
+class SearchStrategy(Protocol):
+    """Interface for optimization loop control.
 
-    def next_parent(self) -> AttemptRecord | None:
-        """Select the next parent to optimize from."""
+    Implementations must provide:
+    - initialize(): Set up with starting program
+    - select_candidates(): Choose programs to explore this round
+    - update_with_results(): Process worker results
+    - get_best_program(): Return best found so far
+    - should_terminate(): Check for early stopping
+    - num_workers_needed: Property for worker count
+    """
+
+    logger: logging.Logger
+    problem_id: str | None
+
+    def initialize(self, initial_program: ProgramEntry) -> None:
+        """Initialize the strategy with a starting program.
+
+        Must set self.problem_id from initial_program.problem_id.
+
+        Args:
+            initial_program: The initial kernel program to start from
+        """
         ...
 
-    def record_result(self, attempt: AttemptRecord) -> None:
-        """Record an optimization attempt result."""
+    def select_candidates(self, round_num: int) -> list[dict[str, Any]]:
+        """Select programs to explore this round.
+
+        Returns list of candidate specs for workers:
+        [
+            {
+                "parent": ProgramEntry,
+                "inspirations": list[ProgramEntry],
+                "bottleneck_id": int,
+            },
+            ...
+        ]
+
+        Args:
+            round_num: Current optimization round number
+
+        Returns:
+            List of candidate specifications for workers
+        """
         ...
 
-    def get_best(self) -> AttemptRecord | None:
-        """Get the best attempt so far."""
+    def update_with_results(
+        self, results: list[dict[str, Any]], round_num: int
+    ) -> None:
+        """Update strategy state with worker results.
+
+        Args:
+            results: List of result dicts from workers
+            round_num: Current optimization round number
+        """
         ...
 
-    def should_stop(self, round_num: int, max_rounds: int) -> bool:
-        """Check if optimization should terminate early."""
+    def get_best_program(self) -> ProgramEntry | None:
+        """Get the best program found so far.
+
+        Returns:
+            The best performing ProgramEntry, or None if none found
+        """
         ...
 
+    def should_terminate(self, round_num: int, max_rounds: int) -> bool:
+        """Check whether optimization should terminate early.
 
-class SimpleStrategy:
-    """Example Implementation: always pick best, stop at max rounds."""
+        Args:
+            round_num: Current optimization round number
+            max_rounds: Maximum allowed rounds
 
-    def __init__(self, store: AttemptStore, sampler: Sampler) -> None:
-        self.store = store
-        self.sampler = sampler
+        Returns:
+            True if optimization should stop, False to continue
+        """
+        ...
 
-    def next_parent(self) -> AttemptRecord | None:
-        return self.sampler.sample_parent()
+    @property
+    def num_workers_needed(self) -> int:
+        """Number of workers this strategy needs per round."""
+        ...
 
-    def record_result(self, attempt: AttemptRecord) -> None:
-        self.store.add(attempt)
+    def handle_worker_failure(self, worker_id: int, error: Exception) -> None:
+        """Handle a failed worker gracefully.
 
-    def get_best(self) -> AttemptRecord | None:
-        return self.store.get_best()
+        Default implementation logs a warning.
 
-    def should_stop(self, round_num: int, max_rounds: int) -> bool:
-        return round_num >= max_rounds
+        Args:
+            worker_id: ID of the failed worker
+            error: The exception that occurred
+        """
+        ...

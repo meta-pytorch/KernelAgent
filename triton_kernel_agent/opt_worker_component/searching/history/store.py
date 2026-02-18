@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Storage interface and implementations for optimization attempts.
+"""Protocol for program database storage.
 
-The attempt store provides persistent storage for kernel optimization
-attempts discovered during the search process. This enables:
+The program database provides persistent storage for kernel programs
+discovered during optimization. This enables:
 
 - Resume: Continue optimization runs after interruption
 - History: Track what was tried and what worked/failed
@@ -24,103 +24,102 @@ attempts discovered during the search process. This enables:
 
 Thread/process safety:
 - Only the main optimization loop should write to the store
-- Workers return results via queue; manager calls add()
+- Workers return results via queue; manager calls add_program()
 """
 
-import json
-from pathlib import Path
 from typing import Protocol
 
-from .records import AttemptRecord, Outcome
+from .models import ProgramEntry
 
 
-class AttemptStore(Protocol):
-    """Interface for storing and querying optimization attempts.
+class ProgramDatabase(Protocol):
+    """Interface for storing and querying optimization programs.
 
     Implementations must provide:
-    - add(): Store a new attempt
-    - get_recent(): Get recent attempts for history context
+    - add_program(): Store a new program entry
+    - get_program(): Retrieve a program by ID
     - get_top_k(): Get best performers for parent selection
-    - get_best(): Get single best attempt
-    - count(): Count total attempts
+    - get_all(): Get all programs, optionally filtered
+    - sample_inspirations(): Sample diverse programs for few-shot prompting
+    - save() / load(): Persist and restore state
+    - count(): Count total programs
     """
 
-    def add(self, attempt: AttemptRecord) -> None:
-        """Store an attempt."""
-        ...
+    def add_program(self, entry: ProgramEntry) -> str:
+        """Add a program to the database.
 
-    def get_recent(self, n: int) -> list[AttemptRecord]:
-        """Get the n most recent attempts (oldest first)."""
-        ...
+        Args:
+            entry: The program entry to add
 
-    def get_top_k(self, k: int) -> list[AttemptRecord]:
-        """Get the k best attempts by time_ms (fastest first)."""
-        ...
-
-    def get_best(self) -> AttemptRecord | None:
-        """Get the attempt with the lowest time_ms."""
-        ...
-
-    def count(self) -> int:
-        """Count total attempts in the store."""
-        ...
-
-
-class JsonAttemptStore:
-    """JSON file-based implementation of AttemptStore."""
-
-    def __init__(self, path: Path | str) -> None:
-        self.path = Path(path)
-        self._attempts: list[AttemptRecord] = []
-        self._load()
-
-    def _load(self) -> None:
-        """Load attempts from JSON file if it exists.
-
-        Falls back to empty store if the file is corrupted (e.g., partial write).
+        Returns:
+            The program ID
         """
-        if self.path.exists():
-            try:
-                with open(self.path) as f:
-                    data = json.load(f)
-                self._attempts = [AttemptRecord.from_dict(d) for d in data]
-            except (json.JSONDecodeError, KeyError) as e:
-                import warnings
+        ...
 
-                warnings.warn(f"Corrupted store at {self.path}, starting fresh: {e}")
-                self._attempts = []
+    def get_program(self, program_id: str) -> ProgramEntry | None:
+        """Get a program by its ID.
 
-    def _save(self) -> None:
-        """Save attempts to JSON file."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w") as f:
-            json.dump([a.to_dict() for a in self._attempts], f, indent=2)
+        Args:
+            program_id: The ID of the program to retrieve
 
-    def add(self, attempt: AttemptRecord) -> None:
-        """Store an attempt and persist to disk."""
-        self._attempts.append(attempt)
-        self._save()
-
-    def get_recent(self, n: int) -> list[AttemptRecord]:
-        """Get the n most recent attempts (oldest first)."""
-        return self._attempts[-n:]
-
-    def get_top_k(self, k: int) -> list[AttemptRecord]:
-        """Get the k best attempts by time_ms (fastest first).
-
-        Ties are broken by created_at (oldest first) for deterministic ordering.
+        Returns:
+            The program entry, or None if not found
         """
-        valid = [a for a in self._attempts if a.outcome != Outcome.FAILED]
-        sorted_by_time = sorted(valid, key=lambda a: (a.time_ms, a.created_at))
-        return sorted_by_time[:k]
+        ...
 
-    def get_best(self) -> AttemptRecord | None:
-        """Get the attempt with the lowest time_ms (excluding failed)."""
-        valid = [a for a in self._attempts if a.outcome != Outcome.FAILED]
-        if not valid:
-            return None
-        return min(valid, key=lambda a: a.time_ms)
+    def get_top_k(self, k: int, problem_id: str | None = None) -> list[ProgramEntry]:
+        """Get the top-k programs by performance (lowest time_ms first).
 
-    def count(self) -> int:
-        """Count total attempts in the store."""
-        return len(self._attempts)
+        Args:
+            k: Number of programs to return
+            problem_id: Optional filter by problem ID
+
+        Returns:
+            List of top-k program entries sorted by time_ms ascending
+        """
+        ...
+
+    def get_all(self, problem_id: str | None = None) -> list[ProgramEntry]:
+        """Get all programs, optionally filtered by problem.
+
+        Args:
+            problem_id: Optional filter by problem ID
+
+        Returns:
+            List of all matching program entries
+        """
+        ...
+
+    def sample_inspirations(
+        self, n: int, exclude_ids: list[str] | None = None, problem_id: str | None = None
+    ) -> list[ProgramEntry]:
+        """Sample diverse inspirations for few-shot prompting.
+
+        Args:
+            n: Number of inspirations to sample
+            exclude_ids: Program IDs to exclude from sampling
+            problem_id: Optional filter by problem ID
+
+        Returns:
+            List of sampled program entries
+        """
+        ...
+
+    def save(self) -> None:
+        """Persist the database to storage."""
+        ...
+
+    def load(self) -> None:
+        """Load the database from storage."""
+        ...
+
+    def count(self, problem_id: str | None = None) -> int:
+        """Count programs in the database.
+
+        Args:
+            problem_id: Optional filter by problem ID
+
+        Returns:
+            Number of programs
+        """
+        ...
