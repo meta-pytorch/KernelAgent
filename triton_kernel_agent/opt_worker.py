@@ -104,7 +104,7 @@ class OptimizationWorker:
         # Shared history from beam search manager
         prior_history: list[dict] | None = None,
         prior_reflexions: list[dict] | None = None,
-        use_rag: bool = True,
+        use_rag: bool = False,
     ):
         """
         Initialize the optimization worker.
@@ -226,7 +226,7 @@ class OptimizationWorker:
             artifacts_dir=self.artifact_dir,
             logs_dir=self.log_dir,
             ncu_bin_path=self.ncu_bin_path,
-            #profiling_semaphore=self.profiling_semaphore,
+            # profiling_semaphore=self.profiling_semaphore,
         )
 
         # Bottleneck analyzer
