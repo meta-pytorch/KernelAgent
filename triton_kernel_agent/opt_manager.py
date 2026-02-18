@@ -42,14 +42,22 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from triton_kernel_agent.opt_worker_component.searching.history.json_db import JSONProgramDatabase
+from triton_kernel_agent.opt_worker_component.searching.history.json_db import (
+    JSONProgramDatabase,
+)
 from triton_kernel_agent.opt_worker_component.searching.history.models import (
     ProgramEntry,
     ProgramMetrics,
 )
-from triton_kernel_agent.opt_worker_component.searching.strategy.strategy import SearchStrategy
-from triton_kernel_agent.opt_worker_component.searching.strategy.beam_search import BeamSearchStrategy
-from triton_kernel_agent.opt_worker_component.searching.strategy.greedy import GreedyStrategy
+from triton_kernel_agent.opt_worker_component.searching.strategy.strategy import (
+    SearchStrategy,
+)
+from triton_kernel_agent.opt_worker_component.searching.strategy.beam_search import (
+    BeamSearchStrategy,
+)
+from triton_kernel_agent.opt_worker_component.searching.strategy.greedy import (
+    GreedyStrategy,
+)
 
 
 class OptimizationManager:
@@ -128,9 +136,9 @@ class OptimizationManager:
         self.profiling_semaphore = mp.Semaphore(1)
 
         # Shared history across beam search iterations
-        self.shared_history: list[dict] = (
-            []
-        )  # List of serialized OptimizationAttempt dicts
+        self.shared_history: list[
+            dict
+        ] = []  # List of serialized OptimizationAttempt dicts
         self.shared_reflexions: list[dict] = []  # List of serialized Reflexion dicts
         self.history_size: int = 10  # Max history entries to pass to workers
 
@@ -188,10 +196,7 @@ class OptimizationManager:
                 logger=self.logger,
             )
         else:
-            raise ValueError(
-                f"Unknown strategy: {name}. "
-                f"Use 'beam_search' or 'greedy'"
-            )
+            raise ValueError(f"Unknown strategy: {name}. Use 'beam_search' or 'greedy'")
 
     def run_optimization(
         self,
@@ -241,7 +246,7 @@ class OptimizationManager:
         round_num = 0
         for round_num in range(1, max_rounds + 1):
             self.logger.info("")
-            self.logger.info(f"{'='*20} ROUND {round_num}/{max_rounds} {'='*20}")
+            self.logger.info(f"{'=' * 20} ROUND {round_num}/{max_rounds} {'=' * 20}")
 
             # 1. Get candidates from strategy
             candidates = self.strategy.select_candidates(round_num)
