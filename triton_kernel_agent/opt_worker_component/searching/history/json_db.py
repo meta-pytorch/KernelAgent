@@ -73,7 +73,10 @@ class JSONProgramDatabase(ProgramDatabase):
         return programs
 
     def sample_inspirations(
-        self, n: int, exclude_ids: list[str] | None = None, problem_id: str | None = None
+        self,
+        n: int,
+        exclude_ids: list[str] | None = None,
+        problem_id: str | None = None,
     ) -> list[ProgramEntry]:
         """Sample diverse inspirations - mix of top performers and random."""
         exclude_ids = exclude_ids or []
