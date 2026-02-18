@@ -119,7 +119,9 @@ class OptimizationAttempt:
                 f"Compute: {self.compute_sol_pct:.1f}%, Memory: {self.memory_sol_pct:.1f}%"
             )
         else:
-            lines.append(f"**Error**: {self.error_message[:200] if self.error_message else 'Unknown'}")
+            lines.append(
+                f"**Error**: {self.error_message[:200] if self.error_message else 'Unknown'}"
+            )
 
         return "\n".join(lines)
 
@@ -127,6 +129,7 @@ class OptimizationAttempt:
     def from_dict(cls, d: dict) -> OptimizationAttempt:
         valid_keys = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in d.items() if k in valid_keys})
+
 
 @dataclass
 class Reflexion:
@@ -401,21 +404,28 @@ class OptimizationOrchestrator:
 
             # Build optimization prompt using PromptManager with correct API
             # Select bottleneck based on bottleneck_id for beam search diversity
-            if self.bottleneck_id is not None and len(bottleneck_results) >= self.bottleneck_id:
+            if (
+                self.bottleneck_id is not None
+                and len(bottleneck_results) >= self.bottleneck_id
+            ):
                 primary = bottleneck_results[self.bottleneck_id - 1]  # 1-indexed
             else:
                 primary = bottleneck_results[0]
 
             # Get recent attempts for history (limit to history_size)
-            recent_attempts = list(self.attempt_history)[-self.history_size:]
+            recent_attempts = list(self.attempt_history)[-self.history_size :]
 
             # Create current attempt (will be completed after benchmarking)
             current_attempt = OptimizationAttempt(
                 round_num=round_num,
                 worker_id=0,
                 bottleneck_category=primary.category,
-                root_cause=primary.root_causes[0].get("cause", "") if primary.root_causes else "",
-                recommended_fix=primary.recommended_fixes[0].get("fix", "") if primary.recommended_fixes else "",
+                root_cause=primary.root_causes[0].get("cause", "")
+                if primary.root_causes
+                else "",
+                recommended_fix=primary.recommended_fixes[0].get("fix", "")
+                if primary.recommended_fixes
+                else "",
                 time_before_ms=best_runtime_time,
             )
 
@@ -432,7 +442,9 @@ class OptimizationOrchestrator:
                     opt_node, scores = self.rag_prescriber.retrieve(rag_query)
                     if opt_node is not None:
                         rag_context = self.rag_prescriber.build_context(opt_node)
-                        self.logger.info(f"[{round_num}] RAG retrieved pattern (len={len(rag_context)})")
+                        self.logger.info(
+                            f"[{round_num}] RAG retrieved pattern (len={len(rag_context)})"
+                        )
                 except Exception as e:
                     self.logger.warning(f"[{round_num}] RAG retrieval failed: {e}")
 
@@ -452,7 +464,9 @@ class OptimizationOrchestrator:
                 current_best_ms=best_runtime_time,
                 error_feedback=error_feedback if error_feedback else None,
                 recent_attempts=recent_attempts if recent_attempts else None,
-                reflexions=self.reflexions[-self.history_size:] if self.reflexions else None,
+                reflexions=self.reflexions[-self.history_size :]
+                if self.reflexions
+                else None,
                 rag_context=rag_context,
             )
 
@@ -511,7 +525,11 @@ class OptimizationOrchestrator:
                 if old_val != new_val:
                     config_changes[key] = f"{old_val}→{new_val}"
 
-            improvement_pct = ((best_runtime_time - new_time) / best_runtime_time * 100) if best_runtime_time > 0 else 0
+            improvement_pct = (
+                ((best_runtime_time - new_time) / best_runtime_time * 100)
+                if best_runtime_time > 0
+                else 0
+            )
             current_attempt.time_after_ms = new_time
             current_attempt.improvement_pct = improvement_pct
             current_attempt.is_improvement = new_time < best_runtime_time
@@ -521,8 +539,12 @@ class OptimizationOrchestrator:
 
             # Add SOL metrics from new kernel profiling
             if new_kernel_metrics:
-                current_attempt.compute_sol_pct = new_kernel_metrics.get("compute_sol_pct", 0.0)
-                current_attempt.memory_sol_pct = new_kernel_metrics.get("memory_sol_pct", 0.0)
+                current_attempt.compute_sol_pct = new_kernel_metrics.get(
+                    "compute_sol_pct", 0.0
+                )
+                current_attempt.memory_sol_pct = new_kernel_metrics.get(
+                    "memory_sol_pct", 0.0
+                )
                 current_attempt.combined_sol_pct = new_sol
 
             # Add attempt to history
@@ -750,7 +772,9 @@ class OptimizationOrchestrator:
                     for r in llm_results
                 ]
             else:
-                self.logger.warning(f"[{round_num}] LLM analysis failed, using empty root_causes/fixes")
+                self.logger.warning(
+                    f"[{round_num}] LLM analysis failed, using empty root_causes/fixes"
+                )
                 bottleneck_results = [
                     BottleneckResult(
                         category=self.bottleneck_override,
@@ -914,7 +938,9 @@ class OptimizationOrchestrator:
                 was_fix_effective=False,
                 reasoning=f"Attempt failed verification: {attempt.error_message[:200] if attempt.error_message else 'Unknown error'}",
                 lessons=["Ensure generated code passes correctness checks"],
-                avoid_patterns=[f"Similar approach to round {attempt.round_num} that failed verification"],
+                avoid_patterns=[
+                    f"Similar approach to round {attempt.round_num} that failed verification"
+                ],
                 try_patterns=[],
             )
 
@@ -933,7 +959,9 @@ class OptimizationOrchestrator:
             )
 
             # Save reflexion response
-            reflexion_file = self.artifact_dir / f"round{attempt.round_num:03d}_reflexion.txt"
+            reflexion_file = (
+                self.artifact_dir / f"round{attempt.round_num:03d}_reflexion.txt"
+            )
             with open(reflexion_file, "w") as f:
                 f.write(response_text)
 
@@ -942,10 +970,14 @@ class OptimizationOrchestrator:
             return reflexion_data
 
         except Exception as e:
-            self.logger.warning(f"[{attempt.round_num}] Failed to generate reflexion: {e}")
+            self.logger.warning(
+                f"[{attempt.round_num}] Failed to generate reflexion: {e}"
+            )
             return self._fallback_reflexion(attempt)
 
-    def _fallback_reflexion(self, attempt: OptimizationAttempt, reasoning: str | None = None) -> Reflexion:
+    def _fallback_reflexion(
+        self, attempt: OptimizationAttempt, reasoning: str | None = None
+    ) -> Reflexion:
         """Create a basic reflexion from attempt data when LLM is unavailable."""
         return Reflexion(
             round_num=attempt.round_num,
@@ -956,7 +988,8 @@ class OptimizationOrchestrator:
             performance_delta_pct=attempt.improvement_pct,
             was_diagnosis_correct=attempt.is_improvement,
             was_fix_effective=attempt.is_improvement,
-            reasoning=reasoning or f"Performance changed by {attempt.improvement_pct:+.1f}%",
+            reasoning=reasoning
+            or f"Performance changed by {attempt.improvement_pct:+.1f}%",
             lessons=[],
             avoid_patterns=[],
             try_patterns=[],
@@ -975,11 +1008,17 @@ class OptimizationOrchestrator:
                     round_num=attempt.round_num,
                     root_cause_diagnosed=attempt.root_cause,
                     fix_applied=attempt.recommended_fix,
-                    expected_outcome=data.get("expected_outcome", "Improve performance"),
+                    expected_outcome=data.get(
+                        "expected_outcome", "Improve performance"
+                    ),
                     actual_outcome=data.get("actual_outcome", ""),
                     performance_delta_pct=attempt.improvement_pct,
-                    was_diagnosis_correct=data.get("was_diagnosis_correct", attempt.is_improvement),
-                    was_fix_effective=data.get("was_fix_effective", attempt.is_improvement),
+                    was_diagnosis_correct=data.get(
+                        "was_diagnosis_correct", attempt.is_improvement
+                    ),
+                    was_fix_effective=data.get(
+                        "was_fix_effective", attempt.is_improvement
+                    ),
                     reasoning=data.get("reasoning", ""),
                     lessons=data.get("lessons", []),
                     avoid_patterns=data.get("avoid_patterns", []),
