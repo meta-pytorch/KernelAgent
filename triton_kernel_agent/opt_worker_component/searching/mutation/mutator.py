@@ -22,7 +22,7 @@ Mutators build prompts for the LLM to optimize kernels, including:
 
 from typing import Protocol
 
-from ..history import AttemptRecord, AttemptStore
+from ..history import AttemptRecord, ProgramDatabase
 
 
 class Mutator(Protocol):
@@ -40,7 +40,7 @@ class Mutator(Protocol):
 class SimpleMutator:
     """Minimal mutator: basic prompt with kernel and history."""
 
-    def __init__(self, store: AttemptStore) -> None:
+    def __init__(self, store: ProgramDatabase) -> None:
         self.store = store
 
     def build_prompt(self, parent: AttemptRecord) -> str:

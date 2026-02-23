@@ -1,0 +1,60 @@
+{#
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+#}
+
+Analyze this kernel optimization attempt and generate a self-reflection.
+
+## Attempt Details
+- Round: {{ attempt.round_num }}
+- Bottleneck: {{ attempt.bottleneck_category }}
+- Root Cause: {{ attempt.root_cause }}
+- Fix Applied: {{ attempt.recommended_fix }}
+{% if attempt.config_changes %}
+- Config Changes: {% for key, val in attempt.config_changes.items() %}{{ key }}={{ val }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% else %}
+- Config Changes: none
+{% endif %}
+
+## Results
+- Performance: {{ "%.4f"|format(attempt.time_before_ms) }}ms → {{ "%.4f"|format(attempt.time_after_ms) }}ms
+- Improvement: {{ "%+.1f"|format(attempt.improvement_pct) }}%
+- NCU SOL: Compute {{ "%.1f"|format(attempt.compute_sol_pct) }}%, Memory {{ "%.1f"|format(attempt.memory_sol_pct) }}%
+- Passed Verification: {{ "Yes" if attempt.passed_verification else "No" }}
+{% if not attempt.passed_verification and attempt.error_message %}
+- Error: {{ attempt.error_message[:200] }}
+{% endif %}
+
+## Task
+Analyze whether the bottleneck diagnosis was correct and whether the applied fix was effective.
+Consider:
+1. Did the performance change align with what was expected from fixing a {{ attempt.bottleneck_category }} bottleneck?
+2. Did the NCU SOL metrics improve in the expected area?
+3. What can we learn from this attempt for future optimization rounds?
+
+Respond with a JSON object containing the following fields:
+```json
+{
+    "was_diagnosis_correct": true or false,
+    "was_fix_effective": true or false,
+    "expected_outcome": "Brief description of what you expected to happen",
+    "actual_outcome": "Brief description of what actually happened",
+    "reasoning": "Explanation of why the fix worked or didn't work, citing specific metrics",
+    "lessons": ["Lesson 1 learned from this attempt", "Lesson 2..."],
+    "avoid_patterns": ["Pattern or approach to avoid in future rounds"],
+    "try_patterns": ["Pattern or approach to prioritize in future rounds"]
+}
+```
+
+Generate the JSON response:

@@ -12,8 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Strategy module for controlling the optimization loop."""
+"""Strategy module for controlling the optimization search loop."""
 
-from .strategy import SimpleStrategy, Strategy
+from .strategy import SearchStrategy
+from .beam_search import BeamSearchStrategy
+from .greedy import GreedyStrategy
 
-__all__ = ["Strategy", "SimpleStrategy"]
+__all__ = [
+    "SearchStrategy",
+    "BeamSearchStrategy",
+    "GreedyStrategy",
+]
