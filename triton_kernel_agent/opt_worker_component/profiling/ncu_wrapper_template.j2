@@ -56,6 +56,10 @@ except Exception:
 required_dtype = None
 {% endif %}
 
+# Validate dtype wasn't corrupted by kernel import side effects
+if required_dtype is not None and not isinstance(required_dtype, torch.dtype):
+    required_dtype = None
+
 # Prepare inputs: move to CUDA and convert dtype if needed
 # IMPORTANT: Only convert floating-point tensors; preserve integer tensors (e.g., class labels)
 cuda_inputs = []
@@ -75,70 +79,172 @@ for inp in inputs:
 {% if model_extraction %}
 # Check if this is a conv-like kernel that needs a Model to extract weights
 needs_model = False
+has_var_positional = False
+has_var_keyword = False
+kernel_params = []
 try:
     sig = inspect.signature(kernel_function)
-    params = list(sig.parameters.keys())
-    # Check if kernel expects 'weight' parameter (common for Conv, Linear, etc.)
-    if 'weight' in params:
+    kernel_params = [
+        name for name, p in sig.parameters.items()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    param_kinds = [p.kind for p in sig.parameters.values()]
+    has_var_positional = any(k == inspect.Parameter.VAR_POSITIONAL for k in param_kinds)
+    has_var_keyword = any(k == inspect.Parameter.VAR_KEYWORD for k in param_kinds)
+    # Check if kernel expects model-derived parameters:
+    # - 'weight' / 'w' for Conv, Linear, Norm layers
+    # - pooling scalars (kernel_size, stride, padding, dilation) for Pool layers
+    _MODEL_PARAM_NAMES = {'weight', 'w', 'kernel_size', 'stride', 'padding', 'dilation'}
+    if _MODEL_PARAM_NAMES.intersection(kernel_params):
         needs_model = True
+    # If kernel uses *args/**kwargs, inspect source for weight-related patterns
+    if not needs_model and (has_var_positional or has_var_keyword):
+        try:
+            src = inspect.getsource(kernel_function)
+            needs_model = any(kw in src for kw in ("weight", "is_weight",
+                                                     "w.shape", "w.ndim",
+                                                     "kernel_size", "dilation"))
+        except (OSError, TypeError):
+            pass
 except Exception:
     pass
 
+# Layer type tuples for isinstance checks
+_CONV_TYPES = (
+    torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d,
+    torch.nn.ConvTranspose1d, torch.nn.ConvTranspose2d, torch.nn.ConvTranspose3d,
+)
+_NORM_TYPES = (
+    torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d,
+    torch.nn.LayerNorm, torch.nn.GroupNorm,
+    torch.nn.InstanceNorm1d, torch.nn.InstanceNorm2d, torch.nn.InstanceNorm3d,
+)
+_POOL_TYPES = (
+    torch.nn.MaxPool1d, torch.nn.MaxPool2d, torch.nn.MaxPool3d,
+    torch.nn.AvgPool1d, torch.nn.AvgPool2d, torch.nn.AvgPool3d,
+    torch.nn.AdaptiveAvgPool1d, torch.nn.AdaptiveAvgPool2d, torch.nn.AdaptiveAvgPool3d,
+    torch.nn.AdaptiveMaxPool1d, torch.nn.AdaptiveMaxPool2d, torch.nn.AdaptiveMaxPool3d,
+)
+
+# Extract model parameters into a flat dict
+model_params = {}
+_all_weights = []  # ordered list of all conv/linear weights for *args kernels
+
 if needs_model and has_model and init_inputs:
-    # Initialize model to extract weight and bias
     try:
         model = Model(*init_inputs) if init_inputs else Model()
     except TypeError:
-        # Model initialization failed, use fallback
         model = Model()
 
-    # Move model to CUDA and convert dtype
     model = model.cuda()
     if required_dtype is not None:
         model = model.to(required_dtype)
 
-    # Extract weight and bias from model
-    # Check various possible attribute names
-    weight = None
-    bias = None
-    layer = None
-    for attr_name in ['conv1', 'conv2', 'conv3', 'conv1d', 'conv2d', 'conv', 'conv3d', 'linear', 'fc']:
-        if hasattr(model, attr_name):
-            layer = getattr(model, attr_name)
-            if hasattr(layer, 'weight'):
-                weight = layer.weight
-                bias = layer.bias if hasattr(layer, 'bias') else None
-                break
+    for _, module in model.named_modules():
+        if isinstance(module, (*_CONV_TYPES, torch.nn.Linear)):
+            if hasattr(module, 'weight') and module.weight is not None:
+                _all_weights.append(module.weight)
+                model_params.setdefault('weight', module.weight)
+                model_params.setdefault('w', module.weight)
+                if getattr(module, 'bias', None) is not None:
+                    model_params.setdefault('conv_bias', module.bias)
+                    model_params.setdefault('bias', module.bias)
+                for attr in ('stride', 'padding', 'dilation', 'output_padding'):
+                    val = getattr(module, attr, None)
+                    if val is not None:
+                        model_params.setdefault(attr, val)
+                if hasattr(module, 'groups'):
+                    model_params.setdefault('groups', module.groups)
+                # NO break — collect all conv/linear weights
 
-    if weight is not None and layer is not None:
-        # Build arguments for kernel_function using keyword arguments
-        # to avoid positional argument misalignment issues
-        kernel_kwargs = {}  # Empty dict
+        elif isinstance(module, _NORM_TYPES):
+            if getattr(module, 'weight', None) is not None:
+                model_params.setdefault('weight', module.weight)
+                model_params.setdefault('w', module.weight)
+            if getattr(module, 'bias', None) is not None:
+                model_params.setdefault('bias', module.bias)
+            if hasattr(module, 'eps'):
+                model_params['eps'] = module.eps
+            if hasattr(module, 'num_groups'):
+                model_params['num_groups'] = module.num_groups
+            if hasattr(module, 'normalized_shape'):
+                model_params['normalized_shape'] = module.normalized_shape
 
-        # Add conv/linear-specific parameters if they exist
-        if hasattr(layer, 'stride'):
-            stride = layer.stride[0] if isinstance(layer.stride, (tuple, list)) else layer.stride
-            kernel_kwargs['stride'] = stride
-        if hasattr(layer, 'padding'):
-            padding = layer.padding[0] if isinstance(layer.padding, (tuple, list)) else layer.padding
-            kernel_kwargs['padding'] = padding
-        if hasattr(layer, 'dilation'):
-            dilation = layer.dilation[0] if isinstance(layer.dilation, (tuple, list)) else layer.dilation
-            kernel_kwargs['dilation'] = dilation
-        if hasattr(layer, 'groups'):
-            kernel_kwargs['groups'] = layer.groups
+        elif isinstance(module, _POOL_TYPES):
+            for attr in ('kernel_size', 'stride', 'padding', 'dilation'):
+                val = getattr(module, attr, None)
+                if val is not None:
+                    model_params.setdefault(attr, val)
 
-        # Call kernel with extracted parameters
-        output = kernel_function(cuda_inputs[0], weight, bias, **kernel_kwargs)
+    # Top-level bias on model itself (fusion kernels like Conv+ReLU+BiasAdd)
+    if hasattr(model, 'bias') and isinstance(model.bias, (torch.Tensor, torch.nn.Parameter)):
+        model_params['add_bias'] = model.bias
+        model_params.setdefault('bias', model.bias)
+        if not model_params['add_bias'].is_cuda:
+            model_params['add_bias'] = model_params['add_bias'].cuda()
+        if required_dtype is not None and model_params['add_bias'].is_floating_point():
+            model_params['add_bias'] = model_params['add_bias'].to(required_dtype)
+
+
+def run_kernel():
+    """Helper to run the kernel with appropriate arguments."""
+    {% if model_extraction %}
+    if needs_model and model_params:
+        if has_var_positional and _all_weights:
+            # *args kernel: pass (inputs + weights) positionally, config as kwargs
+            pos_args = list(cuda_inputs) + list(_all_weights)
+            config_kwargs = {}
+            for k, v in model_params.items():
+                if k not in ('weight', 'w', 'bias', 'conv_bias', 'add_bias'):
+                    if isinstance(v, (tuple, list)) and len(v) >= 1 and all(e == v[0] for e in v):
+                        v = v[0]
+                    config_kwargs[k] = v
+            return kernel_function(*pos_args, **config_kwargs)
+        else:
+            # Signature-based matching: fill kernel params from model_params or
+            # from cuda_inputs (positionally) for params not in model_params.
+            bound = {}
+            positional_idx = 0
+            for pname in kernel_params:
+                if pname in model_params:
+                    v = model_params[pname]
+                    if isinstance(v, (tuple, list)) and len(v) >= 1 and all(e == v[0] for e in v):
+                        v = v[0]
+                    bound[pname] = v
+                elif positional_idx < len(cuda_inputs):
+                    bound[pname] = cuda_inputs[positional_idx]
+                    positional_idx += 1
+            return kernel_function(**bound)
     else:
-        # Fallback to original behavior
-        output = kernel_function(*cuda_inputs, *init_inputs)
-else:
+        return kernel_function(*cuda_inputs, *init_inputs)
+    {% else %}
+    return kernel_function(*cuda_inputs, *init_inputs)
+    {% endif %}
+
+
+# Warmup phase: Complete autotuning and JIT compilation BEFORE NCU profiling
+# NCU uses --launch-skip to skip these warmup launches
+# This ensures NCU only profiles the optimized kernel, not autotuning overhead
+WARMUP_ITERATIONS = 3
+for _ in range(WARMUP_ITERATIONS):
+    _ = run_kernel()
+torch.cuda.synchronize()
+
+# Main execution: This is what NCU will profile (after skipping warmup launches)
+{% else %}
+def run_kernel():
+    """Helper to run the kernel with appropriate arguments."""
+    return kernel_function(*cuda_inputs, *init_inputs)
+
+
+# Warmup phase: Complete autotuning and JIT compilation BEFORE NCU profiling
+WARMUP_ITERATIONS = 3
+for _ in range(WARMUP_ITERATIONS):
+    _ = run_kernel()
+torch.cuda.synchronize()
+
+# Main execution: This is what NCU will profile (after skipping warmup launches)
 {% endif %}
-    # Run kernel with both tensor inputs and initialization inputs
-    # For example: RMSNorm needs kernel_function(x, features, eps)
-    # For cross-entropy: kernel_function(predictions, targets)
-    # where inputs come from get_inputs() and init_inputs from get_init_inputs()
-    output = kernel_function(*cuda_inputs, *init_inputs)
+output = run_kernel()
 
 print("Kernel executed successfully, output shape: " + str(output.shape if hasattr(output, 'shape') else type(output)))
