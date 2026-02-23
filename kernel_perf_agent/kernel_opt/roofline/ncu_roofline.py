@@ -110,7 +110,7 @@ class RooflineAnalyzer:
         """
         Classify bottleneck based on SOL metrics.
 
-        The LOWER SOL value indicates the bottleneck.
+        The HIGHER SOL value indicates the bottleneck (the resource closest to its theoretical peak)
         If both are lower than threshold, the kernel is underutilized (could be occupancy,
         instruction mix, launch config, dependency stalls, etc.).
         """
@@ -120,8 +120,7 @@ class RooflineAnalyzer:
         if memory_sol < threshold and compute_sol < threshold:
             return "underutilized"
 
-        # Return whichever is lower
-        if memory_sol <= compute_sol:
+        if memory_sol >= compute_sol:
             return "memory"
         else:
             return "compute"

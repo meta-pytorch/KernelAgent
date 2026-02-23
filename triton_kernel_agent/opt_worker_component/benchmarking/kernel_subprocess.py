@@ -44,51 +44,102 @@ import torch
 import triton.testing as tt
 
 
-def _extract_model_params(
-    model: torch.nn.Module,
-) -> tuple[torch.Tensor | None, torch.Tensor | None, dict[str, Any]]:
-    """Extract weight, bias, and layer parameters from a PyTorch model.
+_CONV_TYPES = (
+    torch.nn.Conv1d,
+    torch.nn.Conv2d,
+    torch.nn.Conv3d,
+    torch.nn.ConvTranspose1d,
+    torch.nn.ConvTranspose2d,
+    torch.nn.ConvTranspose3d,
+)
+_NORM_TYPES = (
+    torch.nn.BatchNorm1d,
+    torch.nn.BatchNorm2d,
+    torch.nn.BatchNorm3d,
+    torch.nn.LayerNorm,
+    torch.nn.GroupNorm,
+    torch.nn.InstanceNorm1d,
+    torch.nn.InstanceNorm2d,
+    torch.nn.InstanceNorm3d,
+)
+_POOL_TYPES = (
+    torch.nn.MaxPool1d,
+    torch.nn.MaxPool2d,
+    torch.nn.MaxPool3d,
+    torch.nn.AvgPool1d,
+    torch.nn.AvgPool2d,
+    torch.nn.AvgPool3d,
+    torch.nn.AdaptiveAvgPool1d,
+    torch.nn.AdaptiveAvgPool2d,
+    torch.nn.AdaptiveAvgPool3d,
+    torch.nn.AdaptiveMaxPool1d,
+    torch.nn.AdaptiveMaxPool2d,
+    torch.nn.AdaptiveMaxPool3d,
+)
 
-    Searches for Conv or Linear layers and extracts their parameters.
 
-    Args:
-        model: PyTorch model to extract parameters from
+def _extract_model_params(model: torch.nn.Module) -> tuple[dict[str, Any], list]:
+    """Extract all learnable parameters and layer config from a PyTorch model.
+
+    Walks model submodules and extracts weights, biases, and layer-specific
+    hyperparameters (stride, padding, etc.) into a flat dict keyed by
+    parameter name.  The keys are chosen to match common kernel function
+    signatures (``weight``, ``bias``, ``conv_bias``, ``stride``, …).
 
     Returns:
-        Tuple of (weight, bias, layer_kwargs) where layer_kwargs contains
-        stride, padding, dilation, groups if applicable
+        Tuple of (flat dict mapping parameter names to values,
+                  ordered list of all conv/linear weight tensors).
     """
+    params: dict[str, Any] = {}
+    all_weights: list = []
+
     for _, module in model.named_modules():
-        if isinstance(
-            module,
-            (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d, torch.nn.Linear),
-        ):
+        if isinstance(module, (*_CONV_TYPES, torch.nn.Linear)):
             if hasattr(module, "weight") and module.weight is not None:
-                weight = module.weight
-                bias = getattr(module, "bias", None)
+                all_weights.append(module.weight)
+                params.setdefault("weight", module.weight)
+                params.setdefault("w", module.weight)  # alias
+                if getattr(module, "bias", None) is not None:
+                    params.setdefault("conv_bias", module.bias)
+                    params.setdefault("bias", module.bias)
 
-                layer_kwargs: dict[str, Any] = {}
-                if hasattr(module, "stride"):
-                    stride = module.stride
-                    layer_kwargs["stride"] = (
-                        stride[0] if isinstance(stride, (tuple, list)) else stride
-                    )
-                if hasattr(module, "padding"):
-                    padding = module.padding
-                    layer_kwargs["padding"] = (
-                        padding[0] if isinstance(padding, (tuple, list)) else padding
-                    )
-                if hasattr(module, "dilation"):
-                    dilation = module.dilation
-                    layer_kwargs["dilation"] = (
-                        dilation[0] if isinstance(dilation, (tuple, list)) else dilation
-                    )
+                # Conv / ConvTranspose hyperparameters
+                for attr in ("stride", "padding", "dilation", "output_padding"):
+                    val = getattr(module, attr, None)
+                    if val is not None:
+                        params.setdefault(attr, val)
                 if hasattr(module, "groups"):
-                    layer_kwargs["groups"] = module.groups
+                    params.setdefault("groups", module.groups)
 
-                return weight, bias, layer_kwargs
+                # NO break — collect all conv/linear weights
 
-    return None, None, {}
+        elif isinstance(module, _NORM_TYPES):
+            if getattr(module, "weight", None) is not None:
+                params.setdefault("weight", module.weight)
+                params.setdefault("w", module.weight)
+            if getattr(module, "bias", None) is not None:
+                params.setdefault("bias", module.bias)
+            if hasattr(module, "eps"):
+                params["eps"] = module.eps
+            if hasattr(module, "num_groups"):
+                params["num_groups"] = module.num_groups
+            if hasattr(module, "normalized_shape"):
+                params["normalized_shape"] = module.normalized_shape
+
+        elif isinstance(module, _POOL_TYPES):
+            for attr in ("kernel_size", "stride", "padding", "dilation"):
+                val = getattr(module, attr, None)
+                if val is not None:
+                    params.setdefault(attr, val)
+
+    # Top-level bias on the model itself (for fusion kernels like Conv+ReLU+BiasAdd)
+    if hasattr(model, "bias") and isinstance(
+        model.bias, (torch.Tensor, torch.nn.Parameter)
+    ):
+        params["add_bias"] = model.bias
+        params.setdefault("bias", model.bias)
+
+    return params, all_weights
 
 
 def _run_once(
@@ -228,28 +279,62 @@ def _prepare_kernel(
     device: torch.device,
     dtype: torch.dtype,
     quiet: bool = False,
-) -> tuple[Callable, tuple, list]:
+) -> tuple[Callable, list]:
     """Load kernel and wrap it with model parameters if needed.
 
     Returns:
-        Tuple of (kernel_function, kernel_args, kernel_init_args)
+        Tuple of (kernel_function, kernel_init_args) where kernel_init_args
+        is always [] (model params are baked into the wrapper).
     """
     kernel_function = load_kernel_function(kernel_file)
 
-    # Check if kernel expects weight/bias parameters
+    # Check if kernel expects model-derived parameters:
+    # - 'weight' / 'w' for Conv, Linear, Norm layers
+    # - pooling scalars (kernel_size, stride, padding, dilation) for Pool layers
+    _MODEL_PARAM_NAMES = {"weight", "w", "kernel_size", "stride", "padding", "dilation"}
     needs_model = False
+    has_var_positional = False
+    has_var_keyword = False
+    kernel_params: list[str] = []
     try:
         sig = inspect.signature(kernel_function)
-        if "weight" in sig.parameters:
+        kernel_params = [
+            name
+            for name, p in sig.parameters.items()
+            if p.kind
+            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        ]
+        param_kinds = [p.kind for p in sig.parameters.values()]
+        has_var_positional = any(
+            k == inspect.Parameter.VAR_POSITIONAL for k in param_kinds
+        )
+        has_var_keyword = any(k == inspect.Parameter.VAR_KEYWORD for k in param_kinds)
+        if _MODEL_PARAM_NAMES.intersection(kernel_params):
             needs_model = True
+        # If kernel uses *args/**kwargs, inspect source for weight-related patterns
+        if not needs_model and (has_var_positional or has_var_keyword):
+            try:
+                src = inspect.getsource(kernel_function)
+                needs_model = any(
+                    kw in src
+                    for kw in (
+                        "weight",
+                        "is_weight",
+                        "w.shape",
+                        "w.ndim",
+                        "kernel_size",
+                        "dilation",
+                    )
+                )
+            except (OSError, TypeError):
+                pass
     except Exception:
         pass
 
-    kernel_init_args = init_inputs
+    kernel_init_args: list = []
 
     if needs_model and Model is not None:
         try:
-            # Reuse baseline model if available
             extract_model = baseline_model
             if extract_model is None:
                 extract_model = (
@@ -258,20 +343,67 @@ def _prepare_kernel(
                     else Model().to(device=device, dtype=dtype)
                 )
 
-            weight, bias, kernel_kwargs = _extract_model_params(extract_model)
+            model_params, all_weights = _extract_model_params(extract_model)
 
-            if weight is not None:
+            if model_params:
                 original_fn = kernel_function
 
-                def kernel_with_model(*args, **kwargs):
-                    return original_fn(args[0], weight, bias, **kernel_kwargs)
+                if has_var_positional and all_weights:
+                    # *args kernel: pass (inputs + weights) positionally,
+                    # config as kwargs with uniform tuples collapsed to scalars
+                    def kernel_with_model_varargs(*args, **kwargs):
+                        pos_args = list(args) + list(all_weights)
+                        config_kwargs = {}
+                        for k, v in model_params.items():
+                            if k not in (
+                                "weight",
+                                "w",
+                                "bias",
+                                "conv_bias",
+                                "add_bias",
+                            ):
+                                if (
+                                    isinstance(v, (tuple, list))
+                                    and len(v) >= 1
+                                    and all(e == v[0] for e in v)
+                                ):
+                                    v = v[0]
+                                config_kwargs[k] = v
+                        return original_fn(*pos_args, **config_kwargs)
 
-                kernel_function = kernel_with_model
-                kernel_init_args = []
+                    kernel_function = kernel_with_model_varargs
+                else:
+                    # Build a wrapper that maps extracted params into the kernel
+                    # signature by name.  Positional args (from *inputs) fill the
+                    # leading parameters that are NOT found in model_params.
+                    def kernel_with_model(*args, **kwargs):
+                        bound: dict[str, Any] = {}
+                        positional_idx = 0
+                        for pname in kernel_params:
+                            if pname in model_params:
+                                v = model_params[pname]
+                                if (
+                                    isinstance(v, (tuple, list))
+                                    and len(v) >= 1
+                                    and all(e == v[0] for e in v)
+                                ):
+                                    v = v[0]
+                                bound[pname] = v
+                            elif positional_idx < len(args):
+                                bound[pname] = args[positional_idx]
+                                positional_idx += 1
+                        return original_fn(**bound)
+
+                    kernel_function = kernel_with_model
         except Exception as exc:
             if not quiet:
                 print(f"⚠️  Warning: Failed to extract model parameters: {exc}")
                 print("   Falling back to direct kernel invocation")
+
+    # For kernels that don't need model extraction but have init_inputs
+    # (e.g., dim parameter for reduction ops), pass them as positional args
+    if not needs_model and init_inputs:
+        kernel_init_args = init_inputs
 
     return kernel_function, kernel_init_args
 
@@ -293,6 +425,18 @@ def main():
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
     }[args.dtype]
+
+    # Auto-detect dtype from kernel source (matches NCU wrapper's dtype inference)
+    try:
+        kernel_source = args.kernel.read_text()
+        if "bfloat16" in kernel_source.lower():
+            dtype = torch.bfloat16
+        elif "float16" in kernel_source.lower() or "half" in kernel_source.lower():
+            dtype = torch.float16
+        elif "float32" in kernel_source.lower():
+            dtype = torch.float32
+    except Exception:
+        pass
 
     if not args.quiet:
         print("=" * 80)
