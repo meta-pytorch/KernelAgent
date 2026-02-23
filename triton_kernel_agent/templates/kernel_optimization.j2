@@ -69,6 +69,34 @@ PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms
 **Recommended Fix:** {{ bottleneck.recommended_fix.fix }}
 {%- if bottleneck.recommended_fix.rationale %} ({{ bottleneck.recommended_fix.rationale }}){% endif %}
 
+
+{% if rag_context %}
+RELEVANT OPTIMIZATION PATTERNS (Retrieved from knowledge base):
+Study these techniques and code examples carefully. Adapt the patterns to the current kernel.
+
+{{ rag_context }}
+{% endif %}
+
+{% if recent_attempts %}
+RECENT OPTIMIZATION ATTEMPTS:
+{% for attempt in recent_attempts %}
+{{ attempt.format_for_prompt() }}
+
+{% endfor %}
+{% endif %}
+
+{% if reflexions %}
+SELF-REFLECTION ANALYSIS:
+{% for reflexion in reflexions %}
+{{ reflexion.format_for_prompt() }}
+
+{% endfor %}
+
+Guidance for this round:
+- AVOID: {% for r in reflexions %}{% for p in r.avoid_patterns %}{{ p }}{% if not loop.last %}; {% endif %}{% endfor %}{% if not loop.last %}; {% endif %}{% endfor %}
+- PRIORITIZE: {% for r in reflexions %}{% for p in r.try_patterns %}{{ p }}{% if not loop.last %}; {% endif %}{% endfor %}{% if not loop.last %}; {% endif %}{% endfor %}
+{% endif %}
+
 {% if error_feedback %}
 ## PREVIOUS ATTEMPT FAILED
 {{ error_feedback }}

@@ -16,7 +16,7 @@
 
 from pathlib import Path
 
-from triton_kernel_agent.platform_config import PlatformConfig, get_platform
+from triton_kernel_agent.platform_config import get_platform, PlatformConfig
 
 try:
     from jinja2 import Environment, FileSystemLoader, Template
@@ -83,7 +83,7 @@ class PromptManager:
         """Load all available templates."""
         self.templates = {}
 
-        # Define template mappings
+        # Define template mappings (required templates)
         template_files = {
             "test_generation": "test_generation.j2",
             "kernel_generation": "kernel_generation.j2",
@@ -92,13 +92,24 @@ class PromptManager:
             "triton_guidelines": "triton_guidelines.j2",
         }
 
-        # Load each template
+        # Optional templates (loaded if present)
+        optional_template_files = {
+            "reflexion_prompt": "reflexion_prompt.j2",
+        }
+
+        # Load required templates
         for template_name, template_file in template_files.items():
             template_path = self.templates_dir / template_file
             if template_path.exists():
                 self.templates[template_name] = self.env.get_template(template_file)
             else:
                 raise FileNotFoundError(f"Template file not found: {template_path}")
+
+        # Load optional templates
+        for template_name, template_file in optional_template_files.items():
+            template_path = self.templates_dir / template_file
+            if template_path.exists():
+                self.templates[template_name] = self.env.get_template(template_file)
 
     def render_test_generation_prompt(
         self, problem_description: str, provided_test_code: str | None = None
@@ -209,6 +220,9 @@ class PromptManager:
         pytorch_baseline_ms: float | None = None,
         current_best_ms: float | None = None,
         error_feedback: str | None = None,
+        recent_attempts: list | None = None,
+        reflexions: list | None = None,
+        rag_context: str | None = None,
     ) -> str:
         """
         Render the kernel optimization prompt.
@@ -228,6 +242,9 @@ class PromptManager:
             pytorch_baseline_ms: PyTorch Eager baseline time in ms
             current_best_ms: Current best kernel time in ms (for iterative opt)
             error_feedback: Error message from previous failed attempt
+            recent_attempts: List of recent OptimizationAttempt objects for history
+            reflexions: List of Reflexion objects for self-reflection analysis
+            rag_context: Optional RAG-retrieved context with optimization patterns and code examples
 
         Returns:
             Rendered prompt string
@@ -251,7 +268,62 @@ class PromptManager:
             pytorch_baseline_ms=pytorch_baseline_ms,
             current_best_ms=current_best_ms,
             error_feedback=error_feedback,
+            recent_attempts=recent_attempts,
+            reflexions=reflexions,
+            rag_context=rag_context,
         )
+
+    def render_reflexion_prompt(self, attempt) -> str:
+        """
+        Render the reflexion prompt for analyzing an optimization attempt.
+
+        Args:
+            attempt: OptimizationAttempt object with attempt details
+
+        Returns:
+            Rendered prompt string for reflexion generation
+        """
+        if "reflexion_prompt" not in self.templates:
+            # Fallback if template not loaded - return inline prompt
+            return self._inline_reflexion_prompt(attempt)
+
+        template = self.templates["reflexion_prompt"]
+        return template.render(attempt=attempt)
+
+    def _inline_reflexion_prompt(self, attempt) -> str:
+        """Generate inline reflexion prompt when template is not available."""
+        config_str = (
+            ", ".join(f"{k}={v}" for k, v in attempt.config_changes.items())
+            if attempt.config_changes
+            else "no changes"
+        )
+
+        return f"""Analyze this kernel optimization attempt and generate a self-reflection.
+
+## Attempt Details
+- Round: {attempt.round_num}
+- Bottleneck: {attempt.bottleneck_category}
+- Root Cause: {attempt.root_cause}
+- Fix Applied: {attempt.recommended_fix}
+- Config: {config_str}
+
+## Results
+- Performance: {attempt.time_before_ms:.4f}ms → {attempt.time_after_ms:.4f}ms
+- Improvement: {attempt.improvement_pct:+.1f}%
+- NCU SOL: Compute {attempt.compute_sol_pct:.1f}%, Memory {attempt.memory_sol_pct:.1f}%
+- Passed: {attempt.passed_verification}
+
+Respond with JSON containing:
+{{
+    "was_diagnosis_correct": true/false,
+    "was_fix_effective": true/false,
+    "expected_outcome": "what you expected to happen",
+    "actual_outcome": "what actually happened",
+    "reasoning": "why the fix worked or didn't work",
+    "lessons": ["lesson 1", "lesson 2"],
+    "avoid_patterns": ["pattern to avoid"],
+    "try_patterns": ["pattern to try next"]
+}}"""
 
     def render_triton_guidelines(self) -> str:
         """
