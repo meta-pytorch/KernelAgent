@@ -92,7 +92,8 @@ def profile_triton_kernel(
     python_executable: Optional[str] = None,
     ncu_bin: Optional[str] = None,
     launch_count: int = 20,
-    timeout: int = 120,
+    launch_skip: int = 10,
+    timeout: int = 360,
     use_sudo: bool = False,
 ) -> Path:
     """
@@ -105,6 +106,7 @@ def profile_triton_kernel(
         python_executable: Python executable to use (default: sys.executable)
         ncu_bin: Path to NCU binary (default: auto-detect)
         launch_count: Number of kernel launches to profile
+        launch_skip: Number of initial launches to skip (for warmup/autotune)
         timeout: Timeout in seconds for NCU execution
         use_sudo: Whether to run NCU with sudo. Can also be enabled via
             KERNELAGENT_NCU_USE_SUDO=1 environment variable. Default: False
@@ -170,7 +172,7 @@ def profile_triton_kernel(
             "--profile-from-start=on",
             f"--log-file={str(csv_path)}",
             f"--metrics={METRICS}",
-            "--launch-skip=0",
+            f"--launch-skip={launch_skip}",
             f"--launch-count={launch_count}",
             python_executable,
             str(benchmark_script),
@@ -237,7 +239,7 @@ def profile_triton_kernel(
         return csv_path
 
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"NCU profiling timed out after {timeout} seconds")
+        raise  # Let caller handle timeout directly
     except RuntimeError:
         raise
     except Exception as e:

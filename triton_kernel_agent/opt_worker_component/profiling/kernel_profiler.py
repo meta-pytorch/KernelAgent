@@ -25,19 +25,21 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
-
 from kernel_perf_agent.kernel_opt.profiler.ncu_profiler import (
     load_ncu_metrics,
     metrics_to_prompt,
     profile_triton_kernel,
 )
-
 from triton_kernel_agent.opt_worker_component.profiling.ncu_wrapper_factory import (
     NCUWrapperFactory,
 )
 
 # Default timeout for NCU profiling in seconds
-DEFAULT_NCU_TIMEOUT_SECONDS = 120
+DEFAULT_NCU_TIMEOUT_SECONDS = 300
+
+# Default timeout for waiting on profiling semaphore (15 minutes)
+# If exceeded, profiling is skipped for this round to prevent deadlocks
+DEFAULT_SEMAPHORE_TIMEOUT_SECONDS = 900
 
 
 @dataclass
@@ -84,6 +86,7 @@ class KernelProfiler:
         logs_dir: Path,
         ncu_bin_path: str | None = None,
         ncu_timeout_seconds: int = DEFAULT_NCU_TIMEOUT_SECONDS,
+        profiling_semaphore: Any | None = None,
     ):
         """
         Initialize the kernel profiler.
@@ -94,12 +97,16 @@ class KernelProfiler:
             logs_dir: Directory for saving profiling logs
             ncu_bin_path: Path to NCU binary (auto-detect if None)
             ncu_timeout_seconds: Timeout for NCU profiling in seconds
+            profiling_semaphore: Semaphore to limit concurrent NCU profiling.
+                NCU requires exclusive GPU access, so this should typically be
+                set to 1 to serialize profiling across all workers.
         """
         self.logger = logger
         self.artifacts_dir = artifacts_dir
         self.logs_dir = logs_dir
         self.ncu_bin_path = ncu_bin_path
         self.ncu_timeout_seconds = ncu_timeout_seconds
+        self.profiling_semaphore = profiling_semaphore
         self.wrapper_factory = NCUWrapperFactory(logger)
 
     @cached_property
@@ -154,6 +161,10 @@ class KernelProfiler:
         NCU profiling can fail due to GPU contention or transient issues.
         This method automatically retries with exponential backoff.
 
+        If a profiling_semaphore was provided, this method will acquire it
+        before profiling to limit concurrent NCU operations (NCU requires
+        exclusive GPU access).
+
         Args:
             kernel_file: Path to kernel file
             problem_file: Path to problem file
@@ -177,6 +188,41 @@ class KernelProfiler:
             kernel_file, problem_file, self.artifacts_dir
         )
 
+        # Acquire profiling semaphore if available (NCU requires exclusive GPU access)
+        semaphore_acquired = False
+        if self.profiling_semaphore is not None:
+            self.logger.info(f"[Round {round_num}] Waiting for profiling semaphore...")
+            # Use timeout to prevent deadlock if another worker was killed while holding semaphore
+            semaphore_acquired = self.profiling_semaphore.acquire(
+                timeout=DEFAULT_SEMAPHORE_TIMEOUT_SECONDS
+            )
+            if not semaphore_acquired:
+                self.logger.warning(
+                    f"[Round {round_num}] Semaphore timeout after {DEFAULT_SEMAPHORE_TIMEOUT_SECONDS}s, "
+                    "skipping profiling for this round"
+                )
+                return None
+            self.logger.info(f"[Round {round_num}] Acquired profiling semaphore")
+
+        try:
+            return self._profile_kernel_impl(
+                wrapper_file, kernel_file, problem_file, round_num, max_retries
+            )
+        finally:
+            if semaphore_acquired:
+                self.profiling_semaphore.release()
+                self.logger.debug(f"[Round {round_num}] Released profiling semaphore")
+
+    def _profile_kernel_impl(
+        self,
+        wrapper_file: Path,
+        kernel_file: Path,
+        problem_file: Path,
+        round_num: int,
+        max_retries: int,
+    ) -> ProfilerResults | None:
+        """Internal implementation of profile_kernel (called with semaphore held)."""
+
         for attempt in range(1, max_retries + 1):
             try:
                 self.logger.info(
@@ -190,6 +236,7 @@ class KernelProfiler:
                     workdir=self.artifacts_dir,
                     out_csv=csv_file,
                     ncu_bin=self.ncu_bin_path,
+                    launch_skip=3,  # Skip warmup iterations, capture final run
                     launch_count=20,
                     timeout=self.ncu_timeout_seconds,
                 )

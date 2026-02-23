@@ -19,9 +19,9 @@ Samplers control how we select:
 - Inspirations: Which kernels to show as few-shot examples to the LLM
 """
 
-from typing import Protocol
+from typing import Any, Protocol
 
-from ..history import AttemptRecord, AttemptStore
+from ..history.records import AttemptRecord
 
 
 class Sampler(Protocol):
@@ -42,7 +42,7 @@ class Sampler(Protocol):
 class BestSampler:
     """Sampler that always returns the best parent and top-k inspirations."""
 
-    def __init__(self, store: AttemptStore) -> None:
+    def __init__(self, store: Any) -> None:
         self.store = store
 
     def sample_parent(self) -> AttemptRecord | None:
