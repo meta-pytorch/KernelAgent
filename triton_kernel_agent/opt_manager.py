@@ -242,6 +242,12 @@ class OptimizationManager:
         # Benchmark PyTorch baseline once (before spawning workers)
         pytorch_baseline = self._benchmark_pytorch_baseline(problem_file)
 
+        # Benchmark torch.compile baseline
+        pytorch_compile_time = self._benchmark_pytorch_compile(problem_file)
+
+        # Benchmark the initial kernel
+        initial_kernel_time = self._benchmark_initial_kernel(initial_kernel, problem_file)
+
         # Round loop
         round_num = 0
         for round_num in range(1, max_rounds + 1):
@@ -262,6 +268,16 @@ class OptimizationManager:
             # 3. Update strategy with results
             self.strategy.update_with_results(results, round_num)
 
+            # Log per-round winner summary
+            successful = [r for r in results if r.get("success")]
+            if successful:
+                best = min(successful, key=lambda r: r.get("time_ms", float("inf")))
+                self.logger.info(
+                    f"Round {round_num} best: worker {best['worker_id']} at {best['time_ms']:.4f} ms"
+                )
+            else:
+                self.logger.info(f"Round {round_num}: no successful workers")
+
             # 4. Check termination
             if self.strategy.should_terminate(round_num, max_rounds):
                 self.logger.info("Strategy signaled termination")
@@ -277,12 +293,21 @@ class OptimizationManager:
 
         if best:
             self.logger.info(f"Best time: {best.metrics.time_ms:.4f}ms")
+            if initial_kernel_time != float("inf") and best.metrics.time_ms > 0:
+                speedup = initial_kernel_time / best.metrics.time_ms
+                self.logger.info(f"Speedup vs initial kernel: {speedup:.2f}x")
+            if pytorch_baseline != float("inf") and best.metrics.time_ms > 0:
+                speedup_pt = pytorch_baseline / best.metrics.time_ms
+                self.logger.info(f"Speedup vs PyTorch eager: {speedup_pt:.2f}x")
 
         return {
             "success": best is not None and best.metrics.time_ms != float("inf"),
             "kernel_code": best.kernel_code if best else None,
             "best_time_ms": best.metrics.time_ms if best else float("inf"),
             "total_rounds": round_num,
+            "pytorch_baseline_ms": pytorch_baseline,
+            "pytorch_compile_ms": pytorch_compile_time,
+            "initial_kernel_time_ms": initial_kernel_time,
             "top_kernels": [
                 {
                     "kernel_code": p.kernel_code,
@@ -324,6 +349,75 @@ class OptimizationManager:
             self.logger.info(f"PyTorch baseline: {pytorch_time:.4f}ms")
 
         return pytorch_time
+
+    def _benchmark_initial_kernel(
+        self, initial_kernel: str, problem_file: Path
+    ) -> float:
+        """Benchmark the initial kernel before optimization begins.
+
+        Args:
+            initial_kernel: Kernel source code
+            problem_file: Path to problem.py
+
+        Returns:
+            Initial kernel time in ms
+        """
+        from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import (
+            Benchmark,
+        )
+
+        artifacts_dir = self.log_dir / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write kernel to a temp file
+        kernel_file = artifacts_dir / "initial_kernel.py"
+        kernel_file.write_text(initial_kernel, encoding="utf-8")
+
+        benchmarker = Benchmark(
+            logger=self.logger,
+            artifacts_dir=artifacts_dir,
+            benchmark_lock=self.benchmark_lock,
+            worker_id=-1,
+        )
+
+        result = benchmarker.benchmark_kernel(kernel_file, problem_file)
+        kernel_time = result.get("time_ms", float("inf"))
+
+        if kernel_time != float("inf"):
+            self.logger.info(f"Initial kernel time: {kernel_time:.4f}ms")
+
+        return kernel_time
+
+    def _benchmark_pytorch_compile(self, problem_file: Path) -> float:
+        """Benchmark torch.compile'd PyTorch baseline.
+
+        Args:
+            problem_file: Path to problem.py
+
+        Returns:
+            torch.compile baseline time in ms
+        """
+        from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import (
+            Benchmark,
+        )
+
+        artifacts_dir = self.log_dir / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        benchmarker = Benchmark(
+            logger=self.logger,
+            artifacts_dir=artifacts_dir,
+            benchmark_lock=self.benchmark_lock,
+            worker_id=-1,
+        )
+
+        result = benchmarker.benchmark_pytorch_compile(problem_file)
+        compile_time = result.get("time_ms", float("inf"))
+
+        if compile_time != float("inf"):
+            self.logger.info(f"PyTorch compile baseline: {compile_time:.4f}ms")
+
+        return compile_time
 
     def _run_workers(
         self,
@@ -400,6 +494,11 @@ class OptimizationManager:
                 self.logger.warning(f"Worker {w.pid} timed out, terminating")
                 w.terminate()
                 w.join(timeout=5)
+                if w.is_alive():
+                    self.logger.warning(f"Worker {w.pid} still alive, killing")
+                    w.kill()
+                    w.join(timeout=2)
+            w.close()
 
         # Collect results
         results = []
@@ -408,6 +507,10 @@ class OptimizationManager:
                 results.append(result_queue.get_nowait())
             except Exception:
                 break
+
+        # Clean up queue resources to prevent thread hangs during GC
+        result_queue.close()
+        result_queue.join_thread()
 
         successful = sum(1 for r in results if r.get("success"))
         self.logger.info(

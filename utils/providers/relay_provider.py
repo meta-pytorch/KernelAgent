@@ -93,7 +93,7 @@ class RelayProvider(BaseProvider):
             self.server_url,
             json=request_data,
             headers={"Content-Type": "application/json"},
-            timeout=int(os.environ.get("LLM_RELAY_TIMEOUT_S", 120)),
+            timeout=int(os.environ.get("LLM_RELAY_TIMEOUT_S", 600)),
         )
 
         if response.status_code != 200:

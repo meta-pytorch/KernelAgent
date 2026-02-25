@@ -15,6 +15,7 @@ limitations under the License.
 #}
 
 """NCU profiling wrapper."""
+import importlib
 import sys
 import torch
 import inspect
@@ -22,14 +23,15 @@ sys.path.insert(0, str({{ kernel_file_parent }}))
 sys.path.insert(0, str({{ problem_file_parent }}))
 
 from {{ kernel_module }} import kernel_function
-from {{ problem_module }} import get_inputs, get_init_inputs
 
-# Try to import Model if it exists (for Conv, Linear, etc.)
-try:
-    from {{ problem_module }} import Model
-    has_model = True
-except ImportError:
-    has_model = False
+_problem_mod = importlib.import_module({{ problem_module | tojson }})
+get_inputs = _problem_mod.get_inputs
+get_init_inputs = _problem_mod.get_init_inputs
+
+# Try to get Model if it exists (for Conv, Linear, etc.)
+has_model = hasattr(_problem_mod, 'Model')
+if has_model:
+    Model = _problem_mod.Model
 
 # Get inputs
 inputs = get_inputs()
