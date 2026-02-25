@@ -246,7 +246,9 @@ class OptimizationManager:
         pytorch_compile_time = self._benchmark_pytorch_compile(problem_file)
 
         # Benchmark the initial kernel
-        initial_kernel_time = self._benchmark_initial_kernel(initial_kernel, problem_file)
+        initial_kernel_time = self._benchmark_initial_kernel(
+            initial_kernel, problem_file
+        )
 
         # Round loop
         round_num = 0

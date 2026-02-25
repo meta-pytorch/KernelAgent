@@ -1,11 +1,21 @@
 import torch
 import torch.nn as nn
 
+
 class Model(nn.Module):
     """
     Simple model that performs Max Pooling 3D.
     """
-    def __init__(self, kernel_size: int, stride: int = None, padding: int = 0, dilation: int = 1, return_indices: bool = False, ceil_mode: bool = False):
+
+    def __init__(
+        self,
+        kernel_size: int,
+        stride: int = None,
+        padding: int = 0,
+        dilation: int = 1,
+        return_indices: bool = False,
+        ceil_mode: bool = False,
+    ):
         """
         Initializes the Max Pooling 3D layer.
 
@@ -18,7 +28,14 @@ class Model(nn.Module):
             ceil_mode (bool, optional): When True, the output size is ceil(input_size / stride) instead of floor. Defaults to False.
         """
         super(Model, self).__init__()
-        self.maxpool = nn.MaxPool3d(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode)
+        self.maxpool = nn.MaxPool3d(
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            return_indices=return_indices,
+            ceil_mode=ceil_mode,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -32,6 +49,7 @@ class Model(nn.Module):
         """
         return self.maxpool(x)
 
+
 batch_size = 16
 channels = 32
 dim1 = 128
@@ -42,9 +60,11 @@ stride = 2
 padding = 1
 dilation = 3
 
+
 def get_inputs():
     x = torch.rand(batch_size, channels, dim1, dim2, dim3)
     return [x]
+
 
 def get_init_inputs():
     return [kernel_size, stride, padding, dilation]

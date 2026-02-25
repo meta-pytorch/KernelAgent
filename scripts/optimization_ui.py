@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import re
@@ -79,7 +78,7 @@ def _discover_examples() -> list[tuple[str, str]]:
     """Find optimization examples from the examples/ directory.
 
     Returns list of (label, directory_path) for dirs matching ``optimize_*``
-    that contain ``input_kernel.py`` and ``test_kernel.py``.
+    that contain ``input.py`` and ``test.py``.
     """
     examples: list[tuple[str, str]] = []
     if not _EXAMPLES_DIR.is_dir():
@@ -87,7 +86,7 @@ def _discover_examples() -> list[tuple[str, str]]:
     for d in sorted(_EXAMPLES_DIR.glob("optimize_*")):
         if not d.is_dir():
             continue
-        if (d / "input_kernel.py").exists() and (d / "test_kernel.py").exists():
+        if (d / "input.py").exists() and (d / "test.py").exists():
             # Turn "optimize_01_matvec" into "MatVec"
             label = d.name.split("_", 2)[-1].replace("_", " ").title()
             examples.append((label, str(d)))
@@ -120,7 +119,7 @@ def _env_var_for_model(model_name: str) -> str:
 
 
 def _load_sibling_file(problem_path: str, filename: str) -> str:
-    """Load a sibling file (kernel.py, test_kernel.py) next to a problem file."""
+    """Load a sibling file (input.py, test.py) next to a problem file."""
     if not problem_path:
         return ""
     parent = Path(problem_path).parent
@@ -241,7 +240,10 @@ def run_optimization(
                 if gen is None or gen < 1:
                     continue
                 time_ms = entry.metrics.time_ms
-                if gen not in per_round_best or time_ms < per_round_best[gen]["time_ms"]:
+                if (
+                    gen not in per_round_best
+                    or time_ms < per_round_best[gen]["time_ms"]
+                ):
                     per_round_best[gen] = {
                         "time_ms": time_ms,
                         "program_id": entry.program_id,
@@ -273,9 +275,7 @@ def run_optimization(
                 os.environ.pop(env_var, None)
 
 
-def _build_status_markdown(
-    result: dict, strategy: str, num_workers: int
-) -> str:
+def _build_status_markdown(result: dict, strategy: str, num_workers: int) -> str:
     """Build the final status markdown from an OptimizationManager result dict."""
     if not result.get("success"):
         return "## Optimization Failed\n\nNo improvement found."
@@ -313,9 +313,7 @@ def _build_status_markdown(
         status_md += "\n### Top Kernels\n"
         status_md += "| # | Time (ms) | Generation |\n|---|---|---|\n"
         for i, k in enumerate(top_kernels, 1):
-            status_md += (
-                f"| {i} | {k['time_ms']:.4f} | {k.get('generation', '-')} |\n"
-            )
+            status_md += f"| {i} | {k['time_ms']:.4f} | {k.get('generation', '-')} |\n"
 
     return status_md
 
@@ -341,7 +339,9 @@ def _build_per_round_html(per_round_best: dict[int, dict]) -> str:
         # Last round is open by default
         open_attr = " open" if rnd == max_round else ""
         parts.append(f"<details{open_attr}>")
-        parts.append(f"<summary>Round {rnd}: {time_ms:.4f} ms (ID: {prog_id})</summary>")
+        parts.append(
+            f"<summary>Round {rnd}: {time_ms:.4f} ms (ID: {prog_id})</summary>"
+        )
         code = entry.get("kernel_code", "")
         if code:
             # Show first 30 lines as preview
@@ -397,8 +397,16 @@ _LOG_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\[\d+\].*Correctness check passed"), "verify_pass"),
     (re.compile(r"\[\d+\].*Correctness check failed"), "verify_fail"),
     # Performance results
-    (re.compile(r"NEW BEST RUNTIME.*?(\d+\.?\d*)\s*ms.*?speedup:\s*(\d+\.?\d*)x"), "new_best"),
-    (re.compile(r"\[\d+\] No improvement:\s*(\d+\.?\d*)\s*ms.*?best\s+(\d+\.?\d*)\s*ms"), "no_improve"),
+    (
+        re.compile(r"NEW BEST RUNTIME.*?(\d+\.?\d*)\s*ms.*?speedup:\s*(\d+\.?\d*)x"),
+        "new_best",
+    ),
+    (
+        re.compile(
+            r"\[\d+\] No improvement:\s*(\d+\.?\d*)\s*ms.*?best\s+(\d+\.?\d*)\s*ms"
+        ),
+        "no_improve",
+    ),
     # Manager-level baselines (must precede worker-level "Baseline time:")
     (re.compile(r"PyTorch baseline:\s*(\d+\.?\d*)ms"), "pytorch_eager"),
     (re.compile(r"PyTorch compile baseline:\s*(\d+\.?\d*)ms"), "pytorch_compile"),
@@ -427,9 +435,7 @@ _LOG_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _WORKER_DIR_RE = re.compile(r"/w(\d+)/")
 
 
-def _tail_worker_logs(
-    log_dir: str, offsets: dict[str, int]
-) -> dict[int, str]:
+def _tail_worker_logs(log_dir: str, offsets: dict[str, int]) -> dict[int, str]:
     """Read new content from worker log files since last poll.
 
     Args:
@@ -463,8 +469,14 @@ def _tail_worker_logs(
 _TIMESTAMP_RE = re.compile(r"(\d{2}:\d{2}:\d{2})")
 
 
-def _parse_log_for_status(raw_lines: str) -> str:
-    """Extract curated status lines from raw log output, prefixed with timestamps."""
+def _parse_log_for_status(raw_lines: str, manager_round: str = "") -> str:
+    """Extract curated status lines from raw log output, prefixed with timestamps.
+
+    Args:
+        raw_lines: Raw log text.
+        manager_round: If set (e.g. "3/5"), worker-level "Round 1/1" lines
+            are rewritten to show the real manager round instead.
+    """
     if not raw_lines:
         return ""
     curated: list[str] = []
@@ -479,7 +491,10 @@ def _parse_log_for_status(raw_lines: str) -> str:
                 continue
             prefix = f"[{ts}] " if ts else ""
             if kind == "round":
-                curated.append(f"\n{prefix}=== Round {m.group(1)}/{m.group(2)} ===")
+                round_label = (
+                    manager_round if manager_round else f"{m.group(1)}/{m.group(2)}"
+                )
+                curated.append(f"\n{prefix}=== Round {round_label} ===")
             elif kind == "phase_profile":
                 curated.append(f"{prefix}  Profiling kernel (NCU)...")
             elif kind == "phase_analyze":
@@ -562,11 +577,11 @@ def build_interface() -> gr.Blocks:
     if default_input in _example_map_init:
         _d = Path(_example_map_init[default_input])
         try:
-            default_kernel = (_d / "input_kernel.py").read_text(encoding="utf-8")
+            default_kernel = (_d / "input.py").read_text(encoding="utf-8")
         except OSError:
             pass
         try:
-            default_test = (_d / "test_kernel.py").read_text(encoding="utf-8")
+            default_test = (_d / "test.py").read_text(encoding="utf-8")
         except OSError:
             pass
 
@@ -664,7 +679,9 @@ def build_interface() -> gr.Blocks:
             with gr.Column(scale=2):
                 gr.Markdown("## Results")
 
-                status_output = gr.Markdown(value="*Ready — select a problem and paste a kernel to optimize.*")
+                status_output = gr.Markdown(
+                    value="*Ready — select a problem and paste a kernel to optimize.*"
+                )
 
                 with gr.Tab("Log"):
                     manager_log_output = gr.Textbox(
@@ -739,7 +756,7 @@ def build_interface() -> gr.Blocks:
                 return "", ""
             if label in _example_map:
                 d = Path(_example_map[label])
-                return _read_file(d / "input_kernel.py"), _read_file(d / "test_kernel.py")
+                return _read_file(d / "input.py"), _read_file(d / "test.py")
             return "", ""
 
         input_dropdown.change(
@@ -790,7 +807,9 @@ def build_interface() -> gr.Blocks:
             if input_label.startswith("KB: "):
                 problem_label = input_label[4:]
             elif input_label in _example_map:
-                problem_file_override = str(Path(_example_map[input_label]) / "problem.py")
+                problem_file_override = str(
+                    Path(_example_map[input_label]) / "problem.py"
+                )
 
             log_capture = _LogCapture()
             result: list[tuple[str, str, str, str | None]] = []
@@ -857,38 +876,18 @@ def build_interface() -> gr.Blocks:
                 if log_dir:
                     per_worker = _tail_worker_logs(log_dir, worker_log_offsets)
                     for wid, raw in per_worker.items():
-                        parsed = _parse_log_for_status(raw)
+                        parsed = _parse_log_for_status(raw, manager_round=current_round)
                         if parsed:
-                            worker_curated[wid] = worker_curated.get(wid, "") + parsed + "\n"
+                            worker_curated[wid] = (
+                                worker_curated.get(wid, "") + parsed + "\n"
+                            )
 
             round_html_val: list[str] = []
-            live_best_kernel = ""
-
-            def _read_best_kernel_from_db() -> str:
-                """Read the current best kernel from the program database."""
-                log_dir = log_capture.metadata.get("log_dir", "")
-                if not log_dir:
-                    return ""
-                db_path = Path(log_dir) / "program_database.json"
-                if not db_path.exists():
-                    return ""
-                try:
-                    data = json.loads(db_path.read_text(encoding="utf-8"))
-                    entries = data.get("programs", [])
-                    if not entries:
-                        return ""
-                    best = min(
-                        (e for e in entries if e.get("metrics", {}).get("time_ms", float("inf")) != float("inf")),
-                        key=lambda e: e.get("metrics", {}).get("time_ms", float("inf")),
-                        default=None,
-                    )
-                    return best.get("kernel_code", "") if best else ""
-                except Exception:
-                    return ""
 
             def _make_yield(status, kernel_code, download):
                 return (
-                    status, kernel_code,
+                    status,
+                    kernel_code,
                     mgr_curated.rstrip(),
                     worker_curated.get(0, "").rstrip(),
                     worker_curated.get(1, "").rstrip(),
@@ -904,10 +903,6 @@ def build_interface() -> gr.Blocks:
             while thread.is_alive():
                 thread.join(timeout=2)
                 _poll_logs()
-                # Try to read the current best kernel from DB for live preview
-                db_kernel = _read_best_kernel_from_db()
-                if db_kernel:
-                    live_best_kernel = db_kernel
                 status_parts = ["**Optimizing…**"]
                 if current_round:
                     status_parts.append(f"Round {current_round}")
@@ -915,9 +910,11 @@ def build_interface() -> gr.Blocks:
                     status_parts.append(f"({current_phase})")
                 if best_info:
                     status_parts.append(f"| Best so far: {best_info}")
-                yield _make_yield(" ".join(status_parts), live_best_kernel, None)
+                yield _make_yield(" ".join(status_parts), "", None)
                 if time.time() > poll_deadline:
-                    error.append(TimeoutError("Optimization exceeded maximum wall time"))
+                    error.append(
+                        TimeoutError("Optimization exceeded maximum wall time")
+                    )
                     break
 
             # Drain remaining logs
@@ -927,7 +924,8 @@ def build_interface() -> gr.Blocks:
                 tb = "".join(traceback.format_exception(error[0]))
                 yield _make_yield(
                     f"## Error\n\n```\n{error[0]}\n```\n\n```\n{tb}\n```",
-                    "", None,
+                    "",
+                    None,
                 )
             elif result:
                 status, best_kernel, raw_log, download_path, rh = result[0]
@@ -939,7 +937,8 @@ def build_interface() -> gr.Blocks:
             else:
                 yield _make_yield(
                     "## Error\n\nOptimization thread finished without result.",
-                    "", None,
+                    "",
+                    None,
                 )
 
         optimize_button.click(
@@ -956,9 +955,13 @@ def build_interface() -> gr.Blocks:
                 api_key_input,
             ],
             outputs=[
-                status_output, kernel_output,
+                status_output,
+                kernel_output,
                 manager_log_output,
-                w0_log, w1_log, w2_log, w3_log,
+                w0_log,
+                w1_log,
+                w2_log,
+                w3_log,
                 download_output,
                 per_round_html,
             ],

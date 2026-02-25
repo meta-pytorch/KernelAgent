@@ -851,7 +851,8 @@ class OptimizationOrchestrator:
         try:
             messages = [{"role": "user", "content": opt_prompt}]
             response_text = self.verification_worker._call_llm(
-                messages, max_tokens=24576,
+                messages,
+                max_tokens=24576,
             )
 
             # Save response
@@ -942,7 +943,9 @@ class OptimizationOrchestrator:
             # Use provider directly with high_reasoning_effort=False
             # (worker._call_llm would force high_reasoning=True if worker was configured that way)
             response = self.provider.get_response(
-                self.model, messages, max_tokens=2048,
+                self.model,
+                messages,
+                max_tokens=2048,
             )
             response_text = response.content
 
