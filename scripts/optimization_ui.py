@@ -660,7 +660,7 @@ def build_interface() -> gr.Blocks:
                     label="GPU",
                     value=default_gpu,
                     interactive=True,
-                    info="Select your GPU.",
+                    info="Select the GPU on your machine.",
                 )
 
                 max_rounds_slider = gr.Slider(
