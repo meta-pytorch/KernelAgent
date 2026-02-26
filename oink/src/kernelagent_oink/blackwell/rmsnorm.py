@@ -35,7 +35,6 @@ import re
 import subprocess
 import sys
 import threading
-from typing import Optional, Tuple
 
 _HERE = os.path.dirname(__file__)
 
@@ -160,7 +159,7 @@ _FORCE_RMSNORM_STAGE2_FWD = _env_flag(
 )
 
 
-def _parse_version_tuple(version: str) -> Tuple[int, int, int]:
+def _parse_version_tuple(version: str) -> tuple[int, int, int]:
     parts = version.split(".")
     nums: list[int] = []
     for part in parts[:3]:
@@ -171,7 +170,7 @@ def _parse_version_tuple(version: str) -> Tuple[int, int, int]:
     return nums[0], nums[1], nums[2]
 
 
-def _cutlass_dsl_version() -> Optional[Tuple[int, int, int]]:
+def _cutlass_dsl_version() -> tuple[int, int, int] | None:
     try:
         return _parse_version_tuple(importlib.metadata.version("nvidia-cutlass-dsl"))
     except Exception:
@@ -227,7 +226,7 @@ class _PtrRmsnormFastLaunch:
         executor: object,
         capi_func: object,
         ptr_x: object,
-        ptr_w: Optional[object],
+        ptr_w: object | None,
         ptr_out: object,
         arg_m: _StableI32Arg,
         arg_n: _StableI32Arg,
@@ -235,7 +234,7 @@ class _PtrRmsnormFastLaunch:
         arg_eps: _StableF32Arg,
         stream: cuda.CUstream,
         assumed_align: int,
-        weight_dtype: Optional[type[cutlass.Numeric]],
+        weight_dtype: type[cutlass.Numeric] | None,
         packed_args: object,
         keepalive: tuple[object, ...],
     ):
@@ -270,7 +269,7 @@ class _PtrRmsnormFastLaunch:
         self,
         *,
         x: Tensor,
-        weight: Optional[Tensor],
+        weight: Tensor | None,
         out: Tensor,
         M: int,
         N: int,
@@ -348,7 +347,7 @@ class _PtrRmsnormFastLaunch:
         self,
         *,
         x: Tensor,
-        weight: Optional[Tensor],
+        weight: Tensor | None,
         out: Tensor,
         M: int,
         N: int,
@@ -569,11 +568,11 @@ class _PtrRmsnormBwdFastLaunch:
         executor: object,
         capi_func: object,
         ptr_x: object,
-        ptr_w: Optional[object],
+        ptr_w: object | None,
         ptr_dout: object,
         ptr_rstd: object,
         ptr_dx: object,
-        ptr_dw_partial: Optional[object],
+        ptr_dw_partial: object | None,
         arg_m: _StableI32Arg,
         arg_n: _StableI32Arg,
         arg_ld: _StableI32Arg,
@@ -582,7 +581,7 @@ class _PtrRmsnormBwdFastLaunch:
         assumed_align_x: int,
         assumed_align_w: int,
         assumed_align_dw: int,
-        weight_dtype: Optional[type[cutlass.Numeric]],
+        weight_dtype: type[cutlass.Numeric] | None,
         packed_args: object,
         keepalive: tuple[object, ...],
     ):
@@ -624,11 +623,11 @@ class _PtrRmsnormBwdFastLaunch:
         self,
         *,
         x: Tensor,
-        weight: Optional[Tensor],
+        weight: Tensor | None,
         dout: Tensor,
         rstd: Tensor,
         dx: Tensor,
-        dw_partial: Optional[Tensor],
+        dw_partial: Tensor | None,
         M: int,
         N: int,
         ld: int,
@@ -806,11 +805,11 @@ class _PtrRmsnormBwdFastLaunch:
         self,
         *,
         x: Tensor,
-        weight: Optional[Tensor],
+        weight: Tensor | None,
         dout: Tensor,
         rstd: Tensor,
         dx: Tensor,
-        dw_partial: Optional[Tensor],
+        dw_partial: Tensor | None,
         M: int,
         N: int,
         ld: int,
@@ -880,7 +879,7 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
     *,
     compiled: object,
     dtype: type[cutlass.Numeric],
-    weight_dtype: Optional[type[cutlass.Numeric]],
+    weight_dtype: type[cutlass.Numeric] | None,
     N: int,
     device_index: int,
     stream_handle: int,
@@ -889,7 +888,7 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
     assumed_align_x: int,
     assumed_align_w: int,
     assumed_align_dw: int,
-) -> Optional[_PtrRmsnormBwdFastLaunch]:
+) -> _PtrRmsnormBwdFastLaunch | None:
     if not _fast_launch_enabled():
         return None
     key = (
@@ -1024,14 +1023,14 @@ def _get_fast_ptr_rmsnorm_launcher(
     *,
     compiled: object,
     dtype: type[cutlass.Numeric],
-    weight_dtype: Optional[type[cutlass.Numeric]] = None,
+    weight_dtype: type[cutlass.Numeric] | None = None,
     N: int,
     device_index: int,
     stream_handle: int,
     has_weight: bool,
     assumed_align: int = 16,
     eps: float,
-) -> Optional[_PtrRmsnormFastLaunch]:
+) -> _PtrRmsnormFastLaunch | None:
     if not _fast_launch_enabled():
         return None
     # Keyed by the compiled object identity so schedule changes (e.g. copy width,
@@ -1151,7 +1150,7 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
     direct_gmem: bool,
     assumed_align: int,
     eps: float,
-) -> Optional[_PtrFusedAddRmsnormFastLaunch]:
+) -> _PtrFusedAddRmsnormFastLaunch | None:
     if not _fast_launch_enabled():
         return None
     key = (
@@ -1283,7 +1282,7 @@ def copy_tiled(
     src: cute.Tensor,
     dst: cute.Tensor,
     *,
-    pred: Optional[cute.Tensor] = None,
+    pred: cute.Tensor | None = None,
     num_copy_elems: int = 1,
     is_async: bool = False,
 ) -> None:
@@ -1313,7 +1312,7 @@ def copy_tiled(
 # This is (currently) sensitive to the vector width: we have observed
 # reproducible segfaults for the 256b universal-copy path, while the 128b path
 # can succeed. Cache the maximum supported copy width (0 = unsupported).
-_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS: Optional[int] = None
+_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS: int | None = None
 _CLUSTER_DIRECT_GMEM_PROBE_LOCK = threading.Lock()
 _CLUSTER_DIRECT_GMEM_PROBE_WARNED = False
 
@@ -1465,7 +1464,7 @@ class RMSNormSM100:
         self,
         N: int,
         dtype: type[cutlass.Numeric],
-        stage: Optional[int] = None,
+        stage: int | None = None,
         *,
         copy_bits: int = 128,
         use_async: bool = True,
@@ -1577,7 +1576,7 @@ class RMSNormSM100:
             return 32
         return 128 if self.N <= 16384 else 256
 
-    def _tv_layout(self, num_copy_bits: int = 256) -> Tuple[cute.Shape, cute.Layout]:
+    def _tv_layout(self, num_copy_bits: int = 256) -> tuple[cute.Shape, cute.Layout]:
         vecsize = num_copy_bits // self.dtype.width
         num_threads = self._num_threads()
         assert num_threads % cute.arch.WARP_SIZE == 0
@@ -1612,12 +1611,12 @@ class RMSNormSM100:
     def __call__(
         self,
         mX: cute.Tensor,
-        mW: Optional[cute.Tensor],
-        mB: Optional[cute.Tensor],
-        mRes: Optional[cute.Tensor],
+        mW: cute.Tensor | None,
+        mB: cute.Tensor | None,
+        mRes: cute.Tensor | None,
         mO: cute.Tensor,
-        mResO: Optional[cute.Tensor],
-        mRstd: Optional[cute.Tensor],
+        mResO: cute.Tensor | None,
+        mRstd: cute.Tensor | None,
         stream: cuda.CUstream,
         eps: Float32 = 1e-6,
     ):
@@ -1744,12 +1743,12 @@ class RMSNormSM100:
     def launch_from_ptrs(
         self,
         ptr_x: cute.Pointer,
-        ptr_w: Optional[cute.Pointer],
-        ptr_b: Optional[cute.Pointer],
-        ptr_res: Optional[cute.Pointer],
+        ptr_w: cute.Pointer | None,
+        ptr_b: cute.Pointer | None,
+        ptr_res: cute.Pointer | None,
         ptr_out: cute.Pointer,
-        ptr_res_out: Optional[cute.Pointer],
-        ptr_rstd: Optional[cute.Pointer],
+        ptr_res_out: cute.Pointer | None,
+        ptr_rstd: cute.Pointer | None,
         M: Int32,
         N_dyn: Int32,
         ld: Int32,
@@ -1848,12 +1847,12 @@ class RMSNormSM100:
     def _kernel_impl(
         self,
         mX: cute.Tensor,
-        mW: Optional[cute.Tensor],
-        mB: Optional[cute.Tensor],
-        mRes: Optional[cute.Tensor],
+        mW: cute.Tensor | None,
+        mB: cute.Tensor | None,
+        mRes: cute.Tensor | None,
         mO: cute.Tensor,
-        mResO: Optional[cute.Tensor],
-        mRstd: Optional[cute.Tensor],
+        mResO: cute.Tensor | None,
+        mRstd: cute.Tensor | None,
         eps: Float32,
         tv_layout: cute.Layout,
         tiler_mn: cute.Shape,
@@ -2500,12 +2499,12 @@ class RMSNormSM100:
         def kernel(
             self,
             mX: cute.Tensor,
-            mW: Optional[cute.Tensor],
-            mB: Optional[cute.Tensor],
-            mRes: Optional[cute.Tensor],
+            mW: cute.Tensor | None,
+            mB: cute.Tensor | None,
+            mRes: cute.Tensor | None,
             mO: cute.Tensor,
-            mResO: Optional[cute.Tensor],
-            mRstd: Optional[cute.Tensor],
+            mResO: cute.Tensor | None,
+            mRstd: cute.Tensor | None,
             eps: Float32,
             tv_layout: cute.Layout,
             tiler_mn: cute.Shape,
@@ -2536,12 +2535,12 @@ class RMSNormSM100:
         def kernel(
             self,
             mX: cute.Tensor,
-            mW: Optional[cute.Tensor],
-            mB: Optional[cute.Tensor],
-            mRes: Optional[cute.Tensor],
+            mW: cute.Tensor | None,
+            mB: cute.Tensor | None,
+            mRes: cute.Tensor | None,
             mO: cute.Tensor,
-            mResO: Optional[cute.Tensor],
-            mRstd: Optional[cute.Tensor],
+            mResO: cute.Tensor | None,
+            mRstd: cute.Tensor | None,
             eps: Float32,
         ):
             copy_bits = int(self.copy_bits)
@@ -2569,7 +2568,7 @@ class RMSNormSM100:
             )
 
     @cute.jit
-    def _init_cluster(self, tidx: cutlass.Int32, mbar_ptr: Optional[cute.Pointer]):
+    def _init_cluster(self, tidx: cutlass.Int32, mbar_ptr: cute.Pointer | None):
         if const_expr(mbar_ptr is not None):
             if tidx < self.stage:
                 cute.arch.mbarrier_init(mbar_ptr + tidx, 1)
@@ -2579,9 +2578,9 @@ class RMSNormSM100:
 
 def _can_use_ptr_path(
     x: Tensor,
-    weight: Optional[Tensor],
-    bias: Optional[Tensor],
-    residual: Optional[Tensor],
+    weight: Tensor | None,
+    bias: Tensor | None,
+    residual: Tensor | None,
 ) -> bool:
     """Fast path precondition for the pointer-based CuTeDSL entry.
 
@@ -2683,7 +2682,7 @@ def _can_use_ptr_path_fused_add_inplace(
 
 def _can_use_ptr_path_bwd(
     x: Tensor,
-    weight: Optional[Tensor],
+    weight: Tensor | None,
     dout: Tensor,
     rstd: Tensor,
 ) -> bool:
@@ -2746,12 +2745,12 @@ def _can_use_ptr_path_bwd(
 
 def _rmsnorm_forward_ptr(
     x: Tensor,
-    weight: Optional[Tensor],
-    bias: Optional[Tensor],
-    residual: Optional[Tensor],
+    weight: Tensor | None,
+    bias: Tensor | None,
+    residual: Tensor | None,
     eps: float,
     store_rstd: bool,
-) -> Tuple[Tensor, Optional[Tensor], Optional[Tensor]]:
+) -> tuple[Tensor, Tensor | None, Tensor | None]:
     """Pointer-based RMSNorm forward that bypasses DLPack entirely.
 
     This path reconstructs cute.Tensor views from raw device pointers
@@ -2765,8 +2764,8 @@ def _rmsnorm_forward_ptr(
     # Preserve the input's 2D stride so downstream users that rely on
     # padded-row layouts (stride0 > N) continue to see the expected layout.
     out = torch.empty_strided(x.shape, x.stride(), device=x.device, dtype=x.dtype)
-    residual_out: Optional[Tensor] = None
-    rstd: Optional[Tensor] = None
+    residual_out: Tensor | None = None
+    rstd: Tensor | None = None
 
     if residual is not None:
         residual_out = torch.empty_strided(
@@ -2793,12 +2792,12 @@ def _rmsnorm_forward_ptr(
 
 def _rmsnorm_forward_ptr_into(
     x: Tensor,
-    weight: Optional[Tensor],
-    bias: Optional[Tensor],
-    residual: Optional[Tensor],
+    weight: Tensor | None,
+    bias: Tensor | None,
+    residual: Tensor | None,
     out: Tensor,
-    residual_out: Optional[Tensor],
-    rstd: Optional[Tensor],
+    residual_out: Tensor | None,
+    rstd: Tensor | None,
     eps: float,
 ) -> None:
     """Internal helper that launches the pointer-based kernel into preallocated outputs.
@@ -3253,10 +3252,10 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
         default=bool(dtype.width == 16 and N == 7168 and M <= 16384)
     )
     use_async = not direct_gmem
-    tpr_override: Optional[int] = None
-    nt_override: Optional[int] = None
-    cluster_n_override: Optional[int] = None
-    direct_gmem_max_copy_bits: Optional[int] = None
+    tpr_override: int | None = None
+    nt_override: int | None = None
+    cluster_n_override: int | None = None
+    direct_gmem_max_copy_bits: int | None = None
 
     # Experimental stage-2 cp.async path (2-tile ping-pong) for N=7168. This is
     # primarily about improving memory-latency hiding / reducing long-scoreboard
@@ -3431,12 +3430,12 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
 
 def rmsnorm_forward(
     x: Tensor,
-    weight: Optional[Tensor] = None,
-    bias: Optional[Tensor] = None,
-    residual: Optional[Tensor] = None,
+    weight: Tensor | None = None,
+    bias: Tensor | None = None,
+    residual: Tensor | None = None,
     eps: float = 1e-6,
     store_rstd: bool = False,
-) -> Tuple[Tensor, Optional[Tensor], Optional[Tensor]]:
+) -> tuple[Tensor, Tensor | None, Tensor | None]:
     assert x.is_cuda
     assert x.dim() == 2, "Use (M, N) tensor; flatten batch/seq beforehand."
     M, N = x.shape
@@ -3530,9 +3529,9 @@ def rmsnorm_forward(
 
 def rmsnorm_ref(
     x: Tensor,
-    w: Optional[Tensor] = None,
-    b: Optional[Tensor] = None,
-    residual: Optional[Tensor] = None,
+    w: Tensor | None = None,
+    b: Tensor | None = None,
+    residual: Tensor | None = None,
     eps: float = 1e-6,
 ) -> Tensor:
     xf = x.float()
@@ -3552,7 +3551,7 @@ def fused_add_rmsnorm_forward(
     residual: Tensor,
     weight: Tensor,
     eps: float = 1e-6,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """Fused residual-add + RMSNorm for SM100 in CuteDSL.
 
     This is a convenience wrapper around ``rmsnorm_forward`` that matches the
@@ -3592,7 +3591,7 @@ def fused_add_rmsnorm_forward_inplace(
     residual: Tensor,
     weight: Tensor,
     eps: float = 1e-6,
-) -> Tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor]:
     """In-place fused residual-add + RMSNorm matching vLLM semantics.
 
     This variant writes:
@@ -3795,14 +3794,14 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
     def __call__(
         self,
         mX: cute.Tensor,
-        mW: Optional[cute.Tensor],
+        mW: cute.Tensor | None,
         mdO: cute.Tensor,
-        mdResO: Optional[cute.Tensor],
+        mdResO: cute.Tensor | None,
         mRstd: cute.Tensor,
         mdX: cute.Tensor,
-        mdW: Optional[cute.Tensor],
-        mdRes: Optional[cute.Tensor],
-        mdB: Optional[cute.Tensor],
+        mdW: cute.Tensor | None,
+        mdRes: cute.Tensor | None,
+        mdB: cute.Tensor | None,
         sm_count: Int32,
         stream: cuda.CUstream,
     ):
@@ -3875,15 +3874,15 @@ _BWD_PTR_COMPILE_CACHE: dict[tuple[object, ...], object] = {}
 
 def _rmsnorm_bwd_sm100(
     x: Tensor,
-    weight: Optional[Tensor],
+    weight: Tensor | None,
     dout: Tensor,
     rstd: Tensor,
     dx: Tensor,
-    dw_partial: Optional[Tensor],
-    db_partial: Optional[Tensor] = None,
-    dresidual_out: Optional[Tensor] = None,
-    dresidual: Optional[Tensor] = None,
-    sm_count: Optional[int] = None,
+    dw_partial: Tensor | None,
+    db_partial: Tensor | None = None,
+    dresidual_out: Tensor | None = None,
+    dresidual: Tensor | None = None,
+    sm_count: int | None = None,
 ) -> None:
     """SM100-specific RMSNorm backward dispatch.
 
@@ -4230,13 +4229,13 @@ def _rmsnorm_bwd_sm100_ptr(
 
 def rmsnorm_backward(
     x: Tensor,
-    weight: Optional[Tensor],
+    weight: Tensor | None,
     dout: Tensor,
     rstd: Tensor,
-    dresidual_out: Optional[Tensor] = None,
+    dresidual_out: Tensor | None = None,
     has_bias: bool = False,
     has_residual: bool = False,
-) -> Tuple[Tensor, Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
+) -> tuple[Tensor, Tensor | None, Tensor | None, Tensor | None]:
     """Public SM100 RMSNorm backward entry point.
 
     Signature mirrors `quack.rmsnorm.rmsnorm_bwd` for easy comparisons.
