@@ -29,7 +29,6 @@ to be available in the Python environment (e.g., `nvidia-cutlass-dsl` and
 
 from __future__ import annotations
 
-import ctypes
 import importlib.metadata
 import os
 import re
@@ -90,15 +89,20 @@ from cutlass import Float32, Int32, const_expr  # noqa: E402
 from cutlass.cute import runtime as rt  # noqa: E402
 from cutlass.cute.runtime import from_dlpack  # noqa: E402
 
-# Shared env-var parsing utility (accepts common false-y strings like "0", "off").
-from kernelagent_oink.blackwell.fast_launch import _env_flag  # noqa: E402
+# Shared fast-launch utilities (env-flag parsing, stable ctypes args, pointer
+# helpers, and the global fast-launch enable/disable state).
+from kernelagent_oink.blackwell.fast_launch import (  # noqa: E402
+    StableF32Arg as _StableF32Arg,
+    StableI32Arg as _StableI32Arg,
+    _env_flag,
+    disable_fast_launch as _disable_fast_launch,
+    fast_launch_enabled as _fast_launch_enabled,
+    set_runtime_ptr as _set_runtime_ptr,
+    tls_cache as _tls_fast_launch_cache,
+)
 
 # Simple compile cache declared early so direct execution works
 _PTR_COMPILE_CACHE = {}
-
-# Thread-local cache for the fast-launch path. We keep per-thread packed args and
-# pointer/scalar storage so concurrent callers don't race on in-place updates.
-_PTR_FAST_LAUNCH_TLS = threading.local()
 
 
 # Cache a (1, sm_count) fp32 ones row used for GEMM-based dw/db partial reductions.
@@ -130,13 +134,6 @@ def _reduce_partial_sum_fp32(partial: Tensor, *, device_index: int) -> Tensor:
     return torch.mm(ones, partial).squeeze(0)
 
 
-# Fast-launch uses a few private-ish CuTeDSL internals (packed args plumbing and
-# runtime pointer descriptors). Keep it enabled by default for our pinned CuTeDSL
-# environment, but allow disabling it via env var and auto-disable it if those
-# internals are not present in a future upgrade.
-_ENABLE_FAST_LAUNCH = _env_flag("OINK_CUTEDSL_FAST_LAUNCH", default=True)
-_FAST_LAUNCH_SUPPORTED = True
-
 # Fused-add RMSNorm schedule knobs (read once at import time; set env vars before
 # importing this module if you want to override).
 _DIRECT_GMEM_POLICY = (
@@ -161,159 +158,6 @@ _ENABLE_STAGE2 = _env_flag("OINK_RMSNORM_ENABLE_STAGE2", default=False)
 _FORCE_RMSNORM_STAGE2_FWD = _env_flag(
     "KERNELAGENT_OINK_FORCE_RMSNORM_STAGE2", default=False
 )
-
-# CuTeDSL stability probe for the experimental cluster_n>1 + direct-GMEM schedule.
-#
-# Some CuTeDSL builds segfault during JIT compilation when combining:
-# - cluster launches (cluster_n>1) and
-# - direct-GMEM loads/stores (no staging SMEM tiles).
-#
-# We keep the schedule gated behind `OINK_RMSNORM_ENABLE_CLUSTER_ILP=1` +
-# `OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE=1`, and additionally run a one-time
-# out-of-process compile probe so we can safely fall back to the staged SMEM
-# path instead of crashing the parent process.
-#
-# This is (currently) sensitive to the vector width: we have observed
-# reproducible segfaults for the 256b universal-copy path, while the 128b path
-# can succeed. Cache the maximum supported copy width (0 = unsupported).
-_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS: Optional[int] = None
-_CLUSTER_DIRECT_GMEM_PROBE_LOCK = threading.Lock()
-_CLUSTER_DIRECT_GMEM_PROBE_WARNED = False
-
-
-def _probe_cluster_direct_gmem_max_copy_bits() -> int:
-    global _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
-    global _CLUSTER_DIRECT_GMEM_PROBE_WARNED
-
-    override = os.environ.get("OINK_RMSNORM_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS")
-    if override is not None and override.strip() != "":
-        try:
-            value = int(override)
-        except ValueError:
-            value = 0
-        value = 256 if value >= 256 else 128 if value >= 128 else 0
-        _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = value
-        return value
-
-    if _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS is not None:
-        return _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
-
-    with _CLUSTER_DIRECT_GMEM_PROBE_LOCK:
-        if _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS is not None:
-            return _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
-
-        script_template = r"""
-import os
-
-os.environ["OINK_CUTEDSL_FAST_LAUNCH"] = "0"
-
-import cutlass
-import cutlass.cute as cute
-import cuda.bindings.driver as cuda
-from cutlass import Float32, Int32
-from cutlass.cute import runtime as rt
-
-from kernelagent_oink.blackwell import rmsnorm
-
-N = 7168
-dtype = cutlass.BFloat16
-
-copy_bits = int(os.environ["OINK_PROBE_COPY_BITS"])
-assumed_align = int(os.environ["OINK_PROBE_ASSUMED_ALIGN"])
-
-op = rmsnorm.RMSNormSM100(
-    N,
-    dtype,
-    stage=1,
-    copy_bits=copy_bits,
-    use_async=False,
-    direct_gmem=True,
-)
-op._cluster_n_override = 2  # 2 CTAs per row
-
-ptr_x = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-ptr_res = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-ptr_w = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-
-_ = cute.compile(
-    op.launch_from_ptrs_fused_add_inplace,
-    ptr_x,
-    ptr_w,
-    ptr_res,
-    Int32(4096),
-    Int32(N),
-    Int32(N),
-    cuda.CUstream(0),
-    Float32(1e-6),
-)
-print(f"ok {copy_bits}")
-"""
-
-        env = os.environ.copy()
-        # The probe runs in a fresh subprocess, so it won't inherit any
-        # benchmark-harness sys.path tweaks. Ensure the in-tree Oink source is
-        # importable so `import kernelagent_oink...` works reliably.
-        oink_src = os.path.abspath(os.path.join(_HERE, "..", ".."))
-        if os.path.isdir(oink_src):
-            py_path = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = oink_src + (os.pathsep + py_path if py_path else "")
-        env["PYTHONNOUSERSITE"] = "1"
-
-        def run_probe(copy_bits: int, assumed_align: int):
-            probe_env = env.copy()
-            probe_env["OINK_PROBE_COPY_BITS"] = str(copy_bits)
-            probe_env["OINK_PROBE_ASSUMED_ALIGN"] = str(assumed_align)
-            return subprocess.run(
-                [sys.executable, "-c", script_template],
-                env=probe_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=120.0,
-            )
-
-        proc_256 = None
-        proc_128 = None
-        try:
-            proc_256 = run_probe(256, 32)
-            if proc_256.returncode == 0:
-                max_bits = 256
-            else:
-                proc_128 = run_probe(128, 16)
-                max_bits = 128 if proc_128.returncode == 0 else 0
-        except Exception:
-            max_bits = 0
-
-        if not _CLUSTER_DIRECT_GMEM_PROBE_WARNED and max_bits != 256:
-            _CLUSTER_DIRECT_GMEM_PROBE_WARNED = True
-            if max_bits == 128:
-                print(
-                    "Oink: cluster_n>1 + direct_gmem 256b compile probe failed; "
-                    "using 128b copies for the cluster ILP schedule.",
-                    file=sys.stderr,
-                )
-                if proc_256 is not None and proc_256.stderr:
-                    tail = "\n".join(proc_256.stderr.splitlines()[-12:])
-                    print(f"Oink: probe stderr tail:\n{tail}", file=sys.stderr)
-            else:
-                rc = (
-                    proc_128.returncode
-                    if proc_128 is not None
-                    else (proc_256.returncode if proc_256 is not None else "unknown")
-                )
-                print(
-                    "Oink: cluster_n>1 + direct_gmem compile probe failed; "
-                    f"falling back to staged SMEM path (returncode={rc}).",
-                    file=sys.stderr,
-                )
-                failing_proc = proc_128 if proc_128 is not None else proc_256
-                if failing_proc is not None and failing_proc.stderr:
-                    tail = "\n".join(failing_proc.stderr.splitlines()[-12:])
-                    print(f"Oink: probe stderr tail:\n{tail}", file=sys.stderr)
-
-        _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = max_bits
-        return max_bits
-
 
 def _parse_version_tuple(version: str) -> Tuple[int, int, int]:
     parts = version.split(".")
@@ -354,10 +198,6 @@ if _ENABLE_CLUSTER_ILP and not _ENABLE_CLUSTER_ILP_UNSAFE:
     )
 
 
-def _fast_launch_enabled() -> bool:
-    return _ENABLE_FAST_LAUNCH and _FAST_LAUNCH_SUPPORTED
-
-
 def _direct_gmem_from_policy(*, default: bool) -> bool:
     """Resolve the direct-GMEM schedule flag from the (import-time) policy string."""
     if _DIRECT_GMEM_POLICY in {"0", "false", "no", "off"}:
@@ -376,56 +216,6 @@ def _copy_bits_from_policy(*, default: int, can_use_256: bool) -> int:
     if _COPY_BITS_POLICY == "256" and can_use_256:
         return 256
     return default
-
-
-class _StableI32Arg:
-    """A stable Int32 runtime arg (avoids per-call Int32().__c_pointers__ allocations)."""
-
-    def __init__(self, value: int):
-        self._c_value = ctypes.c_int32(int(value))
-        self._c_pointer = ctypes.cast(ctypes.pointer(self._c_value), ctypes.c_void_p)
-
-    def set(self, value: int) -> None:
-        self._c_value.value = int(value)
-
-    def __c_pointers__(self):
-        return [self._c_pointer]
-
-
-class _StableF32Arg:
-    """A stable Float32 runtime arg (avoids per-call Float32().__c_pointers__ allocations)."""
-
-    def __init__(self, value: float):
-        self._c_value = ctypes.c_float(float(value))
-        self._c_pointer = ctypes.cast(ctypes.pointer(self._c_value), ctypes.c_void_p)
-
-    def set(self, value: float) -> None:
-        self._c_value.value = float(value)
-
-    def __c_pointers__(self):
-        return [self._c_pointer]
-
-
-def _tls_fast_launch_cache() -> dict[tuple[object, ...], object]:
-    cache = getattr(_PTR_FAST_LAUNCH_TLS, "cache", None)
-    if cache is None:
-        cache = {}
-        _PTR_FAST_LAUNCH_TLS.cache = cache
-    return cache
-
-
-def _set_runtime_ptr(ptr: object, device_ptr: int) -> None:
-    # Runtime pointer objects cache a `ctypes.c_void_p` descriptor and pass
-    # its address to the compiled function. Updating `_desc.value` updates
-    # the device pointer without changing the address of the descriptor.
-    #
-    # This relies on internal CuTeDSL runtime pointer fields (`_desc`, `_pointer`,
-    # etc.). If these internals change in a future CuTeDSL upgrade, callers
-    # should catch AttributeError and fall back to the regular launch path.
-    ptr._pointer = device_ptr  # type: ignore[attr-defined]
-    if getattr(ptr, "_c_pointer", None) is None:
-        ptr.__c_pointers__()  # type: ignore[attr-defined]
-    ptr._desc.value = device_ptr  # type: ignore[attr-defined]
 
 
 class _PtrRmsnormFastLaunch:
@@ -550,9 +340,8 @@ class _PtrRmsnormFastLaunch:
                 raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
 
     def _disable_fast_launch(self) -> None:
-        global _FAST_LAUNCH_SUPPORTED
         self._use_fast_launch = False
-        _FAST_LAUNCH_SUPPORTED = False
+        _disable_fast_launch()
 
     def _fallback_launch(
         self,
@@ -726,9 +515,8 @@ class _PtrFusedAddRmsnormFastLaunch:
                 raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
 
     def _disable_fast_launch(self) -> None:
-        global _FAST_LAUNCH_SUPPORTED
         self._use_fast_launch = False
-        _FAST_LAUNCH_SUPPORTED = False
+        _disable_fast_launch()
 
     def _fallback_launch(
         self,
@@ -1010,9 +798,8 @@ class _PtrRmsnormBwdFastLaunch:
                 raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
 
     def _disable_fast_launch(self) -> None:
-        global _FAST_LAUNCH_SUPPORTED
         self._use_fast_launch = False
-        _FAST_LAUNCH_SUPPORTED = False
+        _disable_fast_launch()
 
     def _fallback_launch(
         self,
@@ -1187,8 +974,7 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
         packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
         capi_func = compiled.capi_func  # type: ignore[attr-defined]
     except AttributeError:
-        global _FAST_LAUNCH_SUPPORTED
-        _FAST_LAUNCH_SUPPORTED = False
+        _disable_fast_launch()
         return None
 
     keepalive: tuple[object, ...] = (
@@ -1314,8 +1100,7 @@ def _get_fast_ptr_rmsnorm_launcher(
         packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
         capi_func = compiled.capi_func  # type: ignore[attr-defined]
     except AttributeError:
-        global _FAST_LAUNCH_SUPPORTED
-        _FAST_LAUNCH_SUPPORTED = False
+        _disable_fast_launch()
         return None
 
     keepalive: tuple[object, ...] = (
@@ -1419,8 +1204,7 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
         packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
         capi_func = compiled.capi_func  # type: ignore[attr-defined]
     except AttributeError:
-        global _FAST_LAUNCH_SUPPORTED
-        _FAST_LAUNCH_SUPPORTED = False
+        _disable_fast_launch()
         return None
 
     keepalive: tuple[object, ...] = (
@@ -1511,6 +1295,162 @@ def copy_tiled(
 # -------------------------
 
 
+# Defined here (below fast-launch helpers) to keep import-time policy/config at
+# the top of the file lightweight. Only called lazily from RMSNormSM100.
+#
+# CuTeDSL stability probe for the experimental cluster_n>1 + direct-GMEM schedule.
+#
+# Some CuTeDSL builds segfault during JIT compilation when combining:
+# - cluster launches (cluster_n>1) and
+# - direct-GMEM loads/stores (no staging SMEM tiles).
+#
+# We keep the schedule gated behind `OINK_RMSNORM_ENABLE_CLUSTER_ILP=1` +
+# `OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE=1`, and additionally run a one-time
+# out-of-process compile probe so we can safely fall back to the staged SMEM
+# path instead of crashing the parent process.
+#
+# This is (currently) sensitive to the vector width: we have observed
+# reproducible segfaults for the 256b universal-copy path, while the 128b path
+# can succeed. Cache the maximum supported copy width (0 = unsupported).
+_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS: Optional[int] = None
+_CLUSTER_DIRECT_GMEM_PROBE_LOCK = threading.Lock()
+_CLUSTER_DIRECT_GMEM_PROBE_WARNED = False
+
+
+def _probe_cluster_direct_gmem_max_copy_bits() -> int:
+    global _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
+    global _CLUSTER_DIRECT_GMEM_PROBE_WARNED
+
+    override = os.environ.get("OINK_RMSNORM_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS")
+    if override is not None and override.strip() != "":
+        try:
+            value = int(override)
+        except ValueError:
+            value = 0
+        value = 256 if value >= 256 else 128 if value >= 128 else 0
+        _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = value
+        return value
+
+    if _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS is not None:
+        return _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
+
+    with _CLUSTER_DIRECT_GMEM_PROBE_LOCK:
+        if _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS is not None:
+            return _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
+
+        script_template = r"""
+import os
+
+os.environ["OINK_CUTEDSL_FAST_LAUNCH"] = "0"
+
+import cutlass
+import cutlass.cute as cute
+import cuda.bindings.driver as cuda
+from cutlass import Float32, Int32
+from cutlass.cute import runtime as rt
+
+from kernelagent_oink.blackwell import rmsnorm
+
+N = 7168
+dtype = cutlass.BFloat16
+
+copy_bits = int(os.environ["OINK_PROBE_COPY_BITS"])
+assumed_align = int(os.environ["OINK_PROBE_ASSUMED_ALIGN"])
+
+op = rmsnorm.RMSNormSM100(
+    N,
+    dtype,
+    stage=1,
+    copy_bits=copy_bits,
+    use_async=False,
+    direct_gmem=True,
+)
+op._cluster_n_override = 2  # 2 CTAs per row
+
+ptr_x = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
+ptr_res = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
+ptr_w = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
+
+_ = cute.compile(
+    op.launch_from_ptrs_fused_add_inplace,
+    ptr_x,
+    ptr_w,
+    ptr_res,
+    Int32(4096),
+    Int32(N),
+    Int32(N),
+    cuda.CUstream(0),
+    Float32(1e-6),
+)
+print(f"ok {copy_bits}")
+"""
+
+        env = os.environ.copy()
+        # The probe runs in a fresh subprocess, so it won't inherit any
+        # benchmark-harness sys.path tweaks. Ensure the in-tree Oink source is
+        # importable so `import kernelagent_oink...` works reliably.
+        oink_src = os.path.abspath(os.path.join(_HERE, "..", ".."))
+        if os.path.isdir(oink_src):
+            py_path = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = oink_src + (os.pathsep + py_path if py_path else "")
+        env["PYTHONNOUSERSITE"] = "1"
+
+        def run_probe(copy_bits: int, assumed_align: int):
+            probe_env = env.copy()
+            probe_env["OINK_PROBE_COPY_BITS"] = str(copy_bits)
+            probe_env["OINK_PROBE_ASSUMED_ALIGN"] = str(assumed_align)
+            return subprocess.run(
+                [sys.executable, "-c", script_template],
+                env=probe_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=120.0,
+            )
+
+        proc_256 = None
+        proc_128 = None
+        try:
+            proc_256 = run_probe(256, 32)
+            if proc_256.returncode == 0:
+                max_bits = 256
+            else:
+                proc_128 = run_probe(128, 16)
+                max_bits = 128 if proc_128.returncode == 0 else 0
+        except Exception:
+            max_bits = 0
+
+        if not _CLUSTER_DIRECT_GMEM_PROBE_WARNED and max_bits != 256:
+            _CLUSTER_DIRECT_GMEM_PROBE_WARNED = True
+            if max_bits == 128:
+                print(
+                    "Oink: cluster_n>1 + direct_gmem 256b compile probe failed; "
+                    "using 128b copies for the cluster ILP schedule.",
+                    file=sys.stderr,
+                )
+                if proc_256 is not None and proc_256.stderr:
+                    tail = "\n".join(proc_256.stderr.splitlines()[-12:])
+                    print(f"Oink: probe stderr tail:\n{tail}", file=sys.stderr)
+            else:
+                rc_256 = proc_256.returncode if proc_256 is not None else "not run"
+                rc_128 = proc_128.returncode if proc_128 is not None else "not run"
+                print(
+                    "Oink: cluster_n>1 + direct_gmem compile probe failed; "
+                    f"falling back to staged SMEM path "
+                    f"(256b rc={rc_256}, 128b rc={rc_128}).",
+                    file=sys.stderr,
+                )
+                if proc_256 is not None and proc_256.returncode != 0 and proc_256.stderr:
+                    tail = "\n".join(proc_256.stderr.splitlines()[-12:])
+                    print(f"Oink: 256b probe stderr tail:\n{tail}", file=sys.stderr)
+                if proc_128 is not None and proc_128.returncode != 0 and proc_128.stderr:
+                    tail = "\n".join(proc_128.stderr.splitlines()[-12:])
+                    print(f"Oink: 128b probe stderr tail:\n{tail}", file=sys.stderr)
+
+        _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = max_bits
+        return max_bits
+
+
 class RMSNormSM100:
     def __init__(
         self,
@@ -1532,26 +1472,28 @@ class RMSNormSM100:
         self.direct_gmem = bool(direct_gmem)
 
     def _threads_per_row(self) -> int:
-        try:
-            return self._tpr_override  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        # Tune mid-size buckets for large-M rows.
+        # Manual override (used by specialized schedules like 2-rows/CTA).
+        tpr = getattr(self, "_tpr_override", None)
+        if tpr is not None:
+            return int(tpr)
+
         N = self.N
+
         # DSv3 MLA (padded/strided) hot shape. Prefer a threads-per-row that
         # makes the tile width exactly match N with 128b vectors (bf16/fp16),
         # avoiding the ~33% padded work from rounding 1536 -> 2048.
         if N == 1536 and self.dtype.width == 16:
             return 96
+
         # DSv3 default hidden size (7168). Choose a threads-per-row that matches
         # the selected vector width to avoid padded work. Using 224 threads/row
         # yields exact tiles for all supported copy widths we use on SM100:
         # - 64b copies (vec=4 for bf16/fp16): 7168/4 = 1792 = 8 * 224
         # - 128b copies (vec=8 for bf16/fp16): 7168/8 = 896 = 4 * 224
         # - 256b copies (vec=16 for bf16/fp16): 7168/16 = 448 = 2 * 224
-        #
         if N == 7168 and self.dtype.width == 16:
             return 224
+
         # DSv3-ish N buckets (6144/8192): use larger threads/row so each thread
         # holds fewer elements in registers. For 256b vectors, pick a threads/row
         # that yields an exact tile without padding.
@@ -1563,25 +1505,20 @@ class RMSNormSM100:
                     return 256
             if N == 8192:
                 return 256
-        # For small-N, use at least one full warp per row. The kernel
-        # implementation assumes one row per CTA; returning <32 here can
-        # produce multi-row tiles (cols_per_block > 1) which is not supported.
+
+        # Small-N: at least one warp per row (kernel assumes 1 row/CTA).
         if N <= 1024:
             return 32
-        elif N <= 4096:
+        if N <= 4096:
             return 128
-        elif N <= 8192:
+        if N <= 8192:
             return 128
-        elif N <= 16384:
-            return 256
-        else:
-            return 256
+        return 256
 
     def _cluster_n(self) -> int:
-        try:
-            return self._cluster_n_override  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        cn = getattr(self, "_cluster_n_override", None)
+        if cn is not None:
+            return int(cn)
         N = self.N
         # Default policy
         if N <= 8192:
@@ -1612,24 +1549,24 @@ class RMSNormSM100:
     def _num_threads(self) -> int:
         # Favor 128 threads up to N=16k to reduce per-row partitioning overhead.
         # This keeps cols_per_block=1 at N=8192 (bf16), which benchmarks faster for large-M.
-        try:
-            return self._nt_override  # type: ignore[attr-defined]
-        except Exception:
-            if self.N == 1536 and self.dtype.width == 16:
-                return 96
-            if self.N == 7168 and self.dtype.width == 16:
-                return 224
-            if self.dtype.width == 16:
-                if self.N == 6144:
-                    if self.copy_bits >= 256:
-                        return 192
-                    if self.copy_bits <= 128:
-                        return 256
-                if self.N == 8192:
+        nt = getattr(self, "_nt_override", None)
+        if nt is not None:
+            return int(nt)
+        if self.N == 1536 and self.dtype.width == 16:
+            return 96
+        if self.N == 7168 and self.dtype.width == 16:
+            return 224
+        if self.dtype.width == 16:
+            if self.N == 6144:
+                if self.copy_bits >= 256:
+                    return 192
+                if self.copy_bits <= 128:
                     return 256
-            if self.N <= 1024:
-                return 32
-            return 128 if self.N <= 16384 else 256
+            if self.N == 8192:
+                return 256
+        if self.N <= 1024:
+            return 32
+        return 128 if self.N <= 16384 else 256
 
     def _tv_layout(self, num_copy_bits: int = 256) -> Tuple[cute.Shape, cute.Layout]:
         vecsize = num_copy_bits // self.dtype.width
@@ -3791,16 +3728,15 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
     def _get_num_threads(self) -> int:
         # Keep 128 threads only up to N=4k; use 256 for larger rows to ensure
         # threads_per_row <= num_threads across buckets.
-        try:
-            return self._nt_override  # type: ignore[attr-defined]
-        except Exception:
-            return 128 if self.N <= 4096 else 256
+        nt = getattr(self, "_nt_override", None)
+        if nt is not None:
+            return int(nt)
+        return 128 if self.N <= 4096 else 256
 
     def _calculate_threads_per_row(self) -> int:
-        try:
-            return self._tpr_override  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        tpr = getattr(self, "_tpr_override", None)
+        if tpr is not None:
+            return int(tpr)
         # Match Quack's backward tiling: use 256 threads/row for N > 4096.
         #
         # The earlier "mirror forward" policy (128 threads/row for N<=8192)
@@ -3809,19 +3745,15 @@ class RMSNormBackwardSM100(BaseRMSNormBackward):
         for limit, threads in [(64, 8), (128, 16), (256, 32), (512, 64), (4096, 128)]:
             if N <= limit:
                 return threads
-        try:
-            return self._tpr_override  # type: ignore[attr-defined]
-        except Exception:
-            return 256
+        return 256
 
     def _set_cluster_n(self) -> None:
         # Reuse the SM100 forward cluster growth policy so large-N shapes can
         # fan out across multiple CTAs in the same row.
-        try:
-            self.cluster_n = self._cluster_n_override  # type: ignore[attr-defined]
+        cn = getattr(self, "_cluster_n_override", None)
+        if cn is not None:
+            self.cluster_n = int(cn)
             return
-        except Exception:
-            pass
 
         N = self.N
         if N <= 8192:

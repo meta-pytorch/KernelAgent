@@ -61,6 +61,12 @@ def fast_launch_enabled() -> bool:
 
 
 def disable_fast_launch() -> None:
+    """Globally disable fast-launch for all consumers (rmsnorm, layernorm, etc.).
+
+    This is intentionally global: if CuTeDSL internals are missing or changed,
+    the failure applies to every kernel module, not just the one that hit it
+    first.  Disabling once avoids repeated slow AttributeError fallbacks.
+    """
     global _FAST_LAUNCH_SUPPORTED
     _FAST_LAUNCH_SUPPORTED = False
 
