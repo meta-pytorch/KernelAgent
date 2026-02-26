@@ -26,8 +26,6 @@ Reference implementation provenance:
   ("[RmsNorm] Compile with tvm-ffi and fake tensors")
 """
 
-from __future__ import annotations
-
 import importlib.metadata
 import math
 import operator
