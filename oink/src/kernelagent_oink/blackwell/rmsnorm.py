@@ -159,6 +159,7 @@ _FORCE_RMSNORM_STAGE2_FWD = _env_flag(
     "KERNELAGENT_OINK_FORCE_RMSNORM_STAGE2", default=False
 )
 
+
 def _parse_version_tuple(version: str) -> Tuple[int, int, int]:
     parts = version.split(".")
     nums: list[int] = []
@@ -1440,10 +1441,18 @@ print(f"ok {copy_bits}")
                     f"(256b rc={rc_256}, 128b rc={rc_128}).",
                     file=sys.stderr,
                 )
-                if proc_256 is not None and proc_256.returncode != 0 and proc_256.stderr:
+                if (
+                    proc_256 is not None
+                    and proc_256.returncode != 0
+                    and proc_256.stderr
+                ):
                     tail = "\n".join(proc_256.stderr.splitlines()[-12:])
                     print(f"Oink: 256b probe stderr tail:\n{tail}", file=sys.stderr)
-                if proc_128 is not None and proc_128.returncode != 0 and proc_128.stderr:
+                if (
+                    proc_128 is not None
+                    and proc_128.returncode != 0
+                    and proc_128.stderr
+                ):
                     tail = "\n".join(proc_128.stderr.splitlines()[-12:])
                     print(f"Oink: 128b probe stderr tail:\n{tail}", file=sys.stderr)
 
