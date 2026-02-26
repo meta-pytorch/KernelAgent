@@ -17,7 +17,7 @@ Blog post: [PyTorch KernelFalcon](https://pytorch.org/blog/kernelfalcon-autonomo
 
 Every stage writes artifacts to a run directory under `.fuse/<run_id>/`, including the fused PyTorch code, `subgraphs.json`, individual KernelAgent sessions, and the final `compose_out/composed_kernel.py`.
 
-## Kernel Optimization Pipeline Overview
+## KernelAgent Multi-Worker Optimization Pipeline Overview
 ![](./assets/opt_agent.svg)
 Every stage writes artifacts to a run directory under `.optimize/<run_id>/`, including the input Triton kernel, artifacts, individual optimization worker sessions, and the final `output/best_kernel.py`.
 
