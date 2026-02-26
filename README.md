@@ -90,7 +90,7 @@ LLM_RELAY_TIMEOUT_S=120
 
 More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 
-## End-to-End Workflows
+## End-to-End Kernel Generation Workflows
 
 - **Auto-route a KernelBench problem** — static analysis picks between the direct KernelAgent path and the full Fuser pipeline, with automatic fallback if the first attempt fails:
   ```bash
@@ -148,7 +148,6 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
   - Triton KernelAgent UI: `kernel-agent` or `python scripts/triton_ui.py`
   - Fuser orchestration UI: `fuser-ui` or `python scripts/fuser_ui`
   - Full pipeline UI: `pipeline-ui` or `python scripts/pipeline_ui`
-  - Optimization UI: `optimization-ui` or `python scripts/optimization_ui.py`
 
 ## Component Details
 
@@ -164,7 +163,7 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
 
 - **Composer (`Fuser/compose_end_to_end.py`)**: stitches the verified kernels back into a single Triton program. The composed file contains one or more `@triton.jit` kernels plus a `kernel_function(...)` wrapper and a self-test that replays the original PyTorch problem. With `--verify`, the test is executed immediately and must succeed.
 
-## Kernel Optimization Pipeline
+## End-to-End Kernel Optimization Workflows
 
 KernelAgent includes a hardware-guided optimization pipeline that iteratively improves a verified Triton kernel's performance using GPU profiling feedback.
 
@@ -177,11 +176,120 @@ KernelAgent includes a hardware-guided optimization pipeline that iteratively im
 
 The loop runs for up to N rounds, with early termination when the kernel reaches roofline (≥95% SOL) or when performance converges.
 
-### Usage
+## Usage
 
-#### Gradio UI
+### Programmatic API
+
+```python
+from pathlib import Path
+from triton_kernel_agent.opt_manager import OptimizationManager
+
+# Load your inputs
+kernel_code = Path("kernel.py").read_text()
+problem_file = Path("problem.py")
+test_code = Path("test_kernel.py").read_text()
+
+manager = OptimizationManager(
+    # --- Search Strategy ---
+    strategy="beam_search",          # "beam_search" or "greedy"
+    strategy_config={
+        "num_top_kernels": 2,        # Beam width: keep top N kernels each round
+        "num_bottlenecks": 2,        # Explore M bottleneck directions per kernel
+    },
+    num_workers=4,                   # Must equal num_top_kernels × num_bottlenecks
+    max_rounds=20,                   # Maximum optimization iterations
+
+    # --- Logging & Persistence ---
+    log_dir=Path(".optimize/run"),              # Artifacts and logs directory
+    database_path=Path(".optimize/run/db.json"), # JSON database for program history
+
+    # --- LLM Configuration ---
+    openai_model="claude-opus-4.5",  # Model for optimization suggestions
+    high_reasoning_effort=True,      # Enable extended thinking for complex optimizations
+
+    # --- Worker Configuration (passed to OptimizationWorker) ---
+    benchmark_warmup=25,             # Warmup iterations before timing
+    benchmark_repeat=100,            # Timing iterations for stable measurements
+    divergence_threshold=50.0,       # Max % regression before reverting to previous best
+    target_platform="cuda",          # "cuda" or "xpu"
+    gpu_name="NVIDIA H100 NVL 94GB", # GPU name for specs lookup (auto-detect if None)
+)
+
+result = manager.run_optimization(
+    initial_kernel=kernel_code,      # Starting Triton kernel code
+    problem_file=problem_file,       # Path to problem.py with Model class and get_inputs()
+    test_code=test_code,             # Test code for correctness verification
+    max_rounds=10,                   # Override max_rounds
+)
+
+# Result structure
+if result["success"]:
+    print(f"Best kernel time: {result['best_time_ms']:.4f} ms")
+    print(f"PyTorch baseline: {result['pytorch_baseline_ms']:.4f} ms")
+    print(f"Speedup: {result['pytorch_baseline_ms'] / result['best_time_ms']:.2f}x")
+    print(f"Optimized kernel:\n{result['kernel_code']}")
+```
+
+### Parameter Reference
+
+
+#### Strategy Configuration
+
+**Beam Search** (`strategy="beam_search"`):
+```python
+strategy_config={
+    "num_top_kernels": 2,   # Beam width: top N kernels to keep
+    "num_bottlenecks": 2,   # Exploration width: M directions per kernel
+}
+```
+
+**Greedy** (`strategy="greedy"`):
+```python
+strategy_config={
+    "max_no_improvement": 5,  # Stop after N rounds without improvement
+}
+```
+
+#### Worker Configuration (passed via `**worker_kwargs`)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `benchmark_warmup` | `int` | `25` | GPU warmup iterations before timing |
+| `benchmark_repeat` | `int` | `100` | Timing iterations for stable measurements |
+| `divergence_threshold` | `float` | `50.0` | Max % performance regression before reverting |
+| `target_platform` | `str` | `"cuda"` | Target platform: `"cuda"` or `"xpu"` |
+| `gpu_name` | `str` | auto | GPU name for hardware specs lookup |
+| `ncu_bin_path` | `str` | auto | Path to NCU binary for profiling |
+| `use_rag` | `bool` | `False` | Enable RAG-based optimization hints |
+
+#### run_optimization() Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `initial_kernel` | `str` | Starting Triton kernel source code |
+| `problem_file` | `Path` | Path to `problem.py` defining `Model` class and `get_inputs()` |
+| `test_code` | `str` | Test code for numerical correctness verification |
+| `max_rounds` | `int` | Override the manager's `max_rounds` (optional) |
+
+#### Return Value
+
+```python
+{
+    "success": bool,                  # True if optimization found a valid kernel
+    "kernel_code": str | None,        # Best optimized kernel code
+    "best_time_ms": float,            # Best kernel execution time in ms
+    "total_rounds": int,              # Number of rounds completed
+    "pytorch_baseline_ms": float,     # PyTorch eager baseline time
+    "pytorch_compile_ms": float,      # torch.compile baseline time
+    "initial_kernel_time_ms": float,  # Starting kernel time
+    "top_kernels": list[dict],        # Top 5 kernels with times and metadata
+}
+```
+
+### Gradio UI
+
 ```bash
-optimization-ui.py --port 8088
+python scripts/optimization_ui.py --port 8085
 ```
 
 
@@ -254,7 +362,7 @@ These artifacts are designed for reproducibility: you can re-run a single kernel
 
 ## Example Artifacts
 
-Looking for ready-to-browse outputs? See the curated artifacts repo:
+Looking for ready-to-browse **kernel generation** outputs? See the curated artifacts repo:
 
 - https://github.com/Laurawly/kernelagent-artifacts
 
@@ -264,10 +372,19 @@ It includes selected L1/L2/L3 problems with:
 - Composed end‑to‑end Triton programs and verification logs
 - Minimal examples for quick scanning
 
+Looking for ready-to-browse **kernel optimization** outputs? See the curated artifacts repo:
+- https://github.com/kaiming-cheng/kernelagent-optimization-artifacts
+
+
+It includes selected L1 problems with:
+- Initial Triton kernel (generated by earlier KernelAgent) fed into the optimization loop
+- Final optimized Triton kernel (output)
+- Per-round artifacts from the beam-search optimization
 ## Repository Layout
 
 - `triton_kernel_agent/` — KernelAgent core (agent, worker manager, provider adapters, prompt templates)
 - `triton_kernel_agent/opt_worker_component/` — optimization pipeline (profiler, benchmarker, bottleneck analyzer, orchestrator)
+- `kernel_perf_agent/kernel_opt` — roofline analysis, hardware specs, and benchmarking utilities
 - `Fuser/` — auto-router, orchestration pipeline, CLIs, Gradio UIs
 - `triton_kernel_agent/templates/` — Jinja templates used when prompting TritonKernelAgent
 - `examples/` — sample problems and prompt snippets
@@ -285,7 +402,6 @@ It includes selected L1/L2/L3 problems with:
 ## Documentation & Community
 
 - Optimization pipeline docs: see [Kernel Optimization Pipeline](#kernel-optimization-pipeline) above
-- Open-source recommendations: see `docs/open_source_recommendations.md`
 - Issues: https://github.com/pytorch-labs/KernelAgent/issues
 - Blog post: https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/
 
