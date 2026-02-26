@@ -25,6 +25,18 @@ from pathlib import Path
 # ------------------------
 
 
+def _call_llm(
+    provider,
+    model: str,
+    messages: list,
+    logger: Logger | None = None,
+    **kwargs,
+) -> str:
+    """Call an LLM provider and return the response text."""
+    response = provider.get_response(model, messages, **kwargs)
+    return response.content
+
+
 def _extract_history_usage_from_response(
     response_text: str,
     logger: Logger | None = None,

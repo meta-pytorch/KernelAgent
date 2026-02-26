@@ -29,11 +29,7 @@ from kernel_perf_agent.kernel_opt.diagnose_prompt.judger_prompt import Bottlenec
 from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import RooflineAnalyzer
 from triton_kernel_agent.prompt_manager import PromptManager
 from triton_kernel_agent.worker import VerificationWorker
-from triton_kernel_agent.worker_util import (
-    _call_llm,
-    _extract_code_from_response,
-    _write_kernel_file,
-)
+from triton_kernel_agent.worker_util import _write_kernel_file
 from utils.providers.base import BaseProvider
 
 
@@ -854,12 +850,8 @@ class OptimizationOrchestrator:
         self.logger.info(f"[{round_num}] Generating optimized kernel...")
         try:
             messages = [{"role": "user", "content": opt_prompt}]
-            response_text = _call_llm(
-                provider=self.provider,
-                model=self.model,
-                messages=messages,
-                high_reasoning_effort=self.high_reasoning_effort,
-                logger=self.logger,
+            response_text = self.verification_worker._call_llm(
+                messages,
                 max_tokens=24576,
             )
 
@@ -869,9 +861,8 @@ class OptimizationOrchestrator:
                 f.write(response_text)
 
             # Extract code
-            optimized_kernel = _extract_code_from_response(
-                response_text=response_text,
-                logger=self.logger,
+            optimized_kernel = self.verification_worker._extract_code_from_response(
+                response_text,
             )
 
             if not optimized_kernel or len(optimized_kernel) < 100:
@@ -949,14 +940,14 @@ class OptimizationOrchestrator:
             reflexion_prompt = self.prompt_manager.render_reflexion_prompt(attempt)
 
             messages = [{"role": "user", "content": reflexion_prompt}]
-            response_text = _call_llm(
-                provider=self.provider,
-                model=self.model,
-                messages=messages,
-                high_reasoning_effort=False,  # Use standard reasoning for reflexion
-                logger=self.logger,
+            # Use provider directly with high_reasoning_effort=False
+            # (worker._call_llm would force high_reasoning=True if worker was configured that way)
+            response = self.provider.get_response(
+                self.model,
+                messages,
                 max_tokens=2048,
             )
+            response_text = response.content
 
             # Save reflexion response
             reflexion_file = (

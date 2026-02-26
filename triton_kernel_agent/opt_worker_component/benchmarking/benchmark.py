@@ -234,3 +234,68 @@ class Benchmark:
             self.logger.error(f"PyTorch baseline benchmark failed: {e}")
             self.logger.error(traceback.format_exc())
             return {"time_ms": float("inf")}
+
+    def benchmark_pytorch_compile(
+        self,
+        problem_file: Path,
+        dtype: Optional[torch.dtype] = None,
+    ) -> dict[str, Any]:
+        """Benchmark torch.compile'd PyTorch baseline using direct in-process timing.
+
+        Mirrors benchmark_pytorch() but wraps the model with torch.compile()
+        and uses extended warmup (3 forward calls) before timing to allow
+        compilation and warm caches.
+
+        Args:
+            problem_file: Path to problem file (must define Model class and get_inputs())
+            dtype: Data type to use (default: auto-detect based on model parameters)
+
+        Returns:
+            Dictionary with benchmark results:
+                - time_ms: Mean time in ms
+                - stats: Full timing statistics (mean, std, min, max, all_times, etc.)
+        """
+        try:
+            with self.lock_manager:
+                model, inputs = prepare_pytorch_model(
+                    problem_file=problem_file,
+                    device="cuda",
+                    dtype=dtype,
+                )
+
+                model = torch.compile(model)
+
+                # Extended warmup: 3 forward calls to trigger compilation
+                for _ in range(3):
+                    model(*inputs)
+                torch.cuda.synchronize()
+
+                if self.timing_method == "do_bench":
+                    times = time_with_triton_do_bench(
+                        lambda: model(*inputs),
+                        [],
+                        warmup=self.warmup,
+                        rep=self.repeat,
+                        verbose=False,
+                    )
+                else:  # cuda_event
+                    times = time_with_cuda_events(
+                        lambda: model(*inputs),
+                        [],
+                        num_warmup=self.warmup,
+                        num_trials=self.repeat,
+                        clear_cache=True,
+                        verbose=False,
+                    )
+
+                stats = compute_timing_stats(times)
+
+                return {
+                    "time_ms": stats["mean"],
+                    "stats": stats,
+                }
+
+        except Exception as e:
+            self.logger.error(f"PyTorch compile benchmark failed: {e}")
+            self.logger.error(traceback.format_exc())
+            return {"time_ms": float("inf")}
