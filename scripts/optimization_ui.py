@@ -278,7 +278,7 @@ def run_optimization(
 def _build_status_markdown(result: dict, strategy: str, num_workers: int) -> str:
     """Build the final status markdown from an OptimizationManager result dict."""
     if not result.get("success"):
-        return "## Optimization Failed\n\nNo improvement found."
+        return f"## Optimization Failed\n\n{result.get('error', '') or 'No improvement found.'}"
 
     best_time = result.get("best_time_ms", 0)
     total_rounds = result.get("total_rounds", 0)
