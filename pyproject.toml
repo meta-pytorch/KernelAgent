@@ -33,6 +33,7 @@ dependencies = [
     "gradio>=5.5.0",
     "requests",
     "numpy",
+    "omegaconf",
 ]
 
 [project.optional-dependencies]
