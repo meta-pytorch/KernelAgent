@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kernelagent-oink"
+version = "0.1.0"
+description = "CuTeDSL kernels for Blackwell (SM100), shipped as a vLLM plugin"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "PyTorch Labs"}]
+keywords = ["cuda", "cutlass", "cute", "cutedsl", "blackwell", "sm100", "vllm"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/meta-pytorch/KernelAgent"
+Documentation = "https://github.com/meta-pytorch/KernelAgent/tree/main/oink"
+Issues = "https://github.com/meta-pytorch/KernelAgent/issues"
+
+# Keep dependencies minimal, but include the CuTeDSL stack required by the
+# Blackwell RMSNorm implementation.
+#
+# We intentionally do NOT depend on `torch` here because vLLM already pins and
+# provides a compatible PyTorch build.
+dependencies = [
+  "nvidia-cutlass-dsl>=4.2.1",
+  "cuda-python",
+]
+
+[project.optional-dependencies]
+# Optional extras for running the in-repo benchmark suite (not needed for vLLM integration).
+bench = [
+  "matplotlib",
+  "triton",
+]
+
+[project.entry-points."vllm.general_plugins"]
+oink = "kernelagent_oink:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["kernelagent_oink*"]

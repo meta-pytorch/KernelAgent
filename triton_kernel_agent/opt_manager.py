@@ -239,6 +239,17 @@ class OptimizationManager:
         )
         self.strategy.initialize(initial_entry)
 
+        # Verify initial kernel correctness before investing in benchmarks/optimization
+        if not self._verify_initial_kernel(initial_kernel, problem_file, test_code):
+            return {
+                "success": False,
+                "kernel_code": None,
+                "best_time_ms": float("inf"),
+                "total_rounds": 0,
+                "top_kernels": [],
+                "error": "Initial kernel failed correctness verification",
+            }
+
         # Benchmark PyTorch baseline once (before spawning workers)
         pytorch_baseline = self._benchmark_pytorch_baseline(problem_file)
 
@@ -351,6 +362,52 @@ class OptimizationManager:
             self.logger.info(f"PyTorch baseline: {pytorch_time:.4f}ms")
 
         return pytorch_time
+
+    def _verify_initial_kernel(
+        self,
+        initial_kernel: str,
+        problem_file: Path,
+        test_code: str,
+    ) -> bool:
+        """Verify the initial kernel passes correctness before optimization.
+
+        Args:
+            initial_kernel: Kernel source code
+            problem_file: Path to problem.py
+            test_code: Test code for correctness verification
+
+        Returns:
+            True if the initial kernel passes verification
+        """
+        from triton_kernel_agent.worker import VerificationWorker
+
+        verify_dir = self.log_dir / "initial_verify"
+        verify_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy problem file so the test can import it
+        shutil.copy(problem_file, verify_dir / "problem.py")
+
+        worker = VerificationWorker(
+            worker_id=-1,
+            workdir=verify_dir,
+            log_dir=verify_dir,
+        )
+
+        success, _, error = worker.verify_with_refinement(
+            kernel_code=initial_kernel,
+            test_code=test_code,
+            problem_description=problem_file.read_text(),
+            max_refine_attempts=0,
+        )
+
+        if not success:
+            self.logger.error(
+                f"Initial kernel failed correctness verification: {error[:200]}"
+            )
+        else:
+            self.logger.info("Initial kernel passed correctness verification")
+
+        return success
 
     def _benchmark_initial_kernel(
         self, initial_kernel: str, problem_file: Path
