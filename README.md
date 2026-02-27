@@ -178,120 +178,22 @@ The loop runs for up to N rounds, with early termination when the kernel reaches
 
 ## Usage
 
-### Programmatic API
-
-```python
-from pathlib import Path
-from triton_kernel_agent.opt_manager import OptimizationManager
-
-# Load your inputs
-kernel_code = Path("kernel.py").read_text()
-problem_file = Path("problem.py")
-test_code = Path("test_kernel.py").read_text()
-
-manager = OptimizationManager(
-    # --- Search Strategy ---
-    strategy="beam_search",          # "beam_search" or "greedy"
-    strategy_config={
-        "num_top_kernels": 2,        # Beam width: keep top N kernels each round
-        "num_bottlenecks": 2,        # Explore M bottleneck directions per kernel
-    },
-    num_workers=4,                   # Must equal num_top_kernels × num_bottlenecks
-    max_rounds=20,                   # Maximum optimization iterations
-
-    # --- Logging & Persistence ---
-    log_dir=Path(".optimize/run"),              # Artifacts and logs directory
-    database_path=Path(".optimize/run/db.json"), # JSON database for program history
-
-    # --- LLM Configuration ---
-    openai_model="claude-opus-4.5",  # Model for optimization suggestions
-    high_reasoning_effort=True,      # Enable extended thinking for complex optimizations
-
-    # --- Worker Configuration (passed to OptimizationWorker) ---
-    benchmark_warmup=25,             # Warmup iterations before timing
-    benchmark_repeat=100,            # Timing iterations for stable measurements
-    divergence_threshold=50.0,       # Max % regression before reverting to previous best
-    target_platform="cuda",          # "cuda" or "xpu"
-    gpu_name="NVIDIA H100 NVL 94GB", # GPU name for specs lookup (auto-detect if None)
-)
-
-result = manager.run_optimization(
-    initial_kernel=kernel_code,      # Starting Triton kernel code
-    problem_file=problem_file,       # Path to problem.py with Model class and get_inputs()
-    test_code=test_code,             # Test code for correctness verification
-    max_rounds=10,                   # Override max_rounds
-)
-
-# Result structure
-if result["success"]:
-    print(f"Best kernel time: {result['best_time_ms']:.4f} ms")
-    print(f"PyTorch baseline: {result['pytorch_baseline_ms']:.4f} ms")
-    print(f"Speedup: {result['pytorch_baseline_ms'] / result['best_time_ms']:.2f}x")
-    print(f"Optimized kernel:\n{result['kernel_code']}")
-```
-
-### Parameter Reference
-
-
-#### Strategy Configuration
-
-**Beam Search** (`strategy="beam_search"`):
-```python
-strategy_config={
-    "num_top_kernels": 2,   # Beam width: top N kernels to keep
-    "num_bottlenecks": 2,   # Exploration width: M directions per kernel
-}
-```
-
-**Greedy** (`strategy="greedy"`):
-```python
-strategy_config={
-    "max_no_improvement": 5,  # Stop after N rounds without improvement
-}
-```
-
-#### Worker Configuration (passed via `**worker_kwargs`)
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `benchmark_warmup` | `int` | `25` | GPU warmup iterations before timing |
-| `benchmark_repeat` | `int` | `100` | Timing iterations for stable measurements |
-| `divergence_threshold` | `float` | `50.0` | Max % performance regression before reverting |
-| `target_platform` | `str` | `"cuda"` | Target platform: `"cuda"` or `"xpu"` |
-| `gpu_name` | `str` | auto | GPU name for hardware specs lookup |
-| `ncu_bin_path` | `str` | auto | Path to NCU binary for profiling |
-| `use_rag` | `bool` | `False` | Enable RAG-based optimization hints |
-
-#### run_optimization() Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `initial_kernel` | `str` | Starting Triton kernel source code |
-| `problem_file` | `Path` | Path to `problem.py` defining `Model` class and `get_inputs()` |
-| `test_code` | `str` | Test code for numerical correctness verification |
-| `max_rounds` | `int` | Override the manager's `max_rounds` (optional) |
-
-#### Return Value
-
-```python
-{
-    "success": bool,                  # True if optimization found a valid kernel
-    "kernel_code": str | None,        # Best optimized kernel code
-    "best_time_ms": float,            # Best kernel execution time in ms
-    "total_rounds": int,              # Number of rounds completed
-    "pytorch_baseline_ms": float,     # PyTorch eager baseline time
-    "pytorch_compile_ms": float,      # torch.compile baseline time
-    "initial_kernel_time_ms": float,  # Starting kernel time
-    "top_kernels": list[dict],        # Top 5 kernels with times and metadata
-}
-```
-
 ### Gradio UI
 
 ```bash
 python scripts/optimization_ui.py --port 8085
 ```
 
+
+### Programmatic API
+
+**Optimize a kernel using beam search** — parallel exploration with top-N kernels and M bottleneck directions:
+```bash
+cd examples && python run_opt_manager.py \
+  --kernel-dir optimize_01_matvec/ \
+  --strategy beam_search \
+  --max-rounds 5
+```
 
 ### Key Components
 
