@@ -54,6 +54,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from Fuser.pipeline import run_pipeline
+from utils.config_injectable import config_injectable
 
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
@@ -320,6 +321,7 @@ class RouteResult:
     kernel_code: str | None = None
 
 
+@config_injectable
 class AutoKernelRouter:
     def __init__(
         self,
@@ -343,7 +345,7 @@ class AutoKernelRouter:
         verify: bool = True,
         dispatch_jobs: int = 2,
         allow_fallback: bool = True,
-        target_platform: str | None = None,
+        target_platform: str = "cuda",
         ignore_router_config: bool = False,
         use_router_cache: bool = True,
         no_cusolver: bool = False,
@@ -713,6 +715,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--problem", required=True, help="Absolute path to the problem file")
     p.add_argument(
+        "--config",
+        default=None,
+        help="Path to AutoAgentRouter config file. When provided, all other CLI args are ignored.",
+    )
+    p.add_argument(
         "--ka-model",
         default=None,
         help="Model for KernelAgent (optional; uses env default if omitted)",
@@ -767,32 +774,39 @@ def main(argv: list[str] | None = None) -> int:
         print(f"problem not found: {problem_path}", file=sys.stderr)
         return 2
 
-    router = AutoKernelRouter(
-        ka_model=args.ka_model,
-        ka_num_workers=args.ka_workers,
-        ka_max_rounds=args.ka_rounds,
-        ka_high_reasoning=(not args.no_ka_high_reasoning),
-        router_model=args.router_model,
-        router_high_reasoning=(not args.no_router_high_reasoning),
-        router_temperature=args.router_temp,
-        router_max_tokens=args.router_max_tokens,
-        extract_model=args.extract_model,
-        dispatch_model=args.dispatch_model,
-        compose_model=args.compose_model,
-        workers=args.workers,
-        max_iters=args.max_iters,
-        llm_timeout_s=args.llm_timeout_s,
-        run_timeout_s=args.run_timeout_s,
-        compose_max_iters=args.compose_max_iters,
-        verify=args.verify,
-        dispatch_jobs=args.dispatch_jobs,
-        allow_fallback=(not args.no_fallback),
-        target_platform=args.target_platform,
-        ignore_router_config=args.ignore_router_config,
-        use_router_cache=(not args.no_router_cache),
-        no_cusolver=args.no_cusolver,
-        test_timeout_s=args.run_timeout_s,
-    )
+    if args.config is not None:
+        print(
+            f"Using config file: {args.config} (other CLI args are ignored)",
+            file=sys.stderr,
+        )
+        router = AutoKernelRouter(config=args.config)
+    else:
+        router = AutoKernelRouter(
+            ka_model=args.ka_model,
+            ka_num_workers=args.ka_workers,
+            ka_max_rounds=args.ka_rounds,
+            ka_high_reasoning=(not args.no_ka_high_reasoning),
+            router_model=args.router_model,
+            router_high_reasoning=(not args.no_router_high_reasoning),
+            router_temperature=args.router_temp,
+            router_max_tokens=args.router_max_tokens,
+            extract_model=args.extract_model,
+            dispatch_model=args.dispatch_model,
+            compose_model=args.compose_model,
+            workers=args.workers,
+            max_iters=args.max_iters,
+            llm_timeout_s=args.llm_timeout_s,
+            run_timeout_s=args.run_timeout_s,
+            compose_max_iters=args.compose_max_iters,
+            verify=args.verify,
+            dispatch_jobs=args.dispatch_jobs,
+            allow_fallback=(not args.no_fallback),
+            target_platform=args.target_platform,
+            ignore_router_config=args.ignore_router_config,
+            use_router_cache=(not args.no_router_cache),
+            no_cusolver=args.no_cusolver,
+            test_timeout_s=args.run_timeout_s,
+        )
 
     try:
         res = router.solve(problem_path)
