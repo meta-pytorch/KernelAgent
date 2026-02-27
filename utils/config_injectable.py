@@ -25,9 +25,7 @@ def _merge_args(func, args, kwargs):
 
     config_data = {}
     if config_path is not None:
-        config_data = OmegaConf.to_container(
-            OmegaConf.load(config_path), resolve=True
-        )
+        config_data = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
 
     for param in sig.parameters.values():
         if param.name not in bound_args.arguments and param.name in config_data:
