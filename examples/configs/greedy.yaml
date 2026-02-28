@@ -1,0 +1,12 @@
+strategy: greedy
+num_workers: 1  # Single worker
+strategy_config:
+  max_no_improvement: 5  # Early stop after 5 rounds without improvement
+openai_model: gpt-5
+high_reasoning_effort: true
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"

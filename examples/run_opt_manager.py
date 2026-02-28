@@ -31,6 +31,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from triton_kernel_agent.opt_manager import OptimizationManager
+from triton_kernel_agent.platform.noop import (
+    NoOpBenchmarker,
+    NoOpVerifier,
+    NoOpWorkerRunner,
+)
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
@@ -63,31 +68,18 @@ def run_beam_search_optimization(
     print("BEAM SEARCH OPTIMIZATION")
     print("=" * 80)
 
+    config_path = Path(__file__).parent / "configs" / "beam_search.yaml"
     manager = OptimizationManager(
-        strategy="beam_search",
-        num_workers=4,  # 2 top kernels × 2 bottlenecks
         max_rounds=max_rounds,
         log_dir=log_dir / "beam_search",
         database_path=log_dir / "beam_search" / "program_db.json",
-        strategy_config={
-            "num_top_kernels": 2,  # Keep top 2 kernels in beam
-            "num_bottlenecks": 2,  # Explore 2 bottleneck directions each
-        },
-        openai_model="gpt-5",
-        high_reasoning_effort=True,
-        # Worker configuration
-        benchmark_warmup=25,
-        benchmark_repeat=100,
-        divergence_threshold=50.0,
-        target_platform="cuda",
-        gpu_name="NVIDIA H100 NVL 94GB",
+        config=str(config_path),
     )
 
     return manager.run_optimization(
         initial_kernel=kernel_code,
         problem_file=problem_file,
         test_code=test_code,
-        max_rounds=max_rounds,
     )
 
 
@@ -119,30 +111,65 @@ def run_greedy_optimization(
     print("GREEDY OPTIMIZATION")
     print("=" * 80)
 
+    config_path = Path(__file__).parent / "configs" / "greedy.yaml"
     manager = OptimizationManager(
-        strategy="greedy",
-        num_workers=1,  # Single worker
         max_rounds=max_rounds,
         log_dir=log_dir / "greedy",
         database_path=log_dir / "greedy" / "program_db.json",
-        strategy_config={
-            "max_no_improvement": 5,  # Early stop after 5 rounds without improvement
-        },
-        openai_model="gpt-5",
-        high_reasoning_effort=True,
-        # Worker configuration
-        benchmark_warmup=25,
-        benchmark_repeat=100,
-        divergence_threshold=50.0,
-        target_platform="cuda",
-        gpu_name="NVIDIA H100 NVL 94GB",
+        config=str(config_path),
     )
 
     return manager.run_optimization(
         initial_kernel=kernel_code,
         problem_file=problem_file,
         test_code=test_code,
+    )
+
+
+def run_noop_optimization(
+    kernel_code: str,
+    problem_file: Path,
+    test_code: str,
+    log_dir: Path,
+    max_rounds: int = 2,
+) -> dict:
+    """
+    Run optimization with no-op platform components.
+
+    All verification, benchmarking, and worker steps are replaced with
+    no-op stubs that print when called and return neutral defaults.
+    The result is a pass-through: the initial kernel is returned unchanged.
+
+    Args:
+        kernel_code: Initial kernel source code
+        problem_file: Path to problem.py
+        test_code: Test code for verification
+        log_dir: Directory for logs and artifacts
+        max_rounds: Maximum optimization rounds
+
+    Returns:
+        Optimization result dict (kernel_code == initial kernel)
+    """
+    print("\n" + "=" * 80)
+    print("NO-OP OPTIMIZATION (platform pass-through)")
+    print("=" * 80)
+
+    manager = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
         max_rounds=max_rounds,
+        log_dir=log_dir / "noop",
+        database_path=log_dir / "noop" / "program_db.json",
+        strategy_config={"max_no_improvement": 1},
+        verifier=NoOpVerifier(),
+        benchmarker=NoOpBenchmarker(),
+        worker_runner=NoOpWorkerRunner(),
+    )
+
+    return manager.run_optimization(
+        initial_kernel=kernel_code,
+        problem_file=problem_file,
+        test_code=test_code,
     )
 
 
@@ -183,9 +210,10 @@ def main():
     )
     parser.add_argument(
         "--strategy",
-        choices=["beam_search", "greedy", "all"],
+        choices=["beam_search", "greedy", "noop", "all"],
         default="beam_search",
-        help="Optimization strategy to use (default: beam_search)",
+        help="Optimization strategy to use (default: beam_search). "
+        "'noop' runs with no-op platform components (pass-through).",
     )
     parser.add_argument(
         "--max-rounds",
@@ -251,6 +279,16 @@ def main():
             args.max_rounds,
         )
         print_result(result, "GREEDY", kernel_dir)
+
+    elif args.strategy == "noop":
+        result = run_noop_optimization(
+            kernel_code,
+            problem_file,
+            test_code,
+            log_dir,
+            args.max_rounds,
+        )
+        print_result(result, "NOOP", kernel_dir)
 
     elif args.strategy == "all":
         # Run all strategies and compare

@@ -18,7 +18,11 @@ from omegaconf import OmegaConf
 
 
 def _merge_args(func, args, kwargs):
-    """Merge explicit args, YAML config, and defaults for the given function."""
+    """Merge explicit args, YAML config, and defaults for the given function.
+
+    For functions with **kwargs, YAML keys that don't match any named parameter
+    are routed into **kwargs. Explicit **kwargs take precedence over YAML values.
+    """
     config_path = kwargs.pop("config", None)
     sig = inspect.signature(func)
     bound_args = sig.bind_partial(*args, **kwargs)
@@ -27,9 +31,23 @@ def _merge_args(func, args, kwargs):
     if config_path is not None:
         config_data = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
 
+    named_params = set()
+    var_keyword_param = None
     for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            var_keyword_param = param
+        else:
+            named_params.add(param.name)
         if param.name not in bound_args.arguments and param.name in config_data:
             bound_args.arguments[param.name] = config_data[param.name]
+
+    # Route remaining config keys into **kwargs if the function accepts them
+    if var_keyword_param is not None:
+        kwargs_dict = bound_args.arguments.get(var_keyword_param.name, {})
+        for key, value in config_data.items():
+            if key not in named_params and key not in kwargs_dict:
+                kwargs_dict[key] = value
+        bound_args.arguments[var_keyword_param.name] = kwargs_dict
 
     bound_args.apply_defaults()
 
@@ -41,7 +59,15 @@ def _merge_args(func, args, kwargs):
     if missing:
         raise TypeError(f"Missing required arguments: {missing}")
 
-    return bound_args.arguments
+    # Flatten VAR_KEYWORD so func(**result) unpacks correctly
+    result = {}
+    for name, value in bound_args.arguments.items():
+        param = sig.parameters.get(name)
+        if param and param.kind == inspect.Parameter.VAR_KEYWORD:
+            result.update(value)
+        else:
+            result[name] = value
+    return result
 
 
 def config_injectable(target):
@@ -53,6 +79,10 @@ def config_injectable(target):
     Argument priority: explicit > yaml > default.
     A ``TypeError`` is raised for any required arguments still missing after
     all three sources are consulted.
+
+    For functions/classes with ``**kwargs``, YAML keys that don't match any named
+    parameter are routed into ``**kwargs``. Explicit ``**kwargs`` values take
+    precedence over YAML values.
     """
     if isinstance(target, type):
         original_init = target.__init__

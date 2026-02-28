@@ -130,3 +130,89 @@ def test_config_injectable_missing_required_from_yaml():
                 sample_func(config=f.name)
         finally:
             os.unlink(f.name)
+
+
+# --- Tests for **kwargs (VAR_KEYWORD) support ---
+
+
+@config_injectable
+def func_with_kwargs(a, b, c=10, **extra):
+    return {"a": a, "b": b, "c": c, "extra": extra}
+
+
+def test_config_injectable_kwargs_from_yaml():
+    """Extra YAML keys that don't match named params flow into **kwargs."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nb: 2\nd: 100\ne: 200\n")
+        f.flush()
+        try:
+            result = func_with_kwargs(config=f.name)
+            assert result["a"] == 1
+            assert result["b"] == 2
+            assert result["c"] == 10  # default
+            assert result["extra"] == {"d": 100, "e": 200}
+        finally:
+            os.unlink(f.name)
+
+
+def test_config_injectable_kwargs_explicit_override():
+    """Explicit **kwargs take precedence over YAML extras."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nb: 2\nd: 100\ne: 200\n")
+        f.flush()
+        try:
+            result = func_with_kwargs(d=999, config=f.name)
+            assert result["a"] == 1
+            assert result["b"] == 2
+            assert result["extra"]["d"] == 999  # explicit overrides yaml
+            assert result["extra"]["e"] == 200  # from yaml
+        finally:
+            os.unlink(f.name)
+
+
+def test_config_injectable_kwargs_no_config():
+    """Function with **kwargs works normally without a config file."""
+    result = func_with_kwargs(1, 2, d=50)
+    assert result["a"] == 1
+    assert result["b"] == 2
+    assert result["c"] == 10
+    assert result["extra"] == {"d": 50}
+
+
+@config_injectable
+class ClassWithKwargs:
+    def __init__(self, x, y, z=99, **options):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.options = options
+
+
+def test_config_injectable_class_kwargs_from_yaml():
+    """Decorated class routes extra YAML keys into **kwargs of __init__."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("x: 10\ny: 20\nfoo: bar\ncount: 5\n")
+        f.flush()
+        try:
+            obj = ClassWithKwargs(config=f.name)
+            assert obj.x == 10
+            assert obj.y == 20
+            assert obj.z == 99  # default
+            assert obj.options == {"foo": "bar", "count": 5}
+        finally:
+            os.unlink(f.name)
+
+
+def test_config_injectable_class_kwargs_partial_override():
+    """Explicit args + config + defaults + **kwargs all work together on a class."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("x: 999\ny: 20\nz: 30\nfoo: bar\n")
+        f.flush()
+        try:
+            obj = ClassWithKwargs(1, baz="qux", config=f.name)
+            assert obj.x == 1  # explicit overrides yaml's 999
+            assert obj.y == 20  # from yaml
+            assert obj.z == 30  # from yaml overrides default
+            assert obj.options == {"foo": "bar", "baz": "qux"}
+        finally:
+            os.unlink(f.name)

@@ -1,0 +1,13 @@
+strategy: beam_search
+num_workers: 4  # 2 top kernels × 2 bottlenecks
+strategy_config:
+  num_top_kernels: 2  # Keep top 2 kernels in beam
+  num_bottlenecks: 2  # Explore 2 bottleneck directions each
+openai_model: claude-opus-4.5
+high_reasoning_effort: true
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"
