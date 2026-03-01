@@ -1,0 +1,7 @@
+strategy: greedy
+num_workers: 1
+strategy_config:
+  max_no_improvement: 1
+max_rounds: 2
+# Select noop for all platform components
+platform: noop

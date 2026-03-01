@@ -62,6 +62,20 @@ from triton_kernel_agent.platform.interfaces import (
 )
 from utils.config_injectable import config_injectable
 
+# Maps registry component keys to OptimizationWorker __init__ parameter names.
+_WORKER_KWARG_NAMES: dict[str, str] = {
+    "specs_provider": "specs_provider",
+    "profiler": "profiler_override",
+    "roofline_analyzer": "roofline_override",
+    "bottleneck_analyzer": "bottleneck_analyzer_override",
+    "rag_prescriber": "rag_prescriber_override",
+}
+
+
+def _worker_kwarg_name(registry_key: str) -> str:
+    """Map a registry component key to its OptimizationWorker kwarg name."""
+    return _WORKER_KWARG_NAMES[registry_key]
+
 
 @config_injectable
 class OptimizationManager:
@@ -90,6 +104,7 @@ class OptimizationManager:
         high_reasoning_effort: bool = True,
         bottleneck_override: str | None = None,
         # Platform component overrides ─────────────────────────────
+        platform: dict[str, str] | str | None = None,
         verifier: KernelVerifier | None = None,
         benchmarker: KernelBenchmarker | None = None,
         worker_runner: WorkerRunner | None = None,
@@ -107,6 +122,19 @@ class OptimizationManager:
             openai_model: Model name for LLM optimization
             high_reasoning_effort: Whether to use high reasoning effort
             bottleneck_override: Pre-computed bottleneck category to skip LLM analysis
+            platform: Platform component selection.  Can be:
+
+                - A **string** — shorthand preset that applies to every
+                  component (e.g. ``"noop"`` or ``"nvidia"``).
+                - A **dict** mapping component keys to implementation
+                  names, e.g. ``{"verifier": "noop", "profiler": "noop"}``.
+                  Only the components listed are overridden; the rest
+                  fall through to the defaults.
+                - ``None`` — use the defaults (NVIDIA for manager-level,
+                  concrete classes for worker-level).
+
+                Explicit *verifier* / *benchmarker* / *worker_runner*
+                arguments take precedence over anything in *platform*.
             verifier: Optional :class:`KernelVerifier` (default: NVIDIA)
             benchmarker: Optional :class:`KernelBenchmarker` (default: NVIDIA)
             worker_runner: Optional :class:`WorkerRunner` (default: NVIDIA)
@@ -160,13 +188,79 @@ class OptimizationManager:
         self.history_size: int = 10  # Max history entries to pass to workers
 
         # ── Platform components ──────────────────────────────────
-        self.verifier = verifier or self._default_verifier()
-        self.benchmarker = benchmarker or self._default_benchmarker()
-        self.worker_runner = worker_runner or self._default_worker_runner()
+        # Resolve from registry when `platform` is provided, but let
+        # explicit instance arguments win.
+        resolved = self._resolve_platform(platform)
+        self.verifier = verifier or resolved.get("verifier") or self._default_verifier()
+        self.benchmarker = (
+            benchmarker or resolved.get("benchmarker") or self._default_benchmarker()
+        )
+        self.worker_runner = (
+            worker_runner
+            or resolved.get("worker_runner")
+            or self._default_worker_runner()
+        )
+
+        # Propagate any worker-level component names from the platform
+        # config so that OptimizationWorker can pick them up via
+        # worker_kwargs (e.g. profiler_override, specs_provider, …).
+        worker_level_keys = {
+            "specs_provider",
+            "profiler",
+            "roofline_analyzer",
+            "bottleneck_analyzer",
+            "rag_prescriber",
+        }
+        for key in worker_level_keys:
+            if key in resolved and key not in self.worker_kwargs:
+                self.worker_kwargs[_worker_kwarg_name(key)] = resolved[key]
 
         self.logger.info(
             f"OptimizationManager initialized: strategy={strategy}, workers={num_workers}"
         )
+
+    # ------------------------------------------------------------------
+    # Platform registry resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_platform(
+        self, platform: dict[str, str] | str | None
+    ) -> dict[str, Any]:
+        """Resolve *platform* specification into component instances.
+
+        Returns a dict keyed by component name whose values are either
+        instantiated objects (manager-level) or objects to pass through
+        to the worker (worker-level).  Missing keys simply mean "use
+        the default".
+        """
+        if platform is None:
+            return {}
+
+        from triton_kernel_agent.platform.registry import registry
+
+        # Shorthand string → expand to all registered components for
+        # that implementation name.
+        if isinstance(platform, str):
+            platform = {
+                comp: platform
+                for comp in registry.list_components()
+                if registry.has(comp, platform)
+            }
+
+        # Build a shared kwargs bag that the registry can pick from
+        # when constructing manager-level factories.
+        shared_kwargs: dict[str, Any] = {
+            "log_dir": self.log_dir,
+            "logger": self.logger,
+            "benchmark_lock": self.benchmark_lock,
+            "profiling_semaphore": self.profiling_semaphore,
+            "openai_model": self.openai_model,
+            "high_reasoning_effort": self.high_reasoning_effort,
+            "bottleneck_override": self.bottleneck_override,
+            "worker_kwargs": self.worker_kwargs,
+        }
+
+        return registry.create_from_config(platform, **shared_kwargs)
 
     # ------------------------------------------------------------------
     # Default (NVIDIA) component factories

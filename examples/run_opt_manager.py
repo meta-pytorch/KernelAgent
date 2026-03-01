@@ -31,11 +31,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from triton_kernel_agent.opt_manager import OptimizationManager
-from triton_kernel_agent.platform.noop import (
-    NoOpBenchmarker,
-    NoOpVerifier,
-    NoOpWorkerRunner,
-)
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
@@ -140,6 +135,9 @@ def run_noop_optimization(
     no-op stubs that print when called and return neutral defaults.
     The result is a pass-through: the initial kernel is returned unchanged.
 
+    Uses ``configs/noop.yaml`` which sets ``platform: noop`` to resolve
+    all components through the platform registry.
+
     Args:
         kernel_code: Initial kernel source code
         problem_file: Path to problem.py
@@ -154,16 +152,12 @@ def run_noop_optimization(
     print("NO-OP OPTIMIZATION (platform pass-through)")
     print("=" * 80)
 
+    config_path = Path(__file__).parent / "configs" / "noop.yaml"
     manager = OptimizationManager(
-        strategy="greedy",
-        num_workers=1,
         max_rounds=max_rounds,
         log_dir=log_dir / "noop",
         database_path=log_dir / "noop" / "program_db.json",
-        strategy_config={"max_no_improvement": 1},
-        verifier=NoOpVerifier(),
-        benchmarker=NoOpBenchmarker(),
-        worker_runner=NoOpWorkerRunner(),
+        config=str(config_path),
     )
 
     return manager.run_optimization(
