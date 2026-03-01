@@ -14,34 +14,63 @@
 
 """Platform abstraction layer for the optimization manager.
 
-Interfaces (ABCs):
+**Manager-level interfaces** (coarse — replace an entire subsystem):
     KernelVerifier, KernelBenchmarker, WorkerRunner
 
+**Worker-level interfaces** (fine — swap individual components inside
+the optimisation worker):
+    AcceleratorSpecsProvider, KernelProfilerBase, RooflineAnalyzerBase,
+    BottleneckAnalyzerBase, RAGPrescriberBase
+
 No-op implementations (for testing / new-backend bootstrapping):
-    NoOpVerifier, NoOpBenchmarker, NoOpWorkerRunner
+    NoOpVerifier, NoOpBenchmarker, NoOpWorkerRunner,
+    NoOpAcceleratorSpecsProvider, NoOpKernelProfiler,
+    NoOpRooflineAnalyzer, NoOpBottleneckAnalyzer, NoOpRAGPrescriber
 
 NVIDIA / CUDA implementations (default when nothing else is supplied):
     NvidiaVerifier, NvidiaBenchmarker, NvidiaWorkerRunner
 """
 
 from triton_kernel_agent.platform.interfaces import (
+    AcceleratorSpecsProvider,
+    BottleneckAnalyzerBase,
     KernelBenchmarker,
+    KernelProfilerBase,
     KernelVerifier,
+    RAGPrescriberBase,
+    RooflineAnalyzerBase,
     WorkerRunner,
 )
 from triton_kernel_agent.platform.noop import (
+    NoOpAcceleratorSpecsProvider,
     NoOpBenchmarker,
+    NoOpBottleneckAnalyzer,
+    NoOpKernelProfiler,
+    NoOpRAGPrescriber,
+    NoOpRooflineAnalyzer,
     NoOpVerifier,
     NoOpWorkerRunner,
 )
 
 __all__ = [
-    # Interfaces
+    # Manager-level interfaces
     "KernelVerifier",
     "KernelBenchmarker",
     "WorkerRunner",
-    # No-op implementations
+    # Worker-level interfaces
+    "AcceleratorSpecsProvider",
+    "KernelProfilerBase",
+    "RooflineAnalyzerBase",
+    "BottleneckAnalyzerBase",
+    "RAGPrescriberBase",
+    # No-op implementations (manager)
     "NoOpVerifier",
     "NoOpBenchmarker",
     "NoOpWorkerRunner",
+    # No-op implementations (worker)
+    "NoOpAcceleratorSpecsProvider",
+    "NoOpKernelProfiler",
+    "NoOpRooflineAnalyzer",
+    "NoOpBottleneckAnalyzer",
+    "NoOpRAGPrescriber",
 ]

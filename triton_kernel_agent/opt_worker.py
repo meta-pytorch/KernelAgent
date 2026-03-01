@@ -31,27 +31,21 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import get_gpu_specs
 from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import (
-    RooflineAnalyzer,
     RooflineConfig,
 )
-from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import Benchmark
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
     OptimizationOrchestrator,
 )
-from triton_kernel_agent.opt_worker_component.prescribing.bottleneck_analyzer import (
-    BottleneckAnalyzer,
-)
-from triton_kernel_agent.opt_worker_component.prescribing.RAG_based_prescriber import (
-    RAGPrescriber,
-)
-from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
-    KernelProfiler,
+from triton_kernel_agent.platform.interfaces import (
+    AcceleratorSpecsProvider,
+    BottleneckAnalyzerBase,
+    KernelProfilerBase,
+    RAGPrescriberBase,
+    RooflineAnalyzerBase,
 )
 from triton_kernel_agent.platform_config import get_platform
 from triton_kernel_agent.prompt_manager import PromptManager
-from triton_kernel_agent.worker import VerificationWorker
 from utils.providers import get_model_provider
 
 
@@ -105,6 +99,12 @@ class OptimizationWorker:
         prior_history: list[dict] | None = None,
         prior_reflexions: list[dict] | None = None,
         use_rag: bool = False,
+        # Platform component overrides (inner-worker level) ────────
+        specs_provider: AcceleratorSpecsProvider | None = None,
+        profiler_override: KernelProfilerBase | None = None,
+        roofline_override: RooflineAnalyzerBase | None = None,
+        bottleneck_analyzer_override: BottleneckAnalyzerBase | None = None,
+        rag_prescriber_override: RAGPrescriberBase | None = None,
     ):
         """
         Initialize the optimization worker.
@@ -128,6 +128,11 @@ class OptimizationWorker:
             target_platform: Target platform (cuda, rocm, etc.)
             roofline_config: Roofline configuration (uses defaults if None)
             use_rag: Whether to enable RAG-based prescriber for optimization hints
+            specs_provider: Optional :class:`AcceleratorSpecsProvider` override.
+            profiler_override: Optional :class:`KernelProfilerBase` override.
+            roofline_override: Optional :class:`RooflineAnalyzerBase` override.
+            bottleneck_analyzer_override: Optional :class:`BottleneckAnalyzerBase` override.
+            rag_prescriber_override: Optional :class:`RAGPrescriberBase` override.
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -144,6 +149,13 @@ class OptimizationWorker:
         self.benchmark_repeat = benchmark_repeat
         self.roofline_config = roofline_config or RooflineConfig()
         self.use_rag = use_rag
+
+        # Platform component overrides
+        self._specs_provider = specs_provider
+        self._profiler_override = profiler_override
+        self._roofline_override = roofline_override
+        self._bottleneck_analyzer_override = bottleneck_analyzer_override
+        self._rag_prescriber_override = rag_prescriber_override
 
         # BeamSearch parameters
         self.bottleneck_id = bottleneck_id
@@ -177,8 +189,15 @@ class OptimizationWorker:
             profiling_semaphore  # Can be None for standalone usage
         )
 
-        # Get GPU specs
-        self.gpu_specs = get_gpu_specs(gpu_name) if gpu_name else get_gpu_specs()
+        # Get GPU specs (via provider override or default NVIDIA lookup)
+        if self._specs_provider is not None:
+            self.gpu_specs = self._specs_provider.get_specs(gpu_name)
+        else:
+            from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import (
+                get_gpu_specs,
+            )
+
+            self.gpu_specs = get_gpu_specs(gpu_name) if gpu_name else get_gpu_specs()
         self.logger.info(
             f"Initialized for GPU: {self.gpu_specs.get('name', 'unknown')}"
         )
@@ -205,12 +224,20 @@ class OptimizationWorker:
             self.logger.addHandler(handler)
 
     def _init_components(self) -> None:
-        """Initialize all modular components."""
-        # Prompt manager
+        """Initialize all modular components.
+
+        Each component checks for a platform-override first; when absent
+        the default (NVIDIA/CUDA) implementation is constructed.
+        """
+        # Prompt manager (platform-aware, but not hardware-specific)
         platform_config = get_platform(self.target_platform)
         self.prompt_manager = PromptManager(target_platform=platform_config)
 
         # Benchmarking
+        from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import (
+            Benchmark,
+        )
+
         self.benchmarker = Benchmark(
             logger=self.logger,
             artifacts_dir=self.artifact_dir,
@@ -221,24 +248,39 @@ class OptimizationWorker:
         )
 
         # Profiler
-        self.profiler = KernelProfiler(
-            logger=self.logger,
-            artifacts_dir=self.artifact_dir,
-            logs_dir=self.log_dir,
-            ncu_bin_path=self.ncu_bin_path,
-            # profiling_semaphore=self.profiling_semaphore,
-        )
+        if self._profiler_override is not None:
+            self.profiler = self._profiler_override
+        else:
+            from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
+                KernelProfiler,
+            )
+
+            self.profiler = KernelProfiler(
+                logger=self.logger,
+                artifacts_dir=self.artifact_dir,
+                logs_dir=self.log_dir,
+                ncu_bin_path=self.ncu_bin_path,
+            )
 
         # Bottleneck analyzer
-        self.bottleneck_analyzer = BottleneckAnalyzer(
-            provider=self.provider,
-            model=self.openai_model,
-            gpu_specs=self.gpu_specs,
-            logs_dir=self.log_dir,
-            logger=self.logger,
-        )
+        if self._bottleneck_analyzer_override is not None:
+            self.bottleneck_analyzer = self._bottleneck_analyzer_override
+        else:
+            from triton_kernel_agent.opt_worker_component.prescribing.bottleneck_analyzer import (
+                BottleneckAnalyzer,
+            )
+
+            self.bottleneck_analyzer = BottleneckAnalyzer(
+                provider=self.provider,
+                model=self.openai_model,
+                gpu_specs=self.gpu_specs,
+                logs_dir=self.log_dir,
+                logger=self.logger,
+            )
 
         # Verification worker (for correctness checks)
+        from triton_kernel_agent.worker import VerificationWorker
+
         self.verification_worker = VerificationWorker(
             worker_id=self.worker_id,
             workdir=self.workdir,
@@ -248,20 +290,35 @@ class OptimizationWorker:
             target_platform=self.target_platform,
         )
 
-        # Roofline analyzer (for intelligent early termination using NCU SOL metrics)
-        self.roofline_analyzer = RooflineAnalyzer(
-            config=self.roofline_config,
-            logger=self.logger,
-        )
+        # Roofline analyzer
+        if self._roofline_override is not None:
+            self.roofline_analyzer = self._roofline_override
+        else:
+            from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import (
+                RooflineAnalyzer,
+            )
 
-        # RAG prescriber (optional)
-        self.rag_prescriber = None
-        if self.use_rag:
+            self.roofline_analyzer = RooflineAnalyzer(
+                config=self.roofline_config,
+                logger=self.logger,
+            )
+
+        # RAG prescriber
+        if self._rag_prescriber_override is not None:
+            self.rag_prescriber = self._rag_prescriber_override
+        elif self.use_rag:
             try:
+                from triton_kernel_agent.opt_worker_component.prescribing.RAG_based_prescriber import (
+                    RAGPrescriber,
+                )
+
                 self.rag_prescriber = RAGPrescriber(logger=self.logger)
                 self.logger.info("RAG prescriber initialized")
             except Exception as e:
                 self.logger.warning(f"RAG prescriber init failed: {e}")
+                self.rag_prescriber = None
+        else:
+            self.rag_prescriber = None
 
         self.logger.info("OptimizationWorker components initialized")
 
