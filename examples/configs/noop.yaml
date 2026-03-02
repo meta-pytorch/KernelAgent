@@ -1,0 +1,18 @@
+# No-op platform config — dry-run without GPU hardware.
+#
+# The pipeline runs through all stages but skips verification,
+# benchmarking, profiling, and worker optimisation.  The initial
+# kernel is returned unchanged.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --config examples/configs/noop.yaml
+
+strategy: greedy
+num_workers: 1
+max_rounds: 2
+strategy_config:
+  max_no_improvement: 1
+
+platform: noop

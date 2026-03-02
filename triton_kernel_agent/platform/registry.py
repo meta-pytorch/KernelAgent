@@ -198,7 +198,7 @@ registry = PlatformRegistry()
 
 
 def _register_builtins() -> None:
-    """Register the built-in nvidia implementations."""
+    """Register the built-in nvidia and noop implementations."""
 
     from triton_kernel_agent.platform.nvidia import (
         NvidiaAcceleratorSpecsProvider,
@@ -225,6 +225,32 @@ def _register_builtins() -> None:
     }
     for component, factory in _nvidia.items():
         registry.register(component, "nvidia", factory)
+
+    from triton_kernel_agent.platform.noop import (
+        NoOpBenchmarker,
+        NoOpBottleneckAnalyzer,
+        NoOpProfiler,
+        NoOpRAGPrescriber,
+        NoOpRooflineAnalyzer,
+        NoOpSpecsProvider,
+        NoOpVerifier,
+        NoOpWorkerRunner,
+    )
+
+    _noop = {
+        # Manager-level
+        "verifier": NoOpVerifier,
+        "benchmarker": NoOpBenchmarker,
+        "worker_runner": NoOpWorkerRunner,
+        # Worker-level
+        "specs_provider": NoOpSpecsProvider,
+        "profiler": NoOpProfiler,
+        "roofline_analyzer": NoOpRooflineAnalyzer,
+        "bottleneck_analyzer": NoOpBottleneckAnalyzer,
+        "rag_prescriber": NoOpRAGPrescriber,
+    }
+    for component, factory in _noop.items():
+        registry.register(component, "noop", factory)
 
 
 _register_builtins()
