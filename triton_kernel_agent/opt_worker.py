@@ -94,6 +94,8 @@ class OptimizationWorker:
         use_rag: bool = False,
         # Platform components resolved by the manager registry ─────
         platform_components: dict[str, Any] | None = None,
+        # Registry-driven platform config (string names) ───────────
+        platform_config: dict[str, str] | None = None,
     ):
         """
         Initialize the optimization worker.
@@ -120,6 +122,10 @@ class OptimizationWorker:
             platform_components: Dict of registry-resolved component instances
                 keyed by registry name (e.g. ``{"profiler": <instance>, ...}``).
                 Populated by ``OptimizationManager._resolve_platform()``.
+            platform_config: Dict of registry component names (e.g.
+                ``{"profiler": "nvidia"}``).  Resolved via the platform
+                registry on first use.  Takes effect for any component not
+                already present in *platform_components*.
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -139,6 +145,7 @@ class OptimizationWorker:
 
         # Platform components (registry-resolved, may be empty)
         self._platform = platform_components or {}
+        self._platform_config = platform_config or {}
 
         # BeamSearch parameters
         self.bottleneck_id = bottleneck_id
@@ -171,6 +178,10 @@ class OptimizationWorker:
         self.profiling_semaphore = (
             profiling_semaphore  # Can be None for standalone usage
         )
+
+        # Resolve registry-driven config into platform instances
+        # (needs logger + profiling_semaphore, so must come after their setup)
+        self._resolve_platform_config()
 
         # Get GPU specs (via registry-resolved provider or default NVIDIA lookup)
         specs_provider = self._platform.get("specs_provider")
@@ -206,6 +217,27 @@ class OptimizationWorker:
                 )
             )
             self.logger.addHandler(handler)
+
+    def _resolve_platform_config(self) -> None:
+        """Resolve ``self._platform_config`` string names via the registry.
+
+        Populates ``self._platform`` with component instances for any
+        keys not already present (explicit instances take precedence).
+        """
+        if not self._platform_config:
+            return
+        from triton_kernel_agent.platform.registry import registry
+
+        resolved = registry.create_from_config(
+            self._platform_config,
+            logger=self.logger,
+            log_dir=self.log_dir,
+            profiling_semaphore=self.profiling_semaphore,
+            openai_model=self.openai_model,
+        )
+        for k, v in resolved.items():
+            if k not in self._platform:
+                self._platform[k] = v
 
     def _init_components(self) -> None:
         """Initialize all modular components.

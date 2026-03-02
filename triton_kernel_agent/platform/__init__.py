@@ -26,6 +26,9 @@ NVIDIA / CUDA implementations (default when nothing else is supplied):
     NvidiaVerifier, NvidiaBenchmarker, NvidiaWorkerRunner,
     NvidiaAcceleratorSpecsProvider, NvidiaKernelProfiler,
     NvidiaRooflineAnalyzer, NvidiaBottleneckAnalyzer, NvidiaRAGPrescriber
+
+Registry (for config-driven component selection):
+    registry  — the global :class:`PlatformRegistry` singleton
 """
 
 from triton_kernel_agent.platform.interfaces import (
@@ -48,6 +51,7 @@ from triton_kernel_agent.platform.nvidia import (
     NvidiaVerifier,
     NvidiaWorkerRunner,
 )
+from triton_kernel_agent.platform.registry import PlatformRegistry, registry
 
 __all__ = [
     # Manager-level interfaces
@@ -70,4 +74,7 @@ __all__ = [
     "NvidiaRooflineAnalyzer",
     "NvidiaBottleneckAnalyzer",
     "NvidiaRAGPrescriber",
+    # Registry
+    "PlatformRegistry",
+    "registry",
 ]

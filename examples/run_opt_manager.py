@@ -182,6 +182,13 @@ def main():
         description="Optimize Triton kernels using different search strategies"
     )
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to YAML config file (e.g. examples/configs/beam_search.yaml). "
+        "Overrides --strategy when provided.",
+    )
+    parser.add_argument(
         "--strategy",
         choices=["beam_search", "greedy", "all"],
         default="beam_search",
@@ -232,7 +239,22 @@ def main():
     print(f"Log directory: {log_dir}")
 
     # Run selected strategy
-    if args.strategy == "beam_search":
+    if args.config:
+        # ── Config-driven construction ──────────────────────────
+        print(f"\nUsing config: {args.config}")
+        manager = OptimizationManager(
+            config=str(args.config),
+            log_dir=log_dir / "configured",
+            database_path=log_dir / "configured" / "program_db.json",
+        )
+        result = manager.run_optimization(
+            initial_kernel=kernel_code,
+            problem_file=problem_file,
+            test_code=test_code,
+        )
+        print_result(result, "CONFIGURED", kernel_dir)
+
+    elif args.strategy == "beam_search":
         result = run_beam_search_optimization(
             kernel_code,
             problem_file,

@@ -1,0 +1,14 @@
+# Greedy strategy — single-best kernel, early stop on plateau.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --config examples/configs/greedy.yaml
+
+strategy: greedy
+num_workers: 1
+max_rounds: 20
+strategy_config:
+  max_no_improvement: 5
+openai_model: gpt-5
+high_reasoning_effort: true

@@ -55,8 +55,13 @@ from triton_kernel_agent.opt_worker_component.searching.strategy.beam_search imp
 from triton_kernel_agent.opt_worker_component.searching.strategy.greedy import (
     GreedyStrategy,
 )
+from utils.config_injectable import config_injectable
+
+# Manager-level component keys resolved by the registry
+_MANAGER_LEVEL_KEYS = {"verifier", "benchmarker", "worker_runner"}
 
 
+@config_injectable
 class OptimizationManager:
     """Manages parallel kernel optimization with pluggable strategies.
 
@@ -82,6 +87,7 @@ class OptimizationManager:
         openai_model: str = "claude-opus-4.5",
         high_reasoning_effort: bool = True,
         bottleneck_override: str | None = None,
+        platform: dict[str, str] | str | None = None,
         **worker_kwargs: Any,
     ):
         """Initialize the optimization manager.
@@ -96,6 +102,10 @@ class OptimizationManager:
             openai_model: Model name for LLM optimization
             high_reasoning_effort: Whether to use high reasoning effort
             bottleneck_override: Pre-computed bottleneck category to skip LLM analysis
+            platform: Platform component config.  Can be:
+                - ``None`` — use ``"nvidia"`` for all components (default)
+                - a string like ``"nvidia"`` — shorthand for all components
+                - a dict like ``{"verifier": "nvidia", ...}`` — per-component
             **worker_kwargs: Additional kwargs passed to OptimizationWorker
         """
         self.max_rounds = max_rounds
@@ -145,37 +155,47 @@ class OptimizationManager:
         self.shared_reflexions: list[dict] = []  # List of serialized Reflexion dicts
         self.history_size: int = 10  # Max history entries to pass to workers
 
-        # ── Platform components ──────────────────────────────────
-        self.verifier = self._default_verifier()
-        self.benchmarker = self._default_benchmarker()
-        self.worker_runner = self._default_worker_runner()
+        # ── Platform components (resolved from registry) ─────────
+        self._resolve_platform(platform)
 
         self.logger.info(
             f"OptimizationManager initialized: strategy={strategy}, workers={num_workers}"
         )
 
     # ------------------------------------------------------------------
-    # Default (NVIDIA) component factories
+    # Platform resolution
     # ------------------------------------------------------------------
 
-    def _default_verifier(self):
-        from triton_kernel_agent.platform.nvidia import NvidiaVerifier
+    def _resolve_platform(
+        self, platform: dict[str, str] | str | None
+    ) -> None:
+        """Resolve platform components from the :mod:`platform.registry`.
 
-        return NvidiaVerifier(log_dir=self.log_dir, logger=self.logger)
+        Manager-level components (``verifier``, ``benchmarker``,
+        ``worker_runner``) are instantiated and stored on *self*.
+        Worker-level component names are forwarded to worker processes
+        via ``self.worker_kwargs["platform_config"]`` so each worker
+        can resolve its own instances from the registry.
+        """
+        from triton_kernel_agent.platform.registry import registry
 
-    def _default_benchmarker(self):
-        from triton_kernel_agent.platform.nvidia import NvidiaBenchmarker
+        # Expand shorthand → full per-component dict
+        if platform is None or isinstance(platform, str):
+            impl = platform or "nvidia"
+            config = {k: impl for k in registry.list_components()}
+        else:
+            config = dict(platform)
 
-        return NvidiaBenchmarker(
-            log_dir=self.log_dir,
-            logger=self.logger,
-            benchmark_lock=self.benchmark_lock,
-        )
+        # Split manager vs worker keys
+        mgr_config = {k: v for k, v in config.items() if k in _MANAGER_LEVEL_KEYS}
+        worker_config = {
+            k: v for k, v in config.items() if k not in _MANAGER_LEVEL_KEYS
+        }
 
-    def _default_worker_runner(self):
-        from triton_kernel_agent.platform.nvidia import NvidiaWorkerRunner
-
-        return NvidiaWorkerRunner(
+        # Resolve manager-level components (shared kwargs bag is
+        # filtered per-factory by the registry)
+        components = registry.create_from_config(
+            mgr_config,
             log_dir=self.log_dir,
             logger=self.logger,
             benchmark_lock=self.benchmark_lock,
@@ -185,6 +205,15 @@ class OptimizationManager:
             bottleneck_override=self.bottleneck_override,
             worker_kwargs=self.worker_kwargs,
         )
+        self.verifier = components["verifier"]
+        self.benchmarker = components["benchmarker"]
+        self.worker_runner = components["worker_runner"]
+
+        # Propagate worker-level config (string names) to worker
+        # processes — each worker resolves its own instances via the
+        # registry so there are no pickling issues.
+        if worker_config:
+            self.worker_kwargs["platform_config"] = worker_config
 
     # ------------------------------------------------------------------
     # Logging / strategy helpers (unchanged)

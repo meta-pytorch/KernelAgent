@@ -1,0 +1,15 @@
+# Beam search strategy — explores top-N kernels × M bottleneck directions.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --config examples/configs/beam_search.yaml
+
+strategy: beam_search
+num_workers: 4
+max_rounds: 10
+strategy_config:
+  num_top_kernels: 2
+  num_bottlenecks: 2
+openai_model: gpt-5
+high_reasoning_effort: true
