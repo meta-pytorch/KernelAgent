@@ -120,9 +120,12 @@ def test_kernel():
 {% if device_string == "xpu" %}
         if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
             raise RuntimeError("Intel XPU not available. Install PyTorch with Intel GPU support.")
-{% else %}
+{% elif device_string == "cuda" %}
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA not available")
+{% else %}
+        if not torch.accelerator.is_available():
+            raise RuntimeError(f"Device '{device}' not available: {e}")
 {% endif %}
 
         # Create test data using EXACT specifications from problem description

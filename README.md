@@ -30,9 +30,12 @@ Every stage writes artifacts to a run directory under `.optimize/<run_id>/`, inc
 - **GPU Requirements (one of the following):**
   - **CUDA**: NVIDIA GPU with CUDA support
   - **XPU**: Intel GPU with oneAPI support (Arc, Data Center GPUs, or integrated Xe graphics)
+  - **Custom GPU**: Make sure that the GPU is supported by `torch.accelerator`
 - Triton (installed separately: `pip install triton` or nightly from source)
 - PyTorch (https://pytorch.org/get-started/locally/)
 - LLM provider ([OpenAI](https://openai.com/api/), [Anthropic](https://www.anthropic.com/), or a self-hosted relay)
+
+**Important Note for custom gpu**: Please install correlated version of PyTorch and Triton!!!
 
 ### Install
 ```bash
@@ -234,6 +237,33 @@ When targeting Intel XPU, KernelAgent automatically:
 - Generates appropriate device availability checks
 - Removes CUDA-specific patterns from generated code
 
+### Custom Platforms via JSON (Optional)
+
+You can add/override platform configs via a JSON file loaded at import time:
+
+```bash
+export KERNELAGENT_PLATFORM_JSON=/abs/path/to/platforms.json
+```
+
+JSON format (top-level is a mapping; keys are platform names used by `--target-platform`):
+
+```json
+// platforms.json
+{
+  "npu": {
+    "name": "npu",
+    "device_string": "npu",
+    "guidance_block": "...",
+    "kernel_guidance": "...",
+    "cuda_hacks_to_strip": []
+  }
+}
+```
+
+Notes:
+- Set `KERNELAGENT_PLATFORM_JSON` before starting any KernelAgent/Fuser CLI.
+- Set the platform name by `--target-platform` or `target_platform` explicitly (e.g `python -m Fuser.auto_agent --problem /abs/path/to/problem.py --target-platform npu`).
+
 ### Verifying Platform Setup
 ```python
 # Check CUDA availability
@@ -242,6 +272,9 @@ print("CUDA available:", torch.cuda.is_available())
 
 # Check XPU availability
 print("XPU available:", hasattr(torch, 'xpu') and torch.xpu.is_available())
+
+# Check custom gpu availability (Suppose the name is NPU)
+print("NPU available:", torch.accelerator.is_available() and torch.accelerator.current_accelerator().type == 'npu')
 ```
 
 ## Run Artifacts

@@ -25,6 +25,11 @@ Usage:
 
 from dataclasses import dataclass, field
 
+import json
+import os
+from pathlib import Path
+
+
 DEFAULT_PLATFORM = "cuda"
 
 
@@ -94,6 +99,46 @@ PLATFORMS: dict[str, PlatformConfig] = {
     ),
 }
 
+def load_platform_config_from_json(path: str | Path) -> dict[str, PlatformConfig]:
+    """Load platform configs from a JSON file."""
+
+    p = Path(path)
+    raw = json.loads(p.read_text(encoding="utf-8"))
+
+    loaded: dict[str, PlatformConfig] = {}
+    for name, cfg in raw.items():
+
+        device_name = cfg.get("name", "")
+        device_string = str(cfg.get("device_string", ""))
+        guidance_block = str(cfg.get("guidance_block", ""))
+        kernel_guidance = str(cfg.get("kernel_guidance", ""))
+        hacks = cfg.get("cuda_hacks_to_strip", [])
+
+        loaded[name] = PlatformConfig(
+            name=device_name,
+            device_string=device_string,
+            guidance_block=guidance_block,
+            kernel_guidance=kernel_guidance,
+            cuda_hacks_to_strip=tuple(hacks),
+        )
+
+    return loaded
+
+
+def _maybe_load_external_platforms() -> None:
+    """Optionally merge JSON-defined platforms into PLATFORMS."""
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    env_path = os.getenv("KERNELAGENT_PLATFORM_JSON")
+    path = Path(env_path) if env_path else None
+    if not path or not path.exists():
+        return
+    try:
+        PLATFORMS.update(load_platform_config_from_json(path))
+    except Exception:
+        raise ValueError(f"Failed to load platforms from JSON at {path}")
+
 
 def get_platform(name: str) -> PlatformConfig:
     """Get platform configuration by name."""
@@ -106,3 +151,7 @@ def get_platform(name: str) -> PlatformConfig:
 def get_platform_choices() -> list[str]:
     """Get list of available platform names for CLI choices."""
     return sorted(PLATFORMS.keys())
+
+
+# Load external platforms from JSON if specified in environment
+_maybe_load_external_platforms()
