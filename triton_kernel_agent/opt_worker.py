@@ -37,13 +37,6 @@ from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import (
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
     OptimizationOrchestrator,
 )
-from triton_kernel_agent.platform.interfaces import (
-    AcceleratorSpecsProvider,
-    BottleneckAnalyzerBase,
-    KernelProfilerBase,
-    RAGPrescriberBase,
-    RooflineAnalyzerBase,
-)
 from triton_kernel_agent.platform_config import get_platform
 from triton_kernel_agent.prompt_manager import PromptManager
 from utils.providers import get_model_provider
@@ -99,12 +92,8 @@ class OptimizationWorker:
         prior_history: list[dict] | None = None,
         prior_reflexions: list[dict] | None = None,
         use_rag: bool = False,
-        # Platform component overrides (inner-worker level) ────────
-        specs_provider: AcceleratorSpecsProvider | None = None,
-        profiler_override: KernelProfilerBase | None = None,
-        roofline_override: RooflineAnalyzerBase | None = None,
-        bottleneck_analyzer_override: BottleneckAnalyzerBase | None = None,
-        rag_prescriber_override: RAGPrescriberBase | None = None,
+        # Platform components resolved by the manager registry ─────
+        platform_components: dict[str, Any] | None = None,
     ):
         """
         Initialize the optimization worker.
@@ -128,11 +117,9 @@ class OptimizationWorker:
             target_platform: Target platform (cuda, rocm, etc.)
             roofline_config: Roofline configuration (uses defaults if None)
             use_rag: Whether to enable RAG-based prescriber for optimization hints
-            specs_provider: Optional :class:`AcceleratorSpecsProvider` override.
-            profiler_override: Optional :class:`KernelProfilerBase` override.
-            roofline_override: Optional :class:`RooflineAnalyzerBase` override.
-            bottleneck_analyzer_override: Optional :class:`BottleneckAnalyzerBase` override.
-            rag_prescriber_override: Optional :class:`RAGPrescriberBase` override.
+            platform_components: Dict of registry-resolved component instances
+                keyed by registry name (e.g. ``{"profiler": <instance>, ...}``).
+                Populated by ``OptimizationManager._resolve_platform()``.
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -150,12 +137,8 @@ class OptimizationWorker:
         self.roofline_config = roofline_config or RooflineConfig()
         self.use_rag = use_rag
 
-        # Platform component overrides
-        self._specs_provider = specs_provider
-        self._profiler_override = profiler_override
-        self._roofline_override = roofline_override
-        self._bottleneck_analyzer_override = bottleneck_analyzer_override
-        self._rag_prescriber_override = rag_prescriber_override
+        # Platform components (registry-resolved, may be empty)
+        self._platform = platform_components or {}
 
         # BeamSearch parameters
         self.bottleneck_id = bottleneck_id
@@ -189,9 +172,10 @@ class OptimizationWorker:
             profiling_semaphore  # Can be None for standalone usage
         )
 
-        # Get GPU specs (via provider override or default NVIDIA lookup)
-        if self._specs_provider is not None:
-            self.gpu_specs = self._specs_provider.get_specs(gpu_name)
+        # Get GPU specs (via registry-resolved provider or default NVIDIA lookup)
+        specs_provider = self._platform.get("specs_provider")
+        if specs_provider is not None:
+            self.gpu_specs = specs_provider.get_specs(gpu_name)
         else:
             from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import (
                 get_gpu_specs,
@@ -248,8 +232,8 @@ class OptimizationWorker:
         )
 
         # Profiler
-        if self._profiler_override is not None:
-            self.profiler = self._profiler_override
+        if "profiler" in self._platform:
+            self.profiler = self._platform["profiler"]
         else:
             from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
                 KernelProfiler,
@@ -263,8 +247,8 @@ class OptimizationWorker:
             )
 
         # Bottleneck analyzer
-        if self._bottleneck_analyzer_override is not None:
-            self.bottleneck_analyzer = self._bottleneck_analyzer_override
+        if "bottleneck_analyzer" in self._platform:
+            self.bottleneck_analyzer = self._platform["bottleneck_analyzer"]
         else:
             from triton_kernel_agent.opt_worker_component.prescribing.bottleneck_analyzer import (
                 BottleneckAnalyzer,
@@ -291,8 +275,8 @@ class OptimizationWorker:
         )
 
         # Roofline analyzer
-        if self._roofline_override is not None:
-            self.roofline_analyzer = self._roofline_override
+        if "roofline_analyzer" in self._platform:
+            self.roofline_analyzer = self._platform["roofline_analyzer"]
         else:
             from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import (
                 RooflineAnalyzer,
@@ -304,8 +288,8 @@ class OptimizationWorker:
             )
 
         # RAG prescriber
-        if self._rag_prescriber_override is not None:
-            self.rag_prescriber = self._rag_prescriber_override
+        if "rag_prescriber" in self._platform:
+            self.rag_prescriber = self._platform["rag_prescriber"]
         elif self.use_rag:
             try:
                 from triton_kernel_agent.opt_worker_component.prescribing.RAG_based_prescriber import (

@@ -53,15 +53,21 @@ class NoOpVerifier(KernelVerifier):
 
 
 class NoOpBenchmarker(KernelBenchmarker):
-    """Returns ``inf`` for every benchmark (no timing hardware available)."""
+    """Returns placeholder times (no timing hardware available).
+
+    ``benchmark_kernel`` returns a finite placeholder (``1.0 ms``) so the
+    initial kernel is recorded as a valid entry and ``success`` is ``True``
+    at the end of the run.  Reference benchmarks return ``inf`` because no
+    real baseline is available.
+    """
 
     def benchmark_kernel(
         self,
         kernel_code: str,
         problem_file: Path,
     ) -> float:
-        print("[NoOpBenchmarker] benchmark_kernel() called — returning inf")
-        return float("inf")
+        print("[NoOpBenchmarker] benchmark_kernel() called — returning 1.0 (placeholder)")
+        return 1.0
 
     def benchmark_reference(
         self,
@@ -81,7 +87,7 @@ class NoOpBenchmarker(KernelBenchmarker):
 
 
 class NoOpWorkerRunner(WorkerRunner):
-    """Returns no-improvement results so the strategy terminates immediately."""
+    """Returns the parent kernel unchanged so the run completes successfully."""
 
     def run_workers(
         self,
@@ -95,14 +101,14 @@ class NoOpWorkerRunner(WorkerRunner):
     ) -> list[dict[str, Any]]:
         print(
             f"[NoOpWorkerRunner] run_workers() called for round {round_num} "
-            f"with {len(candidates)} candidate(s) — returning no improvements"
+            f"with {len(candidates)} candidate(s) — returning parent kernels unchanged"
         )
         return [
             {
-                "success": False,
+                "success": True,
                 "worker_id": i,
                 "kernel_code": candidate["parent"].kernel_code,
-                "time_ms": float("inf"),
+                "time_ms": candidate["parent"].metrics.time_ms,
                 "parent_id": candidate["parent"].program_id,
                 "attempt": None,
                 "reflexion": None,
