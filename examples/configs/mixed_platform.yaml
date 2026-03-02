@@ -1,0 +1,16 @@
+strategy: greedy
+num_workers: 1
+strategy_config:
+  max_no_improvement: 3
+openai_model: claude-opus-4.5
+high_reasoning_effort: true
+# Mix and match platform components.
+# Manager-level components use nvidia (real verification, benchmarking,
+# and worker spawning) while selected worker-level components use noop
+# stubs (skip NCU profiling and bottleneck analysis).
+platform:
+  verifier: nvidia
+  benchmarker: nvidia
+  worker_runner: nvidia
+  profiler: noop
+  bottleneck_analyzer: noop

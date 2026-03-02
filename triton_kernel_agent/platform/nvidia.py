@@ -30,8 +30,13 @@ from pathlib import Path
 from typing import Any
 
 from triton_kernel_agent.platform.interfaces import (
+    AcceleratorSpecsProvider,
+    BottleneckAnalyzerBase,
     KernelBenchmarker,
+    KernelProfilerBase,
     KernelVerifier,
+    RAGPrescriberBase,
+    RooflineAnalyzerBase,
     WorkerRunner,
 )
 
@@ -364,3 +369,168 @@ def _nvidia_worker_process(
                 "traceback": traceback.format_exc(),
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# Worker-level NVIDIA implementations
+#
+# These wrap the concrete NVIDIA/CUDA classes that live deeper in the
+# codebase.  They use lazy delegation so that heavy imports (NCU, GPU
+# detection, OpenAI embeddings) only happen on first use, and so that
+# the registry can instantiate them at manager time with the shared
+# kwargs bag.
+# ---------------------------------------------------------------------------
+
+
+class NvidiaAcceleratorSpecsProvider(AcceleratorSpecsProvider):
+    """Looks up NVIDIA GPU specs via ``get_gpu_specs``."""
+
+    def get_specs(self, device_name: str | None = None) -> dict[str, Any]:
+        from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import (
+            get_gpu_specs,
+        )
+
+        return get_gpu_specs(device_name) if device_name else get_gpu_specs()
+
+
+class NvidiaKernelProfiler(KernelProfilerBase):
+    """Wraps :class:`KernelProfiler` (NCU-based) with lazy construction."""
+
+    def __init__(
+        self,
+        logger: logging.Logger | None = None,
+        log_dir: Path | None = None,
+        profiling_semaphore: Any | None = None,
+    ) -> None:
+        self._logger = logger or logging.getLogger(__name__)
+        self._log_dir = Path(log_dir) if log_dir else Path(".")
+        self._profiling_semaphore = profiling_semaphore
+        self._delegate: Any | None = None
+
+    def _get_delegate(self) -> Any:
+        if self._delegate is None:
+            from triton_kernel_agent.opt_worker_component.profiling.kernel_profiler import (
+                KernelProfiler,
+            )
+
+            artifacts_dir = self._log_dir / "artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            self._delegate = KernelProfiler(
+                logger=self._logger,
+                artifacts_dir=artifacts_dir,
+                logs_dir=self._log_dir,
+                profiling_semaphore=self._profiling_semaphore,
+            )
+        return self._delegate
+
+    def profile_kernel(
+        self,
+        kernel_file: Path,
+        problem_file: Path,
+        round_num: int,
+        max_retries: int = 2,
+    ) -> Any | None:
+        return self._get_delegate().profile_kernel(
+            kernel_file, problem_file, round_num, max_retries
+        )
+
+
+class NvidiaRooflineAnalyzer(RooflineAnalyzerBase):
+    """Wraps :class:`RooflineAnalyzer` (NCU SOL metrics) with lazy construction."""
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger
+        self._delegate: Any | None = None
+
+    def _get_delegate(self) -> Any:
+        if self._delegate is None:
+            from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import (
+                RooflineAnalyzer,
+            )
+
+            self._delegate = RooflineAnalyzer(logger=self._logger)
+        return self._delegate
+
+    def analyze(self, ncu_metrics: dict[str, Any]) -> Any:
+        return self._get_delegate().analyze(ncu_metrics)
+
+    def should_stop(self, result: Any) -> tuple[bool, str]:
+        return self._get_delegate().should_stop(result)
+
+    def reset_history(self) -> None:
+        self._get_delegate().reset_history()
+
+
+class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
+    """Wraps :class:`BottleneckAnalyzer` (LLM-based) with lazy construction.
+
+    The ``provider`` and ``gpu_specs`` dependencies are resolved lazily
+    on first use so this class can be instantiated at manager time when
+    only ``logger`` and ``openai_model`` are available.
+    """
+
+    def __init__(
+        self,
+        logger: logging.Logger | None = None,
+        openai_model: str = "claude-opus-4.5",
+    ) -> None:
+        self._logger = logger or logging.getLogger(__name__)
+        self._openai_model = openai_model
+        self._delegate: Any | None = None
+        # Orchestrator accesses ``bottleneck_analyzer.roofline`` directly.
+        self.roofline = NvidiaRooflineAnalyzer(logger=self._logger)
+
+    def _get_delegate(self) -> Any:
+        if self._delegate is None:
+            from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import (
+                get_gpu_specs,
+            )
+            from triton_kernel_agent.opt_worker_component.prescribing.bottleneck_analyzer import (
+                BottleneckAnalyzer,
+            )
+            from utils.providers import get_model_provider
+
+            provider = get_model_provider(self._openai_model)
+            gpu_specs = get_gpu_specs()
+
+            self._delegate = BottleneckAnalyzer(
+                provider=provider,
+                model=self._openai_model,
+                gpu_specs=gpu_specs,
+                logger=self._logger,
+            )
+        return self._delegate
+
+    def analyze(
+        self,
+        kernel_code: str,
+        ncu_metrics: dict[str, Any],
+        round_num: int = 0,
+        roofline_result: Any | None = None,
+    ) -> list[Any]:
+        return self._get_delegate().analyze(
+            kernel_code, ncu_metrics, round_num, roofline_result
+        )
+
+
+class NvidiaRAGPrescriber(RAGPrescriberBase):
+    """Wraps :class:`RAGPrescriber` (OpenAI-embedding RAG) with lazy construction."""
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger
+        self._delegate: Any | None = None
+
+    def _get_delegate(self) -> Any:
+        if self._delegate is None:
+            from triton_kernel_agent.opt_worker_component.prescribing.RAG_based_prescriber import (
+                RAGPrescriber,
+            )
+
+            self._delegate = RAGPrescriber(logger=self._logger)
+        return self._delegate
+
+    def retrieve(self, query: str) -> tuple[Any | None, Any]:
+        return self._get_delegate().retrieve(query)
+
+    def build_context(self, opt_node: Any) -> str:
+        return self._get_delegate().build_context(opt_node)

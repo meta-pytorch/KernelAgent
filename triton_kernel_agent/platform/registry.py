@@ -226,20 +226,29 @@ def _register_builtins() -> None:
     for component, factory in _noop.items():
         registry.register(component, "noop", factory)
 
-    # --- nvidia (CUDA / NCU) — manager-level only --------------------
-    # Worker-level NVIDIA components are the defaults built inside
-    # OptimizationWorker._init_components(); they don't need to be in
-    # the registry because they require deep worker-internal state.
+    # --- nvidia (CUDA / NCU) ------------------------------------------
     from triton_kernel_agent.platform.nvidia import (
+        NvidiaAcceleratorSpecsProvider,
         NvidiaBenchmarker,
+        NvidiaBottleneckAnalyzer,
+        NvidiaKernelProfiler,
+        NvidiaRAGPrescriber,
+        NvidiaRooflineAnalyzer,
         NvidiaVerifier,
         NvidiaWorkerRunner,
     )
 
     _nvidia = {
+        # Manager-level
         "verifier": NvidiaVerifier,
         "benchmarker": NvidiaBenchmarker,
         "worker_runner": NvidiaWorkerRunner,
+        # Worker-level
+        "specs_provider": NvidiaAcceleratorSpecsProvider,
+        "profiler": NvidiaKernelProfiler,
+        "roofline_analyzer": NvidiaRooflineAnalyzer,
+        "bottleneck_analyzer": NvidiaBottleneckAnalyzer,
+        "rag_prescriber": NvidiaRAGPrescriber,
     }
     for component, factory in _nvidia.items():
         registry.register(component, "nvidia", factory)

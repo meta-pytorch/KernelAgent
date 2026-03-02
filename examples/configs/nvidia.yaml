@@ -1,0 +1,23 @@
+strategy: beam_search
+num_workers: 4  # 2 top kernels × 2 bottlenecks
+strategy_config:
+  num_top_kernels: 2
+  num_bottlenecks: 2
+openai_model: claude-opus-4.5
+high_reasoning_effort: true
+# Explicitly select nvidia for all platform components.
+# This is equivalent to omitting the platform key entirely
+# (nvidia is the default), but makes the choice visible.
+#
+# Shorthand: `platform: nvidia` expands to the dict below.
+platform:
+  # Manager-level
+  verifier: nvidia              # VerificationWorker on CUDA
+  benchmarker: nvidia           # Benchmark with CUDA events
+  worker_runner: nvidia         # Spawn OptimizationWorker processes
+  # Worker-level
+  specs_provider: nvidia        # GPU specs via get_gpu_specs()
+  profiler: nvidia              # NCU kernel profiling
+  roofline_analyzer: nvidia     # NCU SOL roofline analysis
+  bottleneck_analyzer: nvidia   # LLM-based bottleneck diagnosis
+  rag_prescriber: nvidia        # RAG optimization pattern retrieval
