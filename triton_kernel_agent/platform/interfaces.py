@@ -142,3 +142,132 @@ class WorkerRunner(ABC):
             List of per-worker result dicts.
         """
         ...
+
+
+# =====================================================================
+# Inner-worker component interfaces
+#
+# These define the seams *inside* each optimization worker where
+# platform-specific profiling, analysis, and hardware description enter.
+# They can be injected into ``OptimizationWorker`` via its constructor
+# (which propagates through ``worker_kwargs`` from the manager level).
+# =====================================================================
+
+
+class AcceleratorSpecsProvider(ABC):
+    """Provides hardware specifications for the target accelerator."""
+
+    @abstractmethod
+    def get_specs(self, device_name: str | None = None) -> dict[str, Any]:
+        """Return hardware specs for the named device.
+
+        Args:
+            device_name: Device identifier (e.g. ``"NVIDIA H100 NVL 94GB"``).
+                         ``None`` means auto-detect.
+
+        Returns:
+            Dict with keys like ``name``, ``architecture``,
+            ``peak_fp32_tflops``, ``peak_memory_bw_gbps``, ``sm_count``, etc.
+        """
+        ...
+
+
+class KernelProfilerBase(ABC):
+    """Profiles a compiled kernel to collect hardware performance counters."""
+
+    @abstractmethod
+    def profile_kernel(
+        self,
+        kernel_file: Path,
+        problem_file: Path,
+        round_num: int,
+        max_retries: int = 2,
+    ) -> Any | None:
+        """Profile a kernel and return results.
+
+        The return value should be compatible with the
+        ``ProfilerResults`` protocol (has ``.metrics`` dict attribute).
+
+        Args:
+            kernel_file: Path to the kernel source file.
+            problem_file: Path to ``problem.py``.
+            round_num: Current optimisation round (used for file naming).
+            max_retries: Maximum retry attempts on transient failures.
+
+        Returns:
+            Profiler results object, or ``None`` if profiling failed.
+        """
+        ...
+
+
+class RooflineAnalyzerBase(ABC):
+    """Classifies a kernel as memory-bound, compute-bound, or underutilised."""
+
+    @abstractmethod
+    def analyze(self, ncu_metrics: dict[str, Any]) -> Any:
+        """Analyse profiler metrics and return a roofline result.
+
+        The return value should be compatible with ``RooflineResult``
+        (has ``efficiency_pct``, ``compute_sol_pct``, ``memory_sol_pct``,
+        ``bottleneck``, ``at_roofline``, ``headroom_pct``,
+        ``uses_tensor_cores``, ``to_dict()``).
+        """
+        ...
+
+    @abstractmethod
+    def should_stop(self, result: Any) -> tuple[bool, str]:
+        """Whether optimisation should terminate (at roofline or converged).
+
+        Returns:
+            ``(stop, reason)`` tuple.
+        """
+        ...
+
+    @abstractmethod
+    def reset_history(self) -> None:
+        """Reset convergence tracking for a new optimisation run."""
+        ...
+
+
+class BottleneckAnalyzerBase(ABC):
+    """Diagnoses performance bottlenecks from profiler metrics."""
+
+    @abstractmethod
+    def analyze(
+        self,
+        kernel_code: str,
+        ncu_metrics: dict[str, Any],
+        round_num: int = 0,
+        roofline_result: Any | None = None,
+    ) -> list[Any]:
+        """Analyse kernel bottlenecks.
+
+        Returns:
+            List of ``BottleneckResult``-compatible objects (each has
+            ``category``, ``summary``, ``reasoning``, ``root_causes``,
+            ``recommended_fixes``, ``to_dict()``).
+            Empty list if analysis fails.
+        """
+        ...
+
+
+class RAGPrescriberBase(ABC):
+    """Retrieves optimisation patterns from a knowledge base."""
+
+    @abstractmethod
+    def retrieve(self, query: str) -> tuple[Any | None, Any]:
+        """Embed *query* and find the closest optimisation node.
+
+        Returns:
+            ``(opt_node_or_None, similarity_scores)``
+        """
+        ...
+
+    @abstractmethod
+    def build_context(self, opt_node: Any) -> str:
+        """Build an LLM-consumable context string from *opt_node*.
+
+        Returns:
+            Technique descriptions and code examples as a string.
+        """
+        ...

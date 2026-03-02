@@ -17,17 +17,34 @@
 **Manager-level interfaces** (coarse — replace an entire subsystem):
     KernelVerifier, KernelBenchmarker, WorkerRunner
 
+**Worker-level interfaces** (fine — swap individual components inside
+the optimisation worker):
+    AcceleratorSpecsProvider, KernelProfilerBase, RooflineAnalyzerBase,
+    BottleneckAnalyzerBase, RAGPrescriberBase
+
 NVIDIA / CUDA implementations (default when nothing else is supplied):
-    NvidiaVerifier, NvidiaBenchmarker, NvidiaWorkerRunner
+    NvidiaVerifier, NvidiaBenchmarker, NvidiaWorkerRunner,
+    NvidiaAcceleratorSpecsProvider, NvidiaKernelProfiler,
+    NvidiaRooflineAnalyzer, NvidiaBottleneckAnalyzer, NvidiaRAGPrescriber
 """
 
 from triton_kernel_agent.platform.interfaces import (
+    AcceleratorSpecsProvider,
+    BottleneckAnalyzerBase,
     KernelBenchmarker,
+    KernelProfilerBase,
     KernelVerifier,
+    RAGPrescriberBase,
+    RooflineAnalyzerBase,
     WorkerRunner,
 )
 from triton_kernel_agent.platform.nvidia import (
+    NvidiaAcceleratorSpecsProvider,
     NvidiaBenchmarker,
+    NvidiaBottleneckAnalyzer,
+    NvidiaKernelProfiler,
+    NvidiaRAGPrescriber,
+    NvidiaRooflineAnalyzer,
     NvidiaVerifier,
     NvidiaWorkerRunner,
 )
@@ -37,8 +54,20 @@ __all__ = [
     "KernelVerifier",
     "KernelBenchmarker",
     "WorkerRunner",
-    # NVIDIA implementations
+    # Worker-level interfaces
+    "AcceleratorSpecsProvider",
+    "KernelProfilerBase",
+    "RooflineAnalyzerBase",
+    "BottleneckAnalyzerBase",
+    "RAGPrescriberBase",
+    # NVIDIA implementations (manager)
     "NvidiaVerifier",
     "NvidiaBenchmarker",
     "NvidiaWorkerRunner",
+    # NVIDIA implementations (worker)
+    "NvidiaAcceleratorSpecsProvider",
+    "NvidiaKernelProfiler",
+    "NvidiaRooflineAnalyzer",
+    "NvidiaBottleneckAnalyzer",
+    "NvidiaRAGPrescriber",
 ]
