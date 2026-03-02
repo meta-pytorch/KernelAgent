@@ -465,6 +465,10 @@ class OptimizationManager:
     # Thin delegates to platform components
     # ------------------------------------------------------------------
 
+    def _benchmark_pytorch_baseline(self, problem_file: Path) -> float:
+        """Benchmark the eager reference implementation."""
+        return self.benchmarker.benchmark_reference(problem_file)
+
     def _verify_initial_kernel(
         self,
         initial_kernel: str,
@@ -474,19 +478,15 @@ class OptimizationManager:
         """Verify the initial kernel passes correctness before optimization."""
         return self.verifier.verify(initial_kernel, problem_file, test_code)
 
-    def _benchmark_pytorch_baseline(self, problem_file: Path) -> float:
-        """Benchmark the eager reference implementation."""
-        return self.benchmarker.benchmark_reference(problem_file)
-
-    def _benchmark_pytorch_compile(self, problem_file: Path) -> float:
-        """Benchmark the compiler-optimized reference."""
-        return self.benchmarker.benchmark_reference_compiled(problem_file)
-
     def _benchmark_initial_kernel(
         self, initial_kernel: str, problem_file: Path
     ) -> float:
         """Benchmark the initial kernel before optimization begins."""
         return self.benchmarker.benchmark_kernel(initial_kernel, problem_file)
+
+    def _benchmark_pytorch_compile(self, problem_file: Path) -> float:
+        """Benchmark the compiler-optimized reference."""
+        return self.benchmarker.benchmark_reference_compiled(problem_file)
 
     def _run_workers(
         self,
