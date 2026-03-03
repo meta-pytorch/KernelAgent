@@ -102,10 +102,14 @@ class NvidiaBenchmarker(KernelBenchmarker):
         log_dir: Path,
         logger: logging.Logger,
         benchmark_lock: Any,
+        warmup: int = 25,
+        repeat: int = 100,
     ) -> None:
         self.log_dir = log_dir
         self.logger = logger
         self.benchmark_lock = benchmark_lock
+        self.warmup = warmup
+        self.repeat = repeat
 
     def _get_benchmarker(self):
         from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import (
@@ -119,6 +123,8 @@ class NvidiaBenchmarker(KernelBenchmarker):
             artifacts_dir=artifacts_dir,
             benchmark_lock=self.benchmark_lock,
             worker_id=-1,
+            warmup=self.warmup,
+            repeat=self.repeat,
         )
 
     def benchmark_kernel(
@@ -389,7 +395,11 @@ class NvidiaAcceleratorSpecsProvider(AcceleratorSpecsProvider):
             get_gpu_specs,
         )
 
-        return get_gpu_specs(device_name) if device_name else get_gpu_specs()
+        if not device_name:
+            raise ValueError(
+                "device_name is required (e.g. 'NVIDIA H100 NVL 94GB')"
+            )
+        return get_gpu_specs(device_name)
 
 
 class NvidiaKernelProfiler(KernelProfilerBase):
@@ -399,10 +409,16 @@ class NvidiaKernelProfiler(KernelProfilerBase):
         self,
         logger: logging.Logger | None = None,
         log_dir: Path | None = None,
+        artifacts_dir: Path | None = None,
+        ncu_bin_path: str | None = None,
+        ncu_timeout_seconds: int | None = None,
         profiling_semaphore: Any | None = None,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
         self._log_dir = Path(log_dir) if log_dir else Path(".")
+        self._artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
+        self._ncu_bin_path = ncu_bin_path
+        self._ncu_timeout_seconds = ncu_timeout_seconds
         self._profiling_semaphore = profiling_semaphore
         self._delegate: Any | None = None
 
@@ -412,14 +428,18 @@ class NvidiaKernelProfiler(KernelProfilerBase):
                 KernelProfiler,
             )
 
-            artifacts_dir = self._log_dir / "artifacts"
+            artifacts_dir = self._artifacts_dir or self._log_dir / "artifacts"
             artifacts_dir.mkdir(parents=True, exist_ok=True)
-            self._delegate = KernelProfiler(
-                logger=self._logger,
-                artifacts_dir=artifacts_dir,
-                logs_dir=self._log_dir,
-                profiling_semaphore=self._profiling_semaphore,
-            )
+            kwargs: dict[str, Any] = {
+                "logger": self._logger,
+                "artifacts_dir": artifacts_dir,
+                "logs_dir": self._log_dir,
+                "ncu_bin_path": self._ncu_bin_path,
+                "profiling_semaphore": self._profiling_semaphore,
+            }
+            if self._ncu_timeout_seconds is not None:
+                kwargs["ncu_timeout_seconds"] = self._ncu_timeout_seconds
+            self._delegate = KernelProfiler(**kwargs)
         return self._delegate
 
     def profile_kernel(
@@ -437,8 +457,13 @@ class NvidiaKernelProfiler(KernelProfilerBase):
 class NvidiaRooflineAnalyzer(RooflineAnalyzerBase):
     """Wraps :class:`RooflineAnalyzer` (NCU SOL metrics) with lazy construction."""
 
-    def __init__(self, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        logger: logging.Logger | None = None,
+        roofline_config: Any | None = None,
+    ) -> None:
         self._logger = logger
+        self._roofline_config = roofline_config
         self._delegate: Any | None = None
 
     def _get_delegate(self) -> Any:
@@ -447,7 +472,10 @@ class NvidiaRooflineAnalyzer(RooflineAnalyzerBase):
                 RooflineAnalyzer,
             )
 
-            self._delegate = RooflineAnalyzer(logger=self._logger)
+            kwargs: dict[str, Any] = {"logger": self._logger}
+            if self._roofline_config is not None:
+                kwargs["config"] = self._roofline_config
+            self._delegate = RooflineAnalyzer(**kwargs)
         return self._delegate
 
     def analyze(self, ncu_metrics: dict[str, Any]) -> Any:
@@ -471,13 +499,20 @@ class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
     def __init__(
         self,
         logger: logging.Logger | None = None,
-        openai_model: str = "claude-opus-4.5",
+        log_dir: Path | None = None,
+        openai_model: str = "gpt-5",
+        gpu_name: str | None = None,
+        roofline_config: Any | None = None,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
+        self._log_dir = Path(log_dir) if log_dir else None
         self._openai_model = openai_model
+        self._gpu_name = gpu_name
         self._delegate: Any | None = None
         # Orchestrator accesses ``bottleneck_analyzer.roofline`` directly.
-        self.roofline = NvidiaRooflineAnalyzer(logger=self._logger)
+        self.roofline = NvidiaRooflineAnalyzer(
+            logger=self._logger, roofline_config=roofline_config
+        )
 
     def _get_delegate(self) -> Any:
         if self._delegate is None:
@@ -489,13 +524,18 @@ class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
             )
             from utils.providers import get_model_provider
 
+            if not self._gpu_name:
+                raise ValueError(
+                    "gpu_name is required for NvidiaBottleneckAnalyzer"
+                )
             provider = get_model_provider(self._openai_model)
-            gpu_specs = get_gpu_specs()
+            gpu_specs = get_gpu_specs(self._gpu_name)
 
             self._delegate = BottleneckAnalyzer(
                 provider=provider,
                 model=self._openai_model,
                 gpu_specs=gpu_specs,
+                logs_dir=self._log_dir,
                 logger=self._logger,
             )
         return self._delegate
@@ -515,8 +555,13 @@ class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
 class NvidiaRAGPrescriber(RAGPrescriberBase):
     """Wraps :class:`RAGPrescriber` (OpenAI-embedding RAG) with lazy construction."""
 
-    def __init__(self, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        logger: logging.Logger | None = None,
+        database_path: Path | None = None,
+    ) -> None:
         self._logger = logger
+        self._database_path = database_path
         self._delegate: Any | None = None
 
     def _get_delegate(self) -> Any:
@@ -525,11 +570,14 @@ class NvidiaRAGPrescriber(RAGPrescriberBase):
                 RAGPrescriber,
             )
 
-            self._delegate = RAGPrescriber(logger=self._logger)
+            kwargs: dict[str, Any] = {"logger": self._logger}
+            if self._database_path is not None:
+                kwargs["database_path"] = self._database_path
+            self._delegate = RAGPrescriber(**kwargs)
         return self._delegate
 
     def retrieve(self, query: str) -> tuple[Any | None, Any]:
         return self._get_delegate().retrieve(query)
 
-    def build_context(self, opt_node: Any) -> str:
-        return self._get_delegate().build_context(opt_node)
+    def build_context(self, opt_node: Any, **kwargs: Any) -> str:
+        return self._get_delegate().build_context(opt_node, **kwargs)
