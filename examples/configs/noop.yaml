@@ -7,12 +7,18 @@
 # Usage:
 #   python examples/run_opt_manager.py \
 #       --kernel-dir examples/optimize_01_matvec \
-#       --config examples/configs/noop.yaml
+#       --strategy noop
 
 strategy: greedy
 num_workers: 1
-max_rounds: 2
 strategy_config:
   max_no_improvement: 1
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"
 
 platform: noop

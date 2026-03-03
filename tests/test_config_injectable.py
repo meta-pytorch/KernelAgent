@@ -195,3 +195,31 @@ def test_var_keyword_function():
             assert result == {"a": 1, "b": 2, "opts": {"debug": True}}
         finally:
             os.unlink(f.name)
+
+
+def test_var_keyword_yaml_extras_forwarded():
+    """YAML keys that don't match named params are forwarded via **kwargs."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nb: 2\nextra_one: 100\nextra_two: 200\n")
+        f.flush()
+        try:
+            result = func_with_var_kw(config=f.name)
+            assert result == {
+                "a": 1,
+                "b": 2,
+                "opts": {"extra_one": 100, "extra_two": 200},
+            }
+        finally:
+            os.unlink(f.name)
+
+
+def test_var_keyword_yaml_extras_explicit_override():
+    """Explicit kwargs override same-named YAML extras."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nextra: from_yaml\n")
+        f.flush()
+        try:
+            result = func_with_var_kw(config=f.name, extra="from_kwarg")
+            assert result == {"a": 1, "b": 10, "opts": {"extra": "from_kwarg"}}
+        finally:
+            os.unlink(f.name)
