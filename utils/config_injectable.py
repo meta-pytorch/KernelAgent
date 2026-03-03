@@ -41,7 +41,15 @@ def _merge_args(func, args, kwargs):
     if missing:
         raise TypeError(f"Missing required arguments: {missing}")
 
-    return bound_args.arguments
+    # Expand VAR_KEYWORD (**kwargs) entries so that
+    # ``func(**result)`` doesn't double-nest them.
+    result = dict(bound_args.arguments)
+    for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD and param.name in result:
+            var_kw = result.pop(param.name)
+            result.update(var_kw)
+
+    return result
 
 
 def config_injectable(target):
