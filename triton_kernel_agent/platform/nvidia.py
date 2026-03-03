@@ -396,9 +396,7 @@ class NvidiaAcceleratorSpecsProvider(AcceleratorSpecsProvider):
         )
 
         if not device_name:
-            raise ValueError(
-                "device_name is required (e.g. 'NVIDIA H100 NVL 94GB')"
-            )
+            raise ValueError("device_name is required (e.g. 'NVIDIA H100 NVL 94GB')")
         return get_gpu_specs(device_name)
 
 
@@ -525,9 +523,7 @@ class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
             from utils.providers import get_model_provider
 
             if not self._gpu_name:
-                raise ValueError(
-                    "gpu_name is required for NvidiaBottleneckAnalyzer"
-                )
+                raise ValueError("gpu_name is required for NvidiaBottleneckAnalyzer")
             provider = get_model_provider(self._openai_model)
             gpu_specs = get_gpu_specs(self._gpu_name)
 

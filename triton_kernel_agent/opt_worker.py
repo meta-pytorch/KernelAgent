@@ -194,9 +194,7 @@ class OptimizationWorker:
             )
 
             if not self.gpu_name:
-                raise ValueError(
-                    "gpu_name is required (e.g. 'NVIDIA H100 NVL 94GB')"
-                )
+                raise ValueError("gpu_name is required (e.g. 'NVIDIA H100 NVL 94GB')")
             self.gpu_specs = get_gpu_specs(self.gpu_name)
         self.logger.info(
             f"Initialized for GPU: {self.gpu_specs.get('name', 'unknown')}"

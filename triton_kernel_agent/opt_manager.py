@@ -166,9 +166,7 @@ class OptimizationManager:
     # Platform resolution
     # ------------------------------------------------------------------
 
-    def _resolve_platform(
-        self, platform: dict[str, str] | str | None
-    ) -> None:
+    def _resolve_platform(self, platform: dict[str, str] | str | None) -> None:
         """Resolve platform components from the :mod:`platform.registry`.
 
         Manager-level components (``verifier``, ``benchmarker``,
@@ -452,9 +450,7 @@ class OptimizationManager:
             test_code=test_code,
             pytorch_baseline=pytorch_baseline,
             shared_history=(
-                self.shared_history[-self.history_size :]
-                if self.shared_history
-                else []
+                self.shared_history[-self.history_size :] if self.shared_history else []
             ),
             shared_reflexions=(
                 self.shared_reflexions[-self.history_size :]

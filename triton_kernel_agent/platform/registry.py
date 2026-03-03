@@ -120,8 +120,7 @@ class PlatformRegistry:
         impls = self._factories.get(component)
         if impls is None:
             raise KeyError(
-                f"Unknown component {component!r}. "
-                f"Registered: {self.list_components()}"
+                f"Unknown component {component!r}. Registered: {self.list_components()}"
             )
         factory = impls.get(name)
         if factory is None:

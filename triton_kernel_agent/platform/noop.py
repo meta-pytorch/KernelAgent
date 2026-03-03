@@ -75,15 +75,23 @@ class NoOpBenchmarker(KernelBenchmarker):
         pass
 
     def benchmark_kernel(self, kernel_code: str, problem_file: Path) -> float:
-        logger.info("[noop] Skipping kernel benchmark — returning %.1f ms", self._PLACEHOLDER_MS)
+        logger.info(
+            "[noop] Skipping kernel benchmark — returning %.1f ms", self._PLACEHOLDER_MS
+        )
         return self._PLACEHOLDER_MS
 
     def benchmark_reference(self, problem_file: Path) -> float:
-        logger.info("[noop] Skipping reference benchmark — returning %.1f ms", self._PLACEHOLDER_MS)
+        logger.info(
+            "[noop] Skipping reference benchmark — returning %.1f ms",
+            self._PLACEHOLDER_MS,
+        )
         return self._PLACEHOLDER_MS
 
     def benchmark_reference_compiled(self, problem_file: Path) -> float:
-        logger.info("[noop] Skipping compiled benchmark — returning %.1f ms", self._PLACEHOLDER_MS)
+        logger.info(
+            "[noop] Skipping compiled benchmark — returning %.1f ms",
+            self._PLACEHOLDER_MS,
+        )
         return self._PLACEHOLDER_MS
 
 
