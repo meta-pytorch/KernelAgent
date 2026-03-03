@@ -130,3 +130,96 @@ def test_config_injectable_missing_required_from_yaml():
                 sample_func(config=f.name)
         finally:
             os.unlink(f.name)
+
+
+# ---------------------------------------------------------------------------
+# VAR_KEYWORD (**kwargs) handling
+# ---------------------------------------------------------------------------
+
+
+@config_injectable
+class ClassWithVarKw:
+    def __init__(self, name, mode="default", **extra):
+        self.name = name
+        self.mode = mode
+        self.extra = extra
+
+
+def test_var_keyword_no_config():
+    """Extra kwargs are forwarded without double-nesting."""
+    obj = ClassWithVarKw("test", foo=1, bar=2)
+    assert obj.name == "test"
+    assert obj.mode == "default"
+    assert obj.extra == {"foo": 1, "bar": 2}
+
+
+def test_var_keyword_with_config():
+    """Named params from YAML + explicit extra kwargs coexist."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("name: from_yaml\nmode: fast\n")
+        f.flush()
+        try:
+            obj = ClassWithVarKw(config=f.name, warmup=25, repeat=100)
+            assert obj.name == "from_yaml"
+            assert obj.mode == "fast"
+            assert obj.extra == {"warmup": 25, "repeat": 100}
+        finally:
+            os.unlink(f.name)
+
+
+def test_var_keyword_no_extras():
+    """VAR_KEYWORD param doesn't leak into the result when empty."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("name: solo\n")
+        f.flush()
+        try:
+            obj = ClassWithVarKw(config=f.name)
+            assert obj.name == "solo"
+            assert obj.extra == {}
+        finally:
+            os.unlink(f.name)
+
+
+@config_injectable
+def func_with_var_kw(a, b=10, **opts):
+    return {"a": a, "b": b, "opts": opts}
+
+
+def test_var_keyword_function():
+    """VAR_KEYWORD works correctly on decorated functions too."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nb: 2\n")
+        f.flush()
+        try:
+            result = func_with_var_kw(config=f.name, debug=True)
+            assert result == {"a": 1, "b": 2, "opts": {"debug": True}}
+        finally:
+            os.unlink(f.name)
+
+
+def test_var_keyword_yaml_extras_forwarded():
+    """YAML keys that don't match named params are forwarded via **kwargs."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nb: 2\nextra_one: 100\nextra_two: 200\n")
+        f.flush()
+        try:
+            result = func_with_var_kw(config=f.name)
+            assert result == {
+                "a": 1,
+                "b": 2,
+                "opts": {"extra_one": 100, "extra_two": 200},
+            }
+        finally:
+            os.unlink(f.name)
+
+
+def test_var_keyword_yaml_extras_explicit_override():
+    """Explicit kwargs override same-named YAML extras."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write("a: 1\nextra: from_yaml\n")
+        f.flush()
+        try:
+            result = func_with_var_kw(config=f.name, extra="from_kwarg")
+            assert result == {"a": 1, "b": 10, "opts": {"extra": "from_kwarg"}}
+        finally:
+            os.unlink(f.name)

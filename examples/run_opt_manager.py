@@ -19,6 +19,7 @@ This script shows how to use the OptimizationManager to optimize a Triton kernel
 using different search strategies:
 - beam_search: Maintain top-N kernels, explore M bottlenecks each
 - greedy: Simple single-best optimization with early termination
+- noop: Dry-run without GPU hardware (returns initial kernel unchanged)
 
 The OptimizationManager orchestrates parallel workers and persists optimization
 history to a JSON database for analysis and resumption.
@@ -35,107 +36,36 @@ from triton_kernel_agent.opt_manager import OptimizationManager
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
+# Hardcoded config directory relative to this script.
+_CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 
-def run_beam_search_optimization(
+# Available strategies and their config files.
+_STRATEGIES = ["beam_search", "greedy", "noop", "nvidia"]
+
+
+def _run_strategy(
+    strategy: str,
     kernel_code: str,
     problem_file: Path,
     test_code: str,
     log_dir: Path,
-    max_rounds: int = 5,
+    max_rounds: int | None = None,
 ) -> dict:
-    """
-    Run optimization using beam search strategy.
+    """Run a single strategy using its config file."""
+    config_path = _CONFIGS_DIR / f"{strategy}.yaml"
+    if not config_path.exists():
+        print(f"ERROR: config not found: {config_path}")
+        sys.exit(1)
 
-    Beam search maintains top-N kernels and explores M bottleneck directions
-    for each, giving N×M parallel workers per round.
-
-    Args:
-        kernel_code: Initial kernel source code
-        problem_file: Path to problem.py
-        test_code: Test code for verification
-        log_dir: Directory for logs and artifacts
-        max_rounds: Maximum optimization rounds
-
-    Returns:
-        Optimization result dict
-    """
     print("\n" + "=" * 80)
-    print("BEAM SEARCH OPTIMIZATION")
+    print(f"{strategy.upper()} OPTIMIZATION")
     print("=" * 80)
+    print(f"Config: {config_path}")
 
     manager = OptimizationManager(
-        strategy="beam_search",
-        num_workers=4,  # 2 top kernels × 2 bottlenecks
-        max_rounds=max_rounds,
-        log_dir=log_dir / "beam_search",
-        database_path=log_dir / "beam_search" / "program_db.json",
-        strategy_config={
-            "num_top_kernels": 2,  # Keep top 2 kernels in beam
-            "num_bottlenecks": 2,  # Explore 2 bottleneck directions each
-        },
-        openai_model="gpt-5",
-        high_reasoning_effort=True,
-        # Worker configuration
-        benchmark_warmup=25,
-        benchmark_repeat=100,
-        divergence_threshold=50.0,
-        target_platform="cuda",
-        gpu_name="NVIDIA H100 NVL 94GB",
-    )
-
-    return manager.run_optimization(
-        initial_kernel=kernel_code,
-        problem_file=problem_file,
-        test_code=test_code,
-        max_rounds=max_rounds,
-    )
-
-
-def run_greedy_optimization(
-    kernel_code: str,
-    problem_file: Path,
-    test_code: str,
-    log_dir: Path,
-    max_rounds: int = 10,
-) -> dict:
-    """
-    Run optimization using greedy strategy.
-
-    Greedy strategy always optimizes from the current best kernel
-    with a single worker. Terminates early if no improvement for
-    several consecutive rounds.
-
-    Args:
-        kernel_code: Initial kernel source code
-        problem_file: Path to problem.py
-        test_code: Test code for verification
-        log_dir: Directory for logs and artifacts
-        max_rounds: Maximum optimization rounds
-
-    Returns:
-        Optimization result dict
-    """
-    print("\n" + "=" * 80)
-    print("GREEDY OPTIMIZATION")
-    print("=" * 80)
-
-    manager = OptimizationManager(
-        strategy="greedy",
-        num_workers=1,  # Single worker
-        max_rounds=max_rounds,
-        log_dir=log_dir / "greedy",
-        database_path=log_dir / "greedy" / "program_db.json",
-        strategy_config={
-            "max_no_improvement": 5,  # Early stop after 5 rounds without improvement
-        },
-        openai_model="gpt-5",
-        high_reasoning_effort=True,
-        # Worker configuration
-        benchmark_warmup=25,
-        benchmark_repeat=100,
-        divergence_threshold=50.0,
-        target_platform="cuda",
-        gpu_name="NVIDIA H100 NVL 94GB",
+        config=str(config_path),
+        log_dir=log_dir / strategy,
+        database_path=log_dir / strategy / "program_db.json",
     )
 
     return manager.run_optimization(
@@ -183,7 +113,7 @@ def main():
     )
     parser.add_argument(
         "--strategy",
-        choices=["beam_search", "greedy", "all"],
+        choices=_STRATEGIES + ["all"],
         default="beam_search",
         help="Optimization strategy to use (default: beam_search)",
     )
@@ -232,56 +162,37 @@ def main():
     print(f"Log directory: {log_dir}")
 
     # Run selected strategy
-    if args.strategy == "beam_search":
-        result = run_beam_search_optimization(
-            kernel_code,
-            problem_file,
-            test_code,
-            log_dir,
-            args.max_rounds,
-        )
-        print_result(result, "BEAM_SEARCH", kernel_dir)
-
-    elif args.strategy == "greedy":
-        result = run_greedy_optimization(
-            kernel_code,
-            problem_file,
-            test_code,
-            log_dir,
-            args.max_rounds,
-        )
-        print_result(result, "GREEDY", kernel_dir)
-
-    elif args.strategy == "all":
-        # Run all strategies and compare
+    if args.strategy == "all":
         results = {}
-
-        results["beam_search"] = run_beam_search_optimization(
-            kernel_code,
-            problem_file,
-            test_code,
-            log_dir,
-            args.max_rounds,
-        )
-        print_result(results["beam_search"], "BEAM_SEARCH", kernel_dir)
-
-        results["greedy"] = run_greedy_optimization(
-            kernel_code,
-            problem_file,
-            test_code,
-            log_dir,
-            args.max_rounds,
-        )
-        print_result(results["greedy"], "GREEDY", kernel_dir)
+        for strategy in _STRATEGIES:
+            results[strategy] = _run_strategy(
+                strategy,
+                kernel_code,
+                problem_file,
+                test_code,
+                log_dir,
+                max_rounds=args.max_rounds,
+            )
+            print_result(results[strategy], strategy.upper(), kernel_dir)
 
         # Compare results
         print("\n" + "=" * 80)
         print("STRATEGY COMPARISON")
         print("=" * 80)
         for name, result in results.items():
-            status = "✓" if result["success"] else "✗"
+            status = "+" if result["success"] else "-"
             time_str = f"{result['best_time_ms']:.4f}ms" if result["success"] else "N/A"
             print(f"  {status} {name:15} - Best: {time_str}")
+    else:
+        result = _run_strategy(
+            args.strategy,
+            kernel_code,
+            problem_file,
+            test_code,
+            log_dir,
+            max_rounds=args.max_rounds,
+        )
+        print_result(result, args.strategy.upper(), kernel_dir)
 
 
 if __name__ == "__main__":

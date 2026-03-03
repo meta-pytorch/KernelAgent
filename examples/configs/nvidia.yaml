@@ -1,0 +1,37 @@
+# Explicit NVIDIA platform config — all 8 component slots spelled out.
+#
+# This is equivalent to the default (platform is nvidia when omitted),
+# but serves as documentation of the available component keys and as a
+# starting point for mixed-platform configs.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --config examples/configs/nvidia.yaml
+
+strategy: beam_search
+num_workers: 4
+strategy_config:
+  num_top_kernels: 2
+  num_bottlenecks: 2
+openai_model: gpt-5
+high_reasoning_effort: true
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"
+
+platform:
+  # Manager-level components
+  verifier: nvidia
+  benchmarker: nvidia
+  worker_runner: nvidia
+  # Worker-level components
+  specs_provider: nvidia
+  profiler: nvidia
+  roofline_analyzer: nvidia
+  bottleneck_analyzer: nvidia
+  rag_prescriber: nvidia

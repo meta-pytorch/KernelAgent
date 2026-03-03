@@ -26,6 +26,14 @@ NVIDIA / CUDA implementations (default when nothing else is supplied):
     NvidiaVerifier, NvidiaBenchmarker, NvidiaWorkerRunner,
     NvidiaAcceleratorSpecsProvider, NvidiaKernelProfiler,
     NvidiaRooflineAnalyzer, NvidiaBottleneckAnalyzer, NvidiaRAGPrescriber
+
+No-op implementations (for dry-run / CI / testing):
+    NoOpVerifier, NoOpBenchmarker, NoOpWorkerRunner,
+    NoOpSpecsProvider, NoOpProfiler, NoOpRooflineAnalyzer,
+    NoOpBottleneckAnalyzer, NoOpRAGPrescriber
+
+Registry (for config-driven component selection):
+    registry  — the global :class:`PlatformRegistry` singleton
 """
 
 from triton_kernel_agent.platform.interfaces import (
@@ -48,6 +56,17 @@ from triton_kernel_agent.platform.nvidia import (
     NvidiaVerifier,
     NvidiaWorkerRunner,
 )
+from triton_kernel_agent.platform.noop import (
+    NoOpBenchmarker,
+    NoOpBottleneckAnalyzer,
+    NoOpProfiler,
+    NoOpRAGPrescriber,
+    NoOpRooflineAnalyzer,
+    NoOpSpecsProvider,
+    NoOpVerifier,
+    NoOpWorkerRunner,
+)
+from triton_kernel_agent.platform.registry import PlatformRegistry, registry
 
 __all__ = [
     # Manager-level interfaces
@@ -70,4 +89,17 @@ __all__ = [
     "NvidiaRooflineAnalyzer",
     "NvidiaBottleneckAnalyzer",
     "NvidiaRAGPrescriber",
+    # No-op implementations (manager)
+    "NoOpVerifier",
+    "NoOpBenchmarker",
+    "NoOpWorkerRunner",
+    # No-op implementations (worker)
+    "NoOpSpecsProvider",
+    "NoOpProfiler",
+    "NoOpRooflineAnalyzer",
+    "NoOpBottleneckAnalyzer",
+    "NoOpRAGPrescriber",
+    # Registry
+    "PlatformRegistry",
+    "registry",
 ]

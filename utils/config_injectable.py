@@ -27,9 +27,27 @@ def _merge_args(func, args, kwargs):
     if config_path is not None:
         config_data = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
 
+    named_params = {
+        p.name
+        for p in sig.parameters.values()
+        if p.kind
+        not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+    }
+
     for param in sig.parameters.values():
         if param.name not in bound_args.arguments and param.name in config_data:
             bound_args.arguments[param.name] = config_data[param.name]
+
+    # Feed remaining config keys into the VAR_KEYWORD parameter (**kwargs)
+    # so that YAML keys not matching a named param are forwarded.
+    for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            extra = {k: v for k, v in config_data.items() if k not in named_params}
+            if extra:
+                existing = bound_args.arguments.get(param.name, {})
+                # Explicit kwargs take precedence over YAML values
+                bound_args.arguments[param.name] = {**extra, **existing}
+            break
 
     bound_args.apply_defaults()
 
@@ -41,7 +59,15 @@ def _merge_args(func, args, kwargs):
     if missing:
         raise TypeError(f"Missing required arguments: {missing}")
 
-    return bound_args.arguments
+    # Expand VAR_KEYWORD (**kwargs) entries so that
+    # ``func(**result)`` doesn't double-nest them.
+    result = dict(bound_args.arguments)
+    for param in sig.parameters.values():
+        if param.kind == inspect.Parameter.VAR_KEYWORD and param.name in result:
+            var_kw = result.pop(param.name)
+            result.update(var_kw)
+
+    return result
 
 
 def config_injectable(target):

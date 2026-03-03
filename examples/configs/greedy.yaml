@@ -1,0 +1,20 @@
+# Greedy strategy — single-best kernel, early stop on plateau.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --strategy greedy
+
+strategy: greedy
+num_workers: 1
+strategy_config:
+  max_no_improvement: 5
+openai_model: gpt-5
+high_reasoning_effort: true
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"

@@ -1,0 +1,21 @@
+# Beam search strategy — explores top-N kernels × M bottleneck directions.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --strategy beam_search
+
+strategy: beam_search
+num_workers: 4
+strategy_config:
+  num_top_kernels: 2
+  num_bottlenecks: 2
+openai_model: claude-opus-4.5
+high_reasoning_effort: true
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"
