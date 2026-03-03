@@ -276,6 +276,7 @@ class OptimizationWorker:
                 artifacts_dir=self.artifact_dir,
                 logs_dir=self.log_dir,
                 ncu_bin_path=self.ncu_bin_path,
+                profiling_semaphore=self.profiling_semaphore,
             )
 
         # Bottleneck analyzer

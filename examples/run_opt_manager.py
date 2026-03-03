@@ -246,6 +246,12 @@ def main():
             config=str(args.config),
             log_dir=log_dir / "configured",
             database_path=log_dir / "configured" / "program_db.json",
+            # Worker configuration
+            benchmark_warmup=25,
+            benchmark_repeat=100,
+            divergence_threshold=50.0,
+            target_platform="cuda",
+            gpu_name="NVIDIA H100 NVL 94GB",
         )
         result = manager.run_optimization(
             initial_kernel=kernel_code,
