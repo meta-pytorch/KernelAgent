@@ -26,7 +26,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from kernel_perf_agent.kernel_opt.roofline.ncu_roofline import RooflineResult
 from triton_kernel_agent.platform.interfaces import (
     AcceleratorSpecsProvider,
     BottleneckAnalyzerBase,
@@ -35,6 +34,7 @@ from triton_kernel_agent.platform.interfaces import (
     KernelVerifier,
     RAGPrescriberBase,
     RooflineAnalyzerBase,
+    RooflineResult,
     WorkerRunner,
 )
 
@@ -178,15 +178,7 @@ class NoOpRooflineAnalyzer(RooflineAnalyzerBase):
     """Reports zero efficiency and always signals stop."""
 
     def analyze(self, ncu_metrics: dict[str, Any]) -> RooflineResult:
-        return RooflineResult(
-            efficiency_pct=0.0,
-            compute_sol_pct=0.0,
-            memory_sol_pct=0.0,
-            bottleneck="unknown",
-            at_roofline=False,
-            headroom_pct=100.0,
-            uses_tensor_cores=False,
-        )
+        return RooflineResult()
 
     def should_stop(self, result: Any) -> tuple[bool, str]:
         return True, "noop roofline — always stop"

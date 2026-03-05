@@ -22,6 +22,7 @@ manager. Implement these to support a new backend.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -200,22 +201,39 @@ class KernelProfilerBase(ABC):
         ...
 
 
+@dataclass(frozen=True)
+class RooflineResult:
+    """Lightweight, dependency-free roofline analysis result.
+
+    Platform implementations may return their own richer type from
+    ``RooflineAnalyzerBase.analyze()`` as long as it satisfies the same
+    attribute protocol.  This dataclass is the canonical minimal
+    implementation and is used by the noop platform.
+    """
+
+    efficiency_pct: float = 0.0
+    compute_sol_pct: float = 0.0
+    memory_sol_pct: float = 0.0
+    bottleneck: str = "unknown"
+    at_roofline: bool = False
+    headroom_pct: float = 100.0
+    uses_tensor_cores: bool = False
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class RooflineAnalyzerBase(ABC):
     """Classifies a kernel as memory-bound, compute-bound, or underutilised."""
 
     @abstractmethod
-    def analyze(self, ncu_metrics: dict[str, Any]) -> Any:
-        """Analyse profiler metrics and return a roofline result.
-
-        The return value should be compatible with ``RooflineResult``
-        (has ``efficiency_pct``, ``compute_sol_pct``, ``memory_sol_pct``,
-        ``bottleneck``, ``at_roofline``, ``headroom_pct``,
-        ``uses_tensor_cores``, ``to_dict()``).
-        """
+    def analyze(self, ncu_metrics: dict[str, Any]) -> RooflineResult:
+        """Analyse profiler metrics and return a roofline result."""
         ...
 
     @abstractmethod
-    def should_stop(self, result: Any) -> tuple[bool, str]:
+    def should_stop(self, result: RooflineResult) -> tuple[bool, str]:
         """Whether optimisation should terminate (at roofline or converged).
 
         Returns:
@@ -238,7 +256,7 @@ class BottleneckAnalyzerBase(ABC):
         kernel_code: str,
         ncu_metrics: dict[str, Any],
         round_num: int = 0,
-        roofline_result: Any | None = None,
+        roofline_result: RooflineResult | None = None,
     ) -> list[Any]:
         """Analyse kernel bottlenecks.
 
