@@ -120,21 +120,15 @@ class PromptManager:
                 # Load from absolute path
                 p = Path(override_path)
                 if not p.exists():
-                    raise FileNotFoundError(
-                        f"Template override not found: {p}"
-                    )
+                    raise FileNotFoundError(f"Template override not found: {p}")
                 self.templates[template_name] = self.env.from_string(p.read_text())
             else:
                 # Default: load from templates_dir
                 template_path = self.templates_dir / template_file
                 if template_path.exists():
-                    self.templates[template_name] = self.env.get_template(
-                        template_file
-                    )
+                    self.templates[template_name] = self.env.get_template(template_file)
                 else:
-                    raise FileNotFoundError(
-                        f"Template file not found: {template_path}"
-                    )
+                    raise FileNotFoundError(f"Template file not found: {template_path}")
 
         # Load optional templates
         for template_name, template_file in optional_template_files.items():
@@ -142,16 +136,12 @@ class PromptManager:
             if override_path and template_name in self._OVERRIDABLE:
                 p = Path(override_path)
                 if not p.exists():
-                    raise FileNotFoundError(
-                        f"Template override not found: {p}"
-                    )
+                    raise FileNotFoundError(f"Template override not found: {p}")
                 self.templates[template_name] = self.env.from_string(p.read_text())
             else:
                 template_path = self.templates_dir / template_file
                 if template_path.exists():
-                    self.templates[template_name] = self.env.get_template(
-                        template_file
-                    )
+                    self.templates[template_name] = self.env.get_template(template_file)
 
     def render_test_generation_prompt(
         self, problem_description: str, provided_test_code: str | None = None
