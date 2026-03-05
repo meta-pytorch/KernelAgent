@@ -18,7 +18,7 @@ import os
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 from datetime import datetime
 import logging
 from dotenv import load_dotenv
@@ -40,7 +40,7 @@ class TritonKernelAgent:
         model_name: str | None = None,
         high_reasoning_effort: bool = True,
         preferred_provider: BaseProvider | None = None,
-        target_platform: PlatformConfig | None = None,
+        target_platform: Union[PlatformConfig, str] | None = None,
         no_cusolver: bool = False,
         test_timeout_s: int = 30,
     ):
@@ -87,9 +87,12 @@ class TritonKernelAgent:
         self.log_dir.mkdir(exist_ok=True, parents=True)
 
         # Normalize to PlatformConfig
-        self._platform_config = (
-            target_platform if target_platform else get_platform("cuda")
-        )
+        if not target_platform:
+            target_platform = get_platform("cuda")
+        elif isinstance(target_platform, str):
+            target_platform = get_platform(target_platform)
+        self._platform_config = target_platform
+
         self.no_cusolver = no_cusolver
         self.test_timeout_s = test_timeout_s
 
