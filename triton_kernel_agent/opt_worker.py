@@ -96,6 +96,8 @@ class OptimizationWorker:
         platform_components: dict[str, Any] | None = None,
         # Registry-driven platform config (string names) ───────────
         platform_config: dict[str, str] | None = None,
+        # Template overrides from YAML config ─────────────────────
+        templates: dict[str, str] | None = None,
     ):
         """
         Initialize the optimization worker.
@@ -147,6 +149,9 @@ class OptimizationWorker:
         # Platform components (registry-resolved, may be empty)
         self._platform = platform_components or {}
         self._platform_config = platform_config or {}
+
+        # Template overrides (forwarded to PromptManager)
+        self.templates_config = templates
 
         # BeamSearch parameters
         self.bottleneck_id = bottleneck_id
@@ -254,7 +259,10 @@ class OptimizationWorker:
         """
         # Prompt manager (platform-aware, but not hardware-specific)
         platform_config = get_platform(self.target_platform)
-        self.prompt_manager = PromptManager(target_platform=platform_config)
+        self.prompt_manager = PromptManager(
+            target_platform=platform_config,
+            template_overrides=self.templates_config,
+        )
 
         # Benchmarking
         from triton_kernel_agent.opt_worker_component.benchmarking.benchmark import (
@@ -327,8 +335,8 @@ class OptimizationWorker:
                 logger=self.logger,
             )
 
-        # RAG prescriber
-        if "rag_prescriber" in self._platform:
+        # RAG prescriber (only when use_rag is enabled)
+        if self.use_rag and "rag_prescriber" in self._platform:
             self.rag_prescriber = self._platform["rag_prescriber"]
         elif self.use_rag:
             try:
