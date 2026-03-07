@@ -312,7 +312,7 @@ class OptimizationOrchestrator:
         self,
         kernel_code: str,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
         known_kernel_time: float | None = None,
         max_opt_rounds: int = 5,
     ) -> tuple[bool, str, dict[str, Any]]:
@@ -322,7 +322,7 @@ class OptimizationOrchestrator:
         Args:
             kernel_code: Initial kernel code
             problem_file: Path to problem file
-            test_code: Test code for verification
+            test_code: List of test code strings (primary + additional tests)
             known_kernel_time: Known performance of kernel_code in ms
             max_opt_rounds: Maximum optimization rounds
 
@@ -479,7 +479,7 @@ class OptimizationOrchestrator:
 
             # Verify and refine
             success, optimized_kernel, verify_error = self._verify_and_refine(
-                optimized_kernel, test_code, problem_description, round_num
+                optimized_kernel, test_code, problem_description, round_num,
             )
             if not success:
                 error_feedback = (
@@ -880,7 +880,7 @@ class OptimizationOrchestrator:
     def _verify_and_refine(
         self,
         optimized_kernel: str,
-        test_code: str,
+        test_code: list[str],
         problem_description: str,
         round_num: int,
     ) -> tuple[bool, str, str]:

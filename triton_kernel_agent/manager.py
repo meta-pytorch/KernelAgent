@@ -117,7 +117,7 @@ class WorkerManager:
     def run_verification(
         self,
         kernel_seeds: list[str],
-        test_code: str,
+        test_code: list[str],
         problem_description: str,
         session_log_dir: Path | None = None,
     ) -> dict[str, Any | None]:
@@ -126,7 +126,7 @@ class WorkerManager:
 
         Args:
             kernel_seeds: List of initial kernel implementations
-            test_code: Test code to verify kernel correctness
+            test_code: List of test code strings (primary + additional tests)
             problem_description: Description of the problem
             session_log_dir: Optional session directory for worker logs
 
@@ -224,7 +224,7 @@ class WorkerManager:
 def worker_process(
     worker_id: int,
     kernel_code: str,
-    test_code: str,
+    test_code: list[str],
     problem_description: str,
     workdir: Path,
     log_dir: Path,

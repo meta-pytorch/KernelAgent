@@ -21,6 +21,30 @@ from logging import Logger
 from pathlib import Path
 
 # ------------------------
+# Test-code helpers
+# ------------------------
+
+
+def format_test_code_for_llm(test_code: list[str]) -> str:
+    """Combine test code entries into a single string for LLM prompts.
+
+    The primary test (``test_code[0]``) is included as-is.  Any additional
+    tests are appended with a clear label so the LLM treats them as
+    reference context rather than code to reproduce.
+    """
+    if len(test_code) == 1:
+        return test_code[0]
+    parts = [test_code[0]]
+    for i, extra in enumerate(test_code[1:]):
+        parts.append(
+            f"\n\n# === ADDITIONAL VALIDATION TEST {i + 1} "
+            f"(for reference only — do NOT copy into your kernel) ===\n"
+            + extra
+        )
+    return "\n".join(parts)
+
+
+# ------------------------
 # LLM Utilities
 # ------------------------
 
@@ -188,47 +212,57 @@ def _run_test_process(test_file: Path, workdir: Path, result_queue: mp.Queue) ->
 
 
 def _run_test_multiprocess(
-    logger: Logger, workdir: Path, test_file: Path
+    logger: Logger,
+    workdir: Path,
+    test_files: list[Path],
 ) -> tuple[bool, str, str]:
     """
-    Run the test script and capture results using multiprocessing.
+    Run test scripts sequentially using multiprocessing (``&&`` semantics).
+
+    Args:
+        logger: Logger instance.
+        workdir: Working directory for the tests.
+        test_files: List of test file paths to run in order.
 
     Returns:
         Tuple of (success, stdout, stderr)
     """
-    # Create process to run the test
-    result_queue = mp.Queue()
-    process = mp.Process(
-        target=_run_test_process,
-        args=(test_file, workdir, result_queue),
-    )
-    process.start()
-    process.join(timeout=30)
-
-    # Check if process is still alive (timeout)
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=5)
-        if process.is_alive():
-            process.kill()
-            process.join()
-
-        logger.error("Test timed out")
-        return False, "", "Test execution timed out after 30 seconds"
-
-    # Get result from queue
-    try:
-        success, stdout, stderr = result_queue.get_nowait()
-        if success:
-            logger.info("Test passed")
-        else:
-            logger.error(
-                "Test failed. Exit code: %s, stderr: %s", process.exitcode, stderr[:500]
-            )
-        return success, stdout, stderr
-    except mp.queues.Empty:
-        error_msg = (
-            f"Test process ended without result. Exit code: {process.exitcode}. "
+    stdout, stderr = "", ""
+    for test_file in test_files:
+        if not test_file.exists():
+            continue
+        result_queue = mp.Queue()
+        process = mp.Process(
+            target=_run_test_process,
+            args=(test_file, workdir, result_queue),
         )
-        logger.error(error_msg)
-        return False, "", error_msg
+        process.start()
+        process.join(timeout=30)
+
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            logger.error("Test %s timed out", test_file.name)
+            return False, "", f"Test {test_file.name} timed out after 30 seconds"
+
+        try:
+            success, stdout, stderr = result_queue.get_nowait()
+            if not success:
+                logger.error(
+                    "Test %s failed. Exit code: %s, stderr: %s",
+                    test_file.name, process.exitcode, stderr[:500],
+                )
+                return False, stdout, stderr
+            logger.info("Test %s passed", test_file.name)
+        except mp.queues.Empty:
+            error_msg = (
+                f"Test {test_file.name} ended without result. "
+                f"Exit code: {process.exitcode}."
+            )
+            logger.error(error_msg)
+            return False, "", error_msg
+
+    return True, stdout, stderr

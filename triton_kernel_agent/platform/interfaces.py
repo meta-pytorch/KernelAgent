@@ -34,14 +34,14 @@ class KernelVerifier(ABC):
         self,
         kernel_code: str,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
     ) -> bool:
         """Check that *kernel_code* produces correct results.
 
         Args:
             kernel_code: Kernel source code to verify.
             problem_file: Path to ``problem.py`` defining Model and get_inputs().
-            test_code: Test source code for correctness checking.
+            test_code: List of test code strings (primary + additional tests).
 
         Returns:
             ``True`` if the kernel passes verification.
@@ -109,7 +109,7 @@ class WorkerRunner(ABC):
         candidates: list[dict[str, Any]],
         round_num: int,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
         pytorch_baseline: float,
         shared_history: list[dict],
         shared_reflexions: list[dict],
@@ -133,7 +133,7 @@ class WorkerRunner(ABC):
             candidates: Candidate specs from the search strategy.
             round_num: Current round number.
             problem_file: Path to ``problem.py``.
-            test_code: Test code for correctness verification.
+            test_code: List of test code strings (primary + additional tests).
             pytorch_baseline: PyTorch eager baseline time in ms.
             shared_history: Recent optimization attempt history.
             shared_reflexions: Recent reflexion entries.
