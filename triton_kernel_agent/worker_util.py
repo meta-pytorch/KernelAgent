@@ -214,96 +214,55 @@ def _run_test_process(test_file: Path, workdir: Path, result_queue: mp.Queue) ->
 def _run_test_multiprocess(
     logger: Logger,
     workdir: Path,
-    test_file: Path,
-    additional_test_files: list[Path] | None = None,
+    test_files: list[Path],
 ) -> tuple[bool, str, str]:
     """
-    Run the test script and capture results using multiprocessing.
-
-    After the primary test passes, any *additional_test_files* are chained
-    sequentially in separate ``mp.Process`` calls (``&&`` semantics).
+    Run test scripts sequentially using multiprocessing (``&&`` semantics).
 
     Args:
         logger: Logger instance.
-        workdir: Working directory for the test.
-        test_file: Path to the primary test file.
-        additional_test_files: Optional list of extra test file paths to
-            run after the primary test passes.
+        workdir: Working directory for the tests.
+        test_files: List of test file paths to run in order.
 
     Returns:
         Tuple of (success, stdout, stderr)
     """
-    # Create process to run the test
-    result_queue = mp.Queue()
-    process = mp.Process(
-        target=_run_test_process,
-        args=(test_file, workdir, result_queue),
-    )
-    process.start()
-    process.join(timeout=30)
-
-    # Check if process is still alive (timeout)
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=5)
-        if process.is_alive():
-            process.kill()
-            process.join()
-
-        logger.error("Test timed out")
-        return False, "", "Test execution timed out after 30 seconds"
-
-    # Get result from queue
-    try:
-        success, stdout, stderr = result_queue.get_nowait()
-        if success:
-            logger.info("Test passed")
-        else:
-            logger.error(
-                "Test failed. Exit code: %s, stderr: %s", process.exitcode, stderr[:500]
-            )
-            return success, stdout, stderr
-    except mp.queues.Empty:
-        error_msg = (
-            f"Test process ended without result. Exit code: {process.exitcode}. "
+    stdout, stderr = "", ""
+    for test_file in test_files:
+        if not test_file.exists():
+            continue
+        result_queue = mp.Queue()
+        process = mp.Process(
+            target=_run_test_process,
+            args=(test_file, workdir, result_queue),
         )
-        logger.error(error_msg)
-        return False, "", error_msg
+        process.start()
+        process.join(timeout=30)
 
-    # Chain additional tests if the primary test passed
-    if success and additional_test_files:
-        for extra_file in additional_test_files:
-            if not extra_file.exists():
-                continue
-            extra_queue = mp.Queue()
-            extra_proc = mp.Process(
-                target=_run_test_process,
-                args=(extra_file, workdir, extra_queue),
-            )
-            extra_proc.start()
-            extra_proc.join(timeout=30)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            logger.error("Test %s timed out", test_file.name)
+            return False, "", f"Test {test_file.name} timed out after 30 seconds"
 
-            if extra_proc.is_alive():
-                extra_proc.terminate()
-                extra_proc.join(timeout=5)
-                if extra_proc.is_alive():
-                    extra_proc.kill()
-                    extra_proc.join()
-                logger.error("Additional test %s timed out", extra_file.name)
-                return False, "", f"Additional test {extra_file.name} timed out after 30 seconds"
-
-            try:
-                extra_ok, extra_out, extra_err = extra_queue.get_nowait()
-                if not extra_ok:
-                    logger.error("Additional test %s failed: %s", extra_file.name, extra_err[:500])
-                    return False, extra_out, extra_err
-                logger.info("Additional test %s passed", extra_file.name)
-            except mp.queues.Empty:
-                error_msg = (
-                    f"Additional test {extra_file.name} ended without result. "
-                    f"Exit code: {extra_proc.exitcode}."
+        try:
+            success, stdout, stderr = result_queue.get_nowait()
+            if not success:
+                logger.error(
+                    "Test %s failed. Exit code: %s, stderr: %s",
+                    test_file.name, process.exitcode, stderr[:500],
                 )
-                logger.error(error_msg)
-                return False, "", error_msg
+                return False, stdout, stderr
+            logger.info("Test %s passed", test_file.name)
+        except mp.queues.Empty:
+            error_msg = (
+                f"Test {test_file.name} ended without result. "
+                f"Exit code: {process.exitcode}."
+            )
+            logger.error(error_msg)
+            return False, "", error_msg
 
-    return success, stdout, stderr
+    return True, stdout, stderr

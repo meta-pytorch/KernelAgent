@@ -166,8 +166,7 @@ class VerificationWorker:
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
-        self.test_file = self.workdir / "test_kernel.py"
-        self.additional_test_files: list[Path] = []
+        self.test_files: list[Path] = []
 
         # History for LLM context
         self.history = deque(maxlen=history_size)
@@ -282,15 +281,13 @@ class VerificationWorker:
                 entries are written to ``test_extra_{i}_kernel.py``.
         """
         self.kernel_file.write_text(kernel_code)
-        self.test_file.write_text(test_code[0])
-        self.additional_test_files = []
-        for i, extra in enumerate(test_code[1:]):
-            extra_file = self.workdir / f"test_extra_{i}_kernel.py"
-            extra_file.write_text(extra)
-            self.additional_test_files.append(extra_file)
-        self.logger.info(
-            "Wrote kernel and %d test file(s)", 1 + len(self.additional_test_files)
-        )
+        self.test_files = []
+        for i, code in enumerate(test_code):
+            name = "test_kernel.py" if i == 0 else f"test_extra_{i}_kernel.py"
+            path = self.workdir / name
+            path.write_text(code)
+            self.test_files.append(path)
+        self.logger.info("Wrote kernel and %d test file(s)", len(self.test_files))
 
     def _strip_comments_and_strings(self, code: str) -> str:
         """Remove comments and docstrings to avoid false positives when scanning code."""
@@ -307,52 +304,31 @@ class VerificationWorker:
 
     def _run_test(self) -> tuple[bool, str, str]:
         """
-        Run the test script and capture results.
-
-        After the primary test passes, any additional test files in
-        ``self.additional_test_files`` are chained sequentially (``&&``
-        semantics).
+        Run all test scripts sequentially (``&&`` semantics).
 
         Returns:
             Tuple of (success, stdout, stderr)
         """
-        cmd = [sys.executable, str(self.test_file)]
-
         try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.workdir),
-                capture_output=True,
-                text=True,
-                timeout=self.test_timeout_s,
-            )
-
-            success = result.returncode == 0
-            if success:
-                self.logger.info("Test passed")
-            else:
-                self.logger.error(
-                    "Test failed. Exit code: %s, stderr: %s",
-                    result.returncode,
-                    result.stderr[:2000],
-                )
-                return False, result.stdout, result.stderr
-
-            # Chain additional tests if present
-            for extra_file in self.additional_test_files:
-                if not extra_file.exists():
+            for test_file in self.test_files:
+                if not test_file.exists():
                     continue
-                extra = subprocess.run(
-                    [sys.executable, str(extra_file)],
+                result = subprocess.run(
+                    [sys.executable, str(test_file)],
                     cwd=str(self.workdir),
                     capture_output=True,
                     text=True,
                     timeout=self.test_timeout_s,
                 )
-                if extra.returncode != 0:
-                    self.logger.error("Additional test %s failed", extra_file.name)
-                    return False, extra.stdout, extra.stderr
-                self.logger.info("Additional test %s passed", extra_file.name)
+                if result.returncode != 0:
+                    self.logger.error(
+                        "Test %s failed. Exit code: %s, stderr: %s",
+                        test_file.name,
+                        result.returncode,
+                        result.stderr[:2000],
+                    )
+                    return False, result.stdout, result.stderr
+                self.logger.info("Test %s passed", test_file.name)
 
             return True, result.stdout, result.stderr
 
@@ -601,8 +577,7 @@ class VerificationWorker:
             self._run_test()
             if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
             else _run_test_multiprocess(
-                self.logger, self.workdir, self.test_file,
-                additional_test_files=self.additional_test_files,
+                self.logger, self.workdir, self.test_files,
             )
         )
 
