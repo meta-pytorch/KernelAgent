@@ -8,8 +8,9 @@ KernelAgent turns PyTorch programs into verified Triton kernels and optimize its
 - End‑to‑end composition that rebuilds the original forward pass using only the synthesized kernels
 - Hardware‑guided optimization pipeline that iteratively improves performance
 
-Blog post: [PyTorch KernelFalcon](https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/)
+GPU Kernel Synthesis Blog post: [PyTorch KernelFalcon](https://pytorch.org/blog/kernelfalcon-autonomous-gpu-kernel-generation-via-deep-agents/)
 
+GPU Kernel Optimization Blog post: [PyTorch KernelAgent](https://pytorch.org/blog/kernelagent-hardware-guided-gpu-kernel-optimization-via-multi-agent-orchestration/)
 
 ## Kernel Generation Pipeline Overview
 
