@@ -21,6 +21,30 @@ from logging import Logger
 from pathlib import Path
 
 # ------------------------
+# Test-code helpers
+# ------------------------
+
+
+def format_test_code_for_llm(test_code: list[str]) -> str:
+    """Combine test code entries into a single string for LLM prompts.
+
+    The primary test (``test_code[0]``) is included as-is.  Any additional
+    tests are appended with a clear label so the LLM treats them as
+    reference context rather than code to reproduce.
+    """
+    if len(test_code) == 1:
+        return test_code[0]
+    parts = [test_code[0]]
+    for i, extra in enumerate(test_code[1:]):
+        parts.append(
+            f"\n\n# === ADDITIONAL VALIDATION TEST {i + 1} "
+            f"(for reference only — do NOT copy into your kernel) ===\n"
+            + extra
+        )
+    return "\n".join(parts)
+
+
+# ------------------------
 # LLM Utilities
 # ------------------------
 

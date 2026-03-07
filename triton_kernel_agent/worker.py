@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from triton_kernel_agent.platform_config import get_platform
+from triton_kernel_agent.worker_util import format_test_code_for_llm
 from utils.providers import get_model_provider
 
 from .prompt_manager import PromptManager
@@ -198,7 +199,10 @@ class VerificationWorker:
         self.logger.addHandler(handler)
 
     def _extract_code_from_response(
-        self, response_text: str, language: str = "python"
+        self,
+        response_text: str,
+        language: str = "python",
+        prefer_kernel_function: bool = False,
     ) -> str | None:
         """
         Extract code from LLM response text.
@@ -206,6 +210,11 @@ class VerificationWorker:
         Args:
             response_text: The full LLM response text
             language: The expected language (default: python)
+            prefer_kernel_function: When True and multiple code blocks are
+                found, prefer the block that defines ``kernel_function``
+                (falling back to the longest block).  Use this when the
+                prompt contains additional test code that the LLM may echo
+                back.
 
         Returns:
             Extracted code or None if no valid code block found
@@ -218,16 +227,21 @@ class VerificationWorker:
         pattern = rf"```{language}\s*\n(.*?)```"
         matches = re.findall(pattern, response_text, re.DOTALL)
 
-        if matches:
-            # Return the first match (largest code block)
-            return matches[0].strip()
-
-        # Try generic code blocks without language marker
-        pattern = r"```\s*\n(.*?)```"
-        matches = re.findall(pattern, response_text, re.DOTALL)
+        if not matches:
+            # Try generic code blocks without language marker
+            pattern = r"```\s*\n(.*?)```"
+            matches = re.findall(pattern, response_text, re.DOTALL)
 
         if matches:
-            # Return the first match
+            if prefer_kernel_function and len(matches) > 1:
+                # When additional tests are in the prompt the LLM may echo
+                # wrapper code.  Prefer the block defining kernel_function.
+                for block in matches:
+                    if re.search(r"\bdef\s+kernel_function\b", block):
+                        return block.strip()
+                # Fallback: return the longest block
+                return max(matches, key=len).strip()
+            # Default: return the first match
             return matches[0].strip()
 
         # If no code blocks found, check if the entire response looks like code
@@ -419,7 +433,10 @@ class VerificationWorker:
                 response_text = self._call_llm(messages, max_tokens=20000)
 
                 # Extract refined kernel from response
-                refined_kernel = self._extract_code_from_response(response_text)
+                refined_kernel = self._extract_code_from_response(
+                    response_text,
+                    prefer_kernel_function=getattr(self, "_has_multiple_tests", False),
+                )
 
                 if refined_kernel:
                     self.logger.info(
@@ -486,6 +503,7 @@ class VerificationWorker:
             Dictionary with results
         """
         self.logger.info(f"Starting verification for worker {self.worker_id}")
+        self._has_multiple_tests = len(test_code) > 1
 
         current_kernel = kernel_code
 
@@ -523,7 +541,7 @@ class VerificationWorker:
                     "history": list(self.history),
                 }
                 current_kernel = self._refine_kernel(
-                    current_kernel, error_info, problem_description, test_code[0]
+                    current_kernel, error_info, problem_description, format_test_code_for_llm(test_code)
                 )
                 continue
 
@@ -550,7 +568,7 @@ class VerificationWorker:
             }
 
             current_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, test_code[0]
+                current_kernel, error_info, problem_description, format_test_code_for_llm(test_code)
             )
 
         # Max rounds reached without success
@@ -616,6 +634,7 @@ class VerificationWorker:
             - error_feedback: Error message if failed, empty string if success
         """
         current_kernel = kernel_code
+        self._has_multiple_tests = len(test_code) > 1
 
         # Write files for testing (primary + additional tests)
         self._write_files(current_kernel, test_code)
@@ -652,7 +671,7 @@ class VerificationWorker:
 
             # Refine kernel
             refined_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, test_code[0]
+                current_kernel, error_info, problem_description, format_test_code_for_llm(test_code)
             )
 
             # Write and test refined kernel
