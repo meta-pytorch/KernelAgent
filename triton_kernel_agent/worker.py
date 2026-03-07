@@ -166,6 +166,7 @@ class VerificationWorker:
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
         self.test_file = self.workdir / "test_kernel.py"
+        self.additional_test_files: list[Path] = []
 
         # History for LLM context
         self.history = deque(maxlen=history_size)
@@ -252,17 +253,30 @@ class VerificationWorker:
         self.kernel_file.write_text(kernel_code)
         self.logger.info("Updated kernel file")
 
-    def _write_files(self, kernel_code: str, test_code: str):
+    def _write_files(self, kernel_code: str, test_code: list[str]):
         """Write kernel and test code to files.
 
         Note: The test code should import the kernel function from the kernel file:
             from kernel import kernel_function
 
         Both files are written to the same directory (workdir).
+
+        Args:
+            kernel_code: The kernel source code.
+            test_code: List of test code strings. ``test_code[0]`` is the
+                primary test written to ``test_kernel.py``; any subsequent
+                entries are written to ``test_extra_{i}_kernel.py``.
         """
         self.kernel_file.write_text(kernel_code)
-        self.test_file.write_text(test_code)
-        self.logger.info("Wrote kernel and test files")
+        self.test_file.write_text(test_code[0])
+        self.additional_test_files = []
+        for i, extra in enumerate(test_code[1:]):
+            extra_file = self.workdir / f"test_extra_{i}_kernel.py"
+            extra_file.write_text(extra)
+            self.additional_test_files.append(extra_file)
+        self.logger.info(
+            "Wrote kernel and %d test file(s)", 1 + len(self.additional_test_files)
+        )
 
     def _strip_comments_and_strings(self, code: str) -> str:
         """Remove comments and docstrings to avoid false positives when scanning code."""
@@ -280,6 +294,10 @@ class VerificationWorker:
     def _run_test(self) -> tuple[bool, str, str]:
         """
         Run the test script and capture results.
+
+        After the primary test passes, any additional test files in
+        ``self.additional_test_files`` are chained sequentially (``&&``
+        semantics).
 
         Returns:
             Tuple of (success, stdout, stderr)
@@ -304,8 +322,25 @@ class VerificationWorker:
                     result.returncode,
                     result.stderr[:2000],
                 )
+                return False, result.stdout, result.stderr
 
-            return success, result.stdout, result.stderr
+            # Chain additional tests if present
+            for extra_file in self.additional_test_files:
+                if not extra_file.exists():
+                    continue
+                extra = subprocess.run(
+                    [sys.executable, str(extra_file)],
+                    cwd=str(self.workdir),
+                    capture_output=True,
+                    text=True,
+                    timeout=self.test_timeout_s,
+                )
+                if extra.returncode != 0:
+                    self.logger.error("Additional test %s failed", extra_file.name)
+                    return False, extra.stdout, extra.stderr
+                self.logger.info("Additional test %s passed", extra_file.name)
+
+            return True, result.stdout, result.stderr
 
         except subprocess.TimeoutExpired:
             self.logger.error("Test timed out")
@@ -434,7 +469,7 @@ class VerificationWorker:
     def run(
         self,
         kernel_code: str,
-        test_code: str,
+        test_code: list[str],
         problem_description: str,
         success_event: mp.Event,
     ) -> dict[str, Any]:
@@ -443,7 +478,7 @@ class VerificationWorker:
 
         Args:
             kernel_code: Initial kernel implementation
-            test_code: Test code to verify kernel
+            test_code: List of test code strings (primary + additional tests)
             problem_description: Problem description for context
             success_event: Shared event to check if another worker succeeded
 
@@ -469,13 +504,13 @@ class VerificationWorker:
 
             # Write files - test only on first round, kernel every round
             if round_num == 0:
-                # First round: write both kernel and test
+                # First round: write both kernel and test(s)
                 self._write_files(current_kernel, test_code)
             else:
                 # Subsequent rounds: only update kernel, test remains unchanged
                 self._write_kernel(current_kernel)
 
-            # Run verification
+            # Run verification (additional tests chained automatically by _run_test)
             success, stdout, stderr, violation = self._single_verification_pass(
                 current_kernel
             )
@@ -488,7 +523,7 @@ class VerificationWorker:
                     "history": list(self.history),
                 }
                 current_kernel = self._refine_kernel(
-                    current_kernel, error_info, problem_description, test_code
+                    current_kernel, error_info, problem_description, test_code[0]
                 )
                 continue
 
@@ -515,7 +550,7 @@ class VerificationWorker:
             }
 
             current_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, test_code
+                current_kernel, error_info, problem_description, test_code[0]
             )
 
         # Max rounds reached without success
@@ -547,7 +582,10 @@ class VerificationWorker:
         success, stdout, stderr = (
             self._run_test()
             if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
-            else _run_test_multiprocess(self.logger, self.workdir, self.test_file)
+            else _run_test_multiprocess(
+                self.logger, self.workdir, self.test_file,
+                additional_test_files=self.additional_test_files,
+            )
         )
 
         return success, stdout, stderr, None
@@ -555,7 +593,7 @@ class VerificationWorker:
     def verify_with_refinement(
         self,
         kernel_code: str,
-        test_code: str,
+        test_code: list[str],
         problem_description: str,
         max_refine_attempts: int = 3,
     ) -> tuple[bool, str, str]:
@@ -567,7 +605,7 @@ class VerificationWorker:
 
         Args:
             kernel_code: Kernel code to verify
-            test_code: Test code for verification
+            test_code: List of test code strings (primary + additional tests)
             problem_description: Problem description for refinement context
             max_refine_attempts: Maximum refinement attempts if verification fails
 
@@ -579,10 +617,10 @@ class VerificationWorker:
         """
         current_kernel = kernel_code
 
-        # Write files for testing
+        # Write files for testing (primary + additional tests)
         self._write_files(current_kernel, test_code)
 
-        # Initial verification
+        # Initial verification (additional tests chained automatically by _run_test)
         success, stdout, stderr, violation = self._single_verification_pass(
             current_kernel
         )
@@ -614,7 +652,7 @@ class VerificationWorker:
 
             # Refine kernel
             refined_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, test_code
+                current_kernel, error_info, problem_description, test_code[0]
             )
 
             # Write and test refined kernel

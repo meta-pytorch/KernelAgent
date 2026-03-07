@@ -350,7 +350,7 @@ class OptimizationWorker:
         self,
         kernel_code: str,
         problem_file: Path,
-        test_code: str,
+        test_code: str | list[str],
         known_kernel_time: float | None = None,
         max_opt_rounds: int | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
@@ -360,7 +360,9 @@ class OptimizationWorker:
         Args:
             kernel_code: Initial kernel code to optimize
             problem_file: Path to problem file defining Model and get_inputs()
-            test_code: Test code for correctness verification
+            test_code: Test code for correctness verification. Can be a single
+                string or a list where ``[0]`` is the primary test and ``[1:]``
+                are additional tests.
             known_kernel_time: Known baseline time in ms (skip initial benchmark)
             max_opt_rounds: Maximum optimization rounds (defaults to self.max_rounds)
 
@@ -369,6 +371,10 @@ class OptimizationWorker:
         """
         if max_opt_rounds is None:
             max_opt_rounds = self.max_rounds
+
+        # Normalize test_code to list
+        if isinstance(test_code, str):
+            test_code = [test_code]
 
         self.logger.info(f"Starting optimization (worker {self.worker_id})")
 

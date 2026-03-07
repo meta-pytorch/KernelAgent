@@ -440,18 +440,24 @@ def kernel_function(*args, **kwargs):
         return kernels
 
     def generate_kernel(
-        self, problem_description: str, test_code: str | None = None
+        self,
+        problem_description: str,
+        test_code: str | None = None,
+        generate_default_test: bool = True,
     ) -> dict[str, Any]:
         """
         Generate an optimized Triton kernel for the given problem.
 
         Args:
             problem_description: Description of the kernel to generate
-            test_code: Optional test code (generated if not provided)
-                      The test code should:
+            test_code: Optional additional test code string.
+                      Each test should:
                       1. Import the kernel function: from kernel import kernel_function
                       2. Test the kernel and return True/False
                       3. Exit with code 0 on success, 1 on failure
+            generate_default_test: If True (default), auto-generate a primary
+                      test using the LLM. The generated test runs before any
+                      provided ``test_code``.
 
         Returns:
             Dictionary with results including successful kernel
@@ -460,12 +466,17 @@ def kernel_function(*args, **kwargs):
         self.logger.info("Starting kernel generation")
         self.logger.info(f"Problem: {problem_description[:100]}...")
 
-        # Use provided test code if available, otherwise generate it
-        if test_code:
-            self.logger.info("Using provided test code")
-        else:
-            test_code = self._generate_test(problem_description, None)
-            self.logger.info("Generated test code using LLM")
+        # Normalize test_code to list[str]
+        test_code_list: list[str] = []
+        if generate_default_test:
+            generated = self._generate_test(problem_description, None)
+            self.logger.info("Generated default test code using LLM")
+            test_code_list.append(generated)
+        if test_code is not None:
+            self.logger.info("Appending provided test code")
+            test_code_list.append(test_code)
+        if not test_code_list:
+            raise ValueError("No test code: provide test_code or set generate_default_test=True")
 
         # Log inputs
         import time
@@ -481,10 +492,12 @@ def kernel_function(*args, **kwargs):
         with open(session_dir / "problem.txt", "w") as f:
             f.write(problem_description)
         with open(session_dir / "test.py", "w") as f:
-            f.write(test_code)
+            f.write(test_code_list[0])
 
-        # Generate kernel seeds
-        kernel_seeds = self._generate_kernel_seeds(problem_description, test_code)
+        # Generate kernel seeds (uses primary test for context)
+        kernel_seeds = self._generate_kernel_seeds(
+            problem_description, test_code_list[0]
+        )
 
         # Save seeds
         for i, kernel in enumerate(kernel_seeds):
@@ -494,7 +507,7 @@ def kernel_function(*args, **kwargs):
         # Run parallel verification with session directory for worker logs
         result = self.manager.run_verification(
             kernel_seeds=kernel_seeds,
-            test_code=test_code,
+            test_code=test_code_list,
             problem_description=problem_description,
             session_log_dir=session_dir,
         )
