@@ -29,30 +29,22 @@ from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestr
 
 
 class GenerateReflexion(State):
-    """Generate a reflexion for the current optimization attempt.
+    """Generate a reflexion for a successful optimization attempt.
 
-    Handles both successful attempts (with full metrics) and failed attempts.
-    Populates attempt_history and reflexions on the context.
+    Only entered on the success path (after benchmarking + SOL profiling).
+    Completes the attempt with benchmark results, records it in history,
+    and generates an LLM reflexion.
 
     Transitions:
-        from success path -> UpdateKernels
-        from failure path -> WorkerFinalize
+        always -> UpdateKernels
     """
 
     def execute(self, ctx: WorkerContext) -> str:
         attempt = ctx.current_attempt
         if attempt is None:
-            return "WorkerFinalize"
+            return "UpdateKernels"
 
-        # Determine if this came from the success path (has new_time) or failure path
-        is_success_path = (
-            attempt.passed_verification
-            and ctx.new_time != float("inf")
-            and ctx.optimized_kernel is not None
-        )
-
-        if is_success_path:
-            self._complete_successful_attempt(ctx, attempt)
+        self._complete_successful_attempt(ctx, attempt)
 
         # Add attempt to history
         ctx.attempt_history.append(attempt)
@@ -62,9 +54,7 @@ class GenerateReflexion(State):
         if reflexion:
             ctx.reflexions.append(reflexion)
 
-        if is_success_path:
-            return "UpdateKernels"
-        return "WorkerFinalize"
+        return "UpdateKernels"
 
     def _complete_successful_attempt(
         self, ctx: WorkerContext, attempt: OptimizationAttempt
@@ -103,28 +93,7 @@ class GenerateReflexion(State):
     def _generate_reflexion(
         self, ctx: WorkerContext, attempt: OptimizationAttempt
     ) -> Reflexion | None:
-        """Generate reflexion, mirroring OptimizationOrchestrator._generate_reflexion."""
-        if not attempt.passed_verification:
-            return Reflexion(
-                round_num=attempt.round_num,
-                root_cause_diagnosed=attempt.root_cause,
-                fix_applied=attempt.recommended_fix,
-                expected_outcome="Improve performance",
-                actual_outcome="Failed verification",
-                performance_delta_pct=0.0,
-                was_diagnosis_correct=False,
-                was_fix_effective=False,
-                reasoning=(
-                    f"Attempt failed verification: "
-                    f"{attempt.error_message[:200] if attempt.error_message else 'Unknown error'}"
-                ),
-                lessons=["Ensure generated code passes correctness checks"],
-                avoid_patterns=[
-                    f"Similar approach to round {attempt.round_num} that failed verification"
-                ],
-                try_patterns=[],
-            )
-
+        """Generate reflexion via LLM for a successful attempt."""
         try:
             reflexion_prompt = ctx.prompt_manager.render_reflexion_prompt(attempt)
             messages = [{"role": "user", "content": reflexion_prompt}]

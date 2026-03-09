@@ -24,8 +24,9 @@ class CheckPatterns(State):
     """Scan optimized kernel for disallowed PyTorch patterns.
 
     Transitions:
-        violation -> RecordFailure
-        clean     -> RunTests
+        violation (first pass)      -> RecordFailure
+        violation (refinement pass) -> CheckAttempts  (consumes one attempt, matches original)
+        clean                       -> RunTests
     """
 
     def execute(self, ctx: WorkerContext) -> str:
@@ -37,6 +38,12 @@ class CheckPatterns(State):
             ctx.logger.error(f"[{ctx.round_num}] {message}")
             ctx.violation_message = message
             ctx.error_feedback = message
+
+            # During refinement, a violation just wastes one attempt and
+            # loops back (matching verify_with_refinement's `continue`).
+            if ctx.refinement_attempts > 0:
+                return "CheckAttempts"
+
             return "RecordFailure"
 
         ctx.violation_message = None

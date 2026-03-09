@@ -21,17 +21,19 @@ from triton_kernel_agent.opt_fsm.worker.context import WorkerContext
 
 
 class RecordFailure(State):
-    """Record a failed optimization attempt.
+    """Record a failed verification attempt.
 
-    Sets the current_attempt's error fields so GenerateReflexion can process it.
+    Records the attempt in history (no reflexion generated, matching the
+    original OptimizationOrchestrator behavior).
 
     Transitions:
-        always -> GenerateReflexion
+        always -> WorkerFinalize
     """
 
     def execute(self, ctx: WorkerContext) -> str:
         if ctx.current_attempt is not None:
             ctx.current_attempt.passed_verification = False
             ctx.current_attempt.error_message = ctx.error_feedback
+            ctx.attempt_history.append(ctx.current_attempt)
 
-        return "GenerateReflexion"
+        return "WorkerFinalize"

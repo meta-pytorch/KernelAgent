@@ -62,19 +62,22 @@ VerifyInitialKernel ──pass──→ BenchmarkBaselines → SelectCandidates
 ```
 BenchmarkBaseline → ProfileKernel → AnalyzeBottleneck → GenerateKernel
                                          │                   │
-                                      no data             fail
+                                      no data             fail (no attempt recorded)
                                          ↓                   ↓
-                                   WorkerFinalize      RecordFailure → GenerateReflexion → WorkerFinalize
-                                                             ↑
+                                   WorkerFinalize        WorkerFinalize
+
 GenerateKernel ──ok──→ CheckPatterns ──clean──→ RunTests ──fail──→ CheckAttempts
                            │                      │                    │        │
-                        violation                pass              remaining  exhausted
-                           ↓                      ↓                    ↓        ↓
-                      RecordFailure         BenchmarkNew        RefineKernel  RecordFailure
-                                                 ↓                    ↓
-                                            ProfileSol        CheckPatterns (loop)
-                                                 ↓
-                                         GenerateReflexion
+                     violation (1st)             pass              remaining  exhausted
+                           │                      ↓                    ↓        ↓
+                           │               BenchmarkNew        RefineKernel  RecordFailure
+                           │                     ↓                    ↓            ↓
+                     violation (refine)     ProfileSol        CheckPatterns   WorkerFinalize
+                           │                     ↓              (loop)
+                           │             GenerateReflexion
+                           │
+                     ┌─ 1st pass ──→ RecordFailure → WorkerFinalize
+                     └─ refinement ─→ CheckAttempts  (consumes one attempt)
                                                  ↓
                                           UpdateKernels
                                             │         │
@@ -84,3 +87,10 @@ GenerateKernel ──ok──→ CheckPatterns ──clean──→ RunTests ─
                                             ↓
                                       WorkerFinalize
 ```
+
+**Key: only the success path generates reflexions.** Generation failures go straight to
+`WorkerFinalize` (no attempt recorded). Verification failures go through `RecordFailure`
+(attempt recorded, no reflexion) then to `WorkerFinalize`. Pattern violations during
+refinement route to `CheckAttempts` (consuming one attempt) rather than aborting, matching
+the original `verify_with_refinement` behavior where violations `continue` to the next
+attempt.
