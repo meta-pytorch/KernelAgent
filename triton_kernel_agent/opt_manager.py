@@ -356,7 +356,11 @@ class OptimizationManager:
 
             # 2. Spawn workers
             results = self._run_workers(
-                candidates, round_num, problem_file, test_code, pytorch_baseline,
+                candidates,
+                round_num,
+                problem_file,
+                test_code,
+                pytorch_baseline,
             )
 
             # 3. Update strategy with results

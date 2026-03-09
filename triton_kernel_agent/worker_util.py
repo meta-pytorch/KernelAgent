@@ -38,8 +38,7 @@ def format_test_code_for_llm(test_code: list[str]) -> str:
     for i, extra in enumerate(test_code[1:]):
         parts.append(
             f"\n\n# === ADDITIONAL VALIDATION TEST {i + 1} "
-            f"(for reference only — do NOT copy into your kernel) ===\n"
-            + extra
+            f"(for reference only — do NOT copy into your kernel) ===\n" + extra
         )
     return "\n".join(parts)
 
@@ -253,7 +252,9 @@ def _run_test_multiprocess(
             if not success:
                 logger.error(
                     "Test %s failed. Exit code: %s, stderr: %s",
-                    test_file.name, process.exitcode, stderr[:500],
+                    test_file.name,
+                    process.exitcode,
+                    stderr[:500],
                 )
                 return False, stdout, stderr
             logger.info("Test %s passed", test_file.name)

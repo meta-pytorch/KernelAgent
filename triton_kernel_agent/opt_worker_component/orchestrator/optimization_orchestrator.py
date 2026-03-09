@@ -479,7 +479,10 @@ class OptimizationOrchestrator:
 
             # Verify and refine
             success, optimized_kernel, verify_error = self._verify_and_refine(
-                optimized_kernel, test_code, problem_description, round_num,
+                optimized_kernel,
+                test_code,
+                problem_description,
+                round_num,
             )
             if not success:
                 error_feedback = (

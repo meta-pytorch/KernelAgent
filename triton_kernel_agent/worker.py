@@ -517,7 +517,10 @@ class VerificationWorker:
                     "history": list(self.history),
                 }
                 current_kernel = self._refine_kernel(
-                    current_kernel, error_info, problem_description, format_test_code_for_llm(test_code)
+                    current_kernel,
+                    error_info,
+                    problem_description,
+                    format_test_code_for_llm(test_code),
                 )
                 continue
 
@@ -544,7 +547,10 @@ class VerificationWorker:
             }
 
             current_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, format_test_code_for_llm(test_code)
+                current_kernel,
+                error_info,
+                problem_description,
+                format_test_code_for_llm(test_code),
             )
 
         # Max rounds reached without success
@@ -577,7 +583,9 @@ class VerificationWorker:
             self._run_test()
             if os.getenv("KA_PROCESS_USE_SYS_EXECUTABLE", "1") == "1"
             else _run_test_multiprocess(
-                self.logger, self.workdir, self.test_files,
+                self.logger,
+                self.workdir,
+                self.test_files,
             )
         )
 
@@ -646,7 +654,10 @@ class VerificationWorker:
 
             # Refine kernel
             refined_kernel = self._refine_kernel(
-                current_kernel, error_info, problem_description, format_test_code_for_llm(test_code)
+                current_kernel,
+                error_info,
+                problem_description,
+                format_test_code_for_llm(test_code),
             )
 
             # Write and test refined kernel

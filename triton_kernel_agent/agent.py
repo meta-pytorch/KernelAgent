@@ -496,7 +496,9 @@ def kernel_function(*args, **kwargs):
             self.logger.info("Appending provided test code")
             test_code_list.append(test_code)
         if not test_code_list:
-            raise ValueError("No test code: provide test_code or set generate_default_test=True")
+            raise ValueError(
+                "No test code: provide test_code or set generate_default_test=True"
+            )
         self._has_multiple_tests = len(test_code_list) > 1
 
         # Log inputs
