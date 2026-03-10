@@ -119,6 +119,9 @@ class OptimizationManager:
         self.bottleneck_override = bottleneck_override
         self.worker_kwargs = worker_kwargs
 
+        # Store template overrides (also stays in worker_kwargs for forwarding)
+        self.templates_config = worker_kwargs.get("templates")
+
         # Setup logging
         self.logger = self._setup_logging()
 

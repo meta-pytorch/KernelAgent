@@ -34,6 +34,7 @@ from triton_kernel_agent.platform.interfaces import (
     KernelVerifier,
     RAGPrescriberBase,
     RooflineAnalyzerBase,
+    RooflineResult,
     WorkerRunner,
 )
 
@@ -176,16 +177,8 @@ class NoOpProfiler(KernelProfilerBase):
 class NoOpRooflineAnalyzer(RooflineAnalyzerBase):
     """Reports zero efficiency and always signals stop."""
 
-    def analyze(self, ncu_metrics: dict[str, Any]) -> Any:
-        return {
-            "efficiency_pct": 0.0,
-            "compute_sol_pct": 0.0,
-            "memory_sol_pct": 0.0,
-            "bottleneck": "unknown",
-            "at_roofline": False,
-            "headroom_pct": 100.0,
-            "uses_tensor_cores": False,
-        }
+    def analyze(self, ncu_metrics: dict[str, Any]) -> RooflineResult:
+        return RooflineResult()
 
     def should_stop(self, result: Any) -> tuple[bool, str]:
         return True, "noop roofline — always stop"

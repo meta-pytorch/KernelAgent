@@ -44,6 +44,7 @@ from triton_kernel_agent.platform.interfaces import (
     KernelVerifier,
     RAGPrescriberBase,
     RooflineAnalyzerBase,
+    RooflineResult,
     WorkerRunner,
 )
 from triton_kernel_agent.platform.nvidia import (
@@ -77,6 +78,7 @@ __all__ = [
     "AcceleratorSpecsProvider",
     "KernelProfilerBase",
     "RooflineAnalyzerBase",
+    "RooflineResult",
     "BottleneckAnalyzerBase",
     "RAGPrescriberBase",
     # NVIDIA implementations (manager)

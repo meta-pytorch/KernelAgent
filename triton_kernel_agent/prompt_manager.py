@@ -37,10 +37,14 @@ class PromptManager:
     for test generation, kernel generation, and kernel refinement.
     """
 
+    # Templates that can be overridden via config
+    _OVERRIDABLE = {"kernel_optimization", "reflexion_prompt", "triton_guidelines"}
+
     def __init__(
         self,
         templates_dir: str | None = None,
         target_platform: PlatformConfig | None = None,
+        template_overrides: dict[str, str] | None = None,
     ):
         """
         Initialize the prompt manager.
@@ -48,6 +52,10 @@ class PromptManager:
         Args:
             templates_dir: Path to the templates directory. If None, uses default.
             target_platform: Target platform PlatformConfig
+            template_overrides: Optional dict mapping logical template names to
+                absolute file paths for custom .j2 files.  Only the optimization
+                templates (kernel_optimization, reflexion_prompt, triton_guidelines)
+                can be overridden; other keys are ignored.
         """
         if not JINJA2_AVAILABLE:
             raise ImportError(
@@ -63,6 +71,8 @@ class PromptManager:
         else:
             # Default to bundled templates directory within the package
             self.templates_dir = Path(__file__).parent / "templates"
+
+        self._template_overrides = template_overrides
 
         if not self.templates_dir.exists():
             raise FileNotFoundError(
@@ -80,7 +90,13 @@ class PromptManager:
         self._load_templates()
 
     def _load_templates(self):
-        """Load all available templates."""
+        """Load all available templates.
+
+        For the three optimization-related templates (kernel_optimization,
+        reflexion_prompt, triton_guidelines), an override path supplied via
+        ``template_overrides`` takes precedence over the bundled default.
+        Non-optimization templates are always loaded from ``templates_dir``.
+        """
         self.templates = {}
 
         # Define template mappings (required templates)
@@ -99,17 +115,33 @@ class PromptManager:
 
         # Load required templates
         for template_name, template_file in template_files.items():
-            template_path = self.templates_dir / template_file
-            if template_path.exists():
-                self.templates[template_name] = self.env.get_template(template_file)
+            override_path = (self._template_overrides or {}).get(template_name)
+            if override_path and template_name in self._OVERRIDABLE:
+                # Load from absolute path
+                p = Path(override_path)
+                if not p.exists():
+                    raise FileNotFoundError(f"Template override not found: {p}")
+                self.templates[template_name] = self.env.from_string(p.read_text())
             else:
-                raise FileNotFoundError(f"Template file not found: {template_path}")
+                # Default: load from templates_dir
+                template_path = self.templates_dir / template_file
+                if template_path.exists():
+                    self.templates[template_name] = self.env.get_template(template_file)
+                else:
+                    raise FileNotFoundError(f"Template file not found: {template_path}")
 
         # Load optional templates
         for template_name, template_file in optional_template_files.items():
-            template_path = self.templates_dir / template_file
-            if template_path.exists():
-                self.templates[template_name] = self.env.get_template(template_file)
+            override_path = (self._template_overrides or {}).get(template_name)
+            if override_path and template_name in self._OVERRIDABLE:
+                p = Path(override_path)
+                if not p.exists():
+                    raise FileNotFoundError(f"Template override not found: {p}")
+                self.templates[template_name] = self.env.from_string(p.read_text())
+            else:
+                template_path = self.templates_dir / template_file
+                if template_path.exists():
+                    self.templates[template_name] = self.env.get_template(template_file)
 
     def render_test_generation_prompt(
         self, problem_description: str, provided_test_code: str | None = None

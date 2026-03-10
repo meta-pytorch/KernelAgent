@@ -40,6 +40,16 @@ AVAILABLE_MODELS = [
     ),
     # Anthropic Claude 4 Models (Latest)
     ModelConfig(
+        name="claude-opus-4-6",
+        provider_classes=[AnthropicProvider],
+        description="Claude 4.6 Opus - most intelligent (Released Feb 2026)",
+    ),
+    ModelConfig(
+        name="claude-sonnet-4-6",
+        provider_classes=[AnthropicProvider],
+        description="Claude 4.6 Sonnet - fast and powerful (Released Feb 2026)",
+    ),
+    ModelConfig(
         name="claude-opus-4-1-20250805",
         provider_classes=[AnthropicProvider],
         description="Claude 4.1 Opus - most capable (Released Aug 2025)",
