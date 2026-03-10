@@ -287,8 +287,7 @@ class OptimizationManager:
             initial_kernel: Starting kernel code
             problem_file: Path to problem.py defining Model and get_inputs()
             test_code: Test code for correctness verification. Can be a single
-                string or a list where ``[0]`` is the primary test and ``[1:]``
-                are additional tests chained sequentially.
+                string or a list.
             max_rounds: Override max_rounds (optional)
             **kwargs: Additional kwargs (reserved for future use)
 

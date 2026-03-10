@@ -514,8 +514,9 @@ def kernel_function(*args, **kwargs):
 
         with open(session_dir / "problem.txt", "w") as f:
             f.write(problem_description)
-        with open(session_dir / "test.py", "w") as f:
-            f.write(test_code_list[0])
+        for i, test_code in enumerate(test_code_list):
+            with open(session_dir / f"test_{i}.py", "w") as f:
+                f.write(test_code)
 
         # Generate kernel seeds (all tests as LLM context, with labels)
         kernel_seeds = self._generate_kernel_seeds(
