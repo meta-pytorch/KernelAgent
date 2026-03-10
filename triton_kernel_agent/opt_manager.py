@@ -280,7 +280,7 @@ class OptimizationManager:
         self,
         initial_kernel: str,
         problem_file: Path | str,
-        test_code: str,
+        test_code: str | list[str],
         max_rounds: int | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -289,7 +289,8 @@ class OptimizationManager:
         Args:
             initial_kernel: Starting kernel code
             problem_file: Path to problem.py defining Model and get_inputs()
-            test_code: Test code for correctness verification
+            test_code: Test code for correctness verification. Can be a single
+                string or a list.
             max_rounds: Override max_rounds (optional)
             **kwargs: Additional kwargs (reserved for future use)
 
@@ -303,6 +304,10 @@ class OptimizationManager:
         """
         max_rounds = max_rounds or self.max_rounds
         problem_file = Path(problem_file)
+
+        # Normalize test_code to list
+        if isinstance(test_code, str):
+            test_code = [test_code]
 
         self.logger.info("=" * 80)
         self.logger.info("STARTING OPTIMIZATION")
@@ -353,7 +358,11 @@ class OptimizationManager:
 
             # 2. Spawn workers
             results = self._run_workers(
-                candidates, round_num, problem_file, test_code, pytorch_baseline
+                candidates,
+                round_num,
+                problem_file,
+                test_code,
+                pytorch_baseline,
             )
 
             # 3. Update strategy with results
@@ -422,7 +431,7 @@ class OptimizationManager:
         self,
         initial_kernel: str,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
     ) -> bool:
         """Verify the initial kernel passes correctness before optimization."""
         return self.verifier.verify(initial_kernel, problem_file, test_code)
@@ -442,7 +451,7 @@ class OptimizationManager:
         candidates: list[dict[str, Any]],
         round_num: int,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
         pytorch_baseline: float,
     ) -> list[dict[str, Any]]:
         """Spawn workers for each candidate and collect results."""

@@ -350,6 +350,7 @@ class AutoKernelRouter:
         use_router_cache: bool = True,
         no_cusolver: bool = False,
         test_timeout_s: int = 30,
+        test_code: str | None = None,
     ) -> None:
         self.ka_model = ka_model
         self.ka_num_workers = ka_num_workers
@@ -376,8 +377,11 @@ class AutoKernelRouter:
         self.use_router_cache = use_router_cache
         self.no_cusolver = no_cusolver
         self.test_timeout_s = test_timeout_s
+        self.test_code = test_code
 
-    def _solve_with_kernelagent(self, problem_code: str) -> RouteResult:
+    def _solve_with_kernelagent(
+        self, problem_code: str, test_code: str | None = None
+    ) -> RouteResult:
         agent = TritonKernelAgent(
             num_workers=self.ka_num_workers,
             max_rounds=self.ka_max_rounds,
@@ -391,7 +395,7 @@ class AutoKernelRouter:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
             try:
                 res = agent.generate_kernel(
-                    problem_description=problem_code, test_code=None
+                    problem_description=problem_code, test_code=test_code
                 )
             except BaseException as exc:
                 return RouteResult(
@@ -480,8 +484,10 @@ class AutoKernelRouter:
             details=res,
         )
 
-    def solve(self, problem_path: Path) -> RouteResult:
+    def solve(self, problem_path: Path, test_code: str | None = None) -> RouteResult:
         code = problem_path.read_text(encoding="utf-8")
+        # Use explicitly-passed test_code, falling back to the instance default
+        test_code = test_code if test_code is not None else self.test_code
         cx = analyze_problem_code(code)
 
         # Default heuristic-only decision used STRICTLY as a last-resort tie-breaker
@@ -563,7 +569,7 @@ class AutoKernelRouter:
 
         # Execute per strategy with symmetric fallback governed by allow_fallback
         if strategy == "kernelagent":
-            ka_res = self._solve_with_kernelagent(code)
+            ka_res = self._solve_with_kernelagent(code, test_code=test_code)
             if ka_res.success or not self.allow_fallback:
                 return ka_res
             return self._solve_with_fuser(problem_path)
@@ -571,9 +577,9 @@ class AutoKernelRouter:
             fuser_res = self._solve_with_fuser(problem_path)
             if fuser_res.success or not self.allow_fallback:
                 return fuser_res
-            return self._solve_with_kernelagent(code)
+            return self._solve_with_kernelagent(code, test_code=test_code)
         elif strategy == "kernel_then_fuser":
-            ka_res = self._solve_with_kernelagent(code)
+            ka_res = self._solve_with_kernelagent(code, test_code=test_code)
             if ka_res.success or not self.allow_fallback:
                 return ka_res
             return self._solve_with_fuser(problem_path)
@@ -581,7 +587,7 @@ class AutoKernelRouter:
             fuser_res = self._solve_with_fuser(problem_path)
             if fuser_res.success or not self.allow_fallback:
                 return fuser_res
-            return self._solve_with_kernelagent(code)
+            return self._solve_with_kernelagent(code, test_code=test_code)
 
     # -------- LLM decision helper --------
     def _llm_decide_route(
@@ -715,6 +721,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--problem", required=True, help="Absolute path to the problem file")
     p.add_argument(
+        "--test-paths",
+        default=None,
+        help="Path to an additional test file for the kernel agent",
+    )
+    p.add_argument(
         "--config",
         default=None,
         help="Path to AutoAgentRouter config file. When provided, all other CLI args are ignored.",
@@ -774,12 +785,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"problem not found: {problem_path}", file=sys.stderr)
         return 2
 
+    # Read test code from --test-paths if provided
+    test_code: str | None = None
+    if args.test_paths:
+        tp_path = Path(args.test_paths).resolve()
+        if not tp_path.is_file():
+            print(f"test file not found: {tp_path}", file=sys.stderr)
+            return 2
+        test_code = tp_path.read_text(encoding="utf-8")
+
     if args.config is not None:
         print(
             f"Using config file: {args.config} (other CLI args are ignored)",
             file=sys.stderr,
         )
-        router = AutoKernelRouter(config=args.config)
+        router = AutoKernelRouter(config=args.config, test_code=test_code)
     else:
         router = AutoKernelRouter(
             ka_model=args.ka_model,
@@ -806,6 +826,7 @@ def main(argv: list[str] | None = None) -> int:
             use_router_cache=(not args.no_router_cache),
             no_cusolver=args.no_cusolver,
             test_timeout_s=args.run_timeout_s,
+            test_code=test_code,
         )
 
     try:

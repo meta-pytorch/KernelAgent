@@ -56,7 +56,7 @@ class NoOpVerifier(KernelVerifier):
         self,
         kernel_code: str,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
     ) -> bool:
         logger.info("[noop] Skipping verification — returning True")
         return True
@@ -112,7 +112,7 @@ class NoOpWorkerRunner(WorkerRunner):
         candidates: list[dict[str, Any]],
         round_num: int,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
         pytorch_baseline: float,
         shared_history: list[dict],
         shared_reflexions: list[dict],

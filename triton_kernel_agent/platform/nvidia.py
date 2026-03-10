@@ -57,7 +57,7 @@ class NvidiaVerifier(KernelVerifier):
         self,
         kernel_code: str,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
     ) -> bool:
         from triton_kernel_agent.worker import VerificationWorker
 
@@ -207,7 +207,7 @@ class NvidiaWorkerRunner(WorkerRunner):
         candidates: list[dict[str, Any]],
         round_num: int,
         problem_file: Path,
-        test_code: str,
+        test_code: list[str],
         pytorch_baseline: float,
         shared_history: list[dict],
         shared_reflexions: list[dict],
@@ -293,7 +293,7 @@ def _nvidia_worker_process(
     known_time: float,
     parent_id: str,
     problem_file: Path,
-    test_code: str,
+    test_code: list[str],
     workdir: Path,
     log_dir: Path,
     result_queue: mp.Queue,
