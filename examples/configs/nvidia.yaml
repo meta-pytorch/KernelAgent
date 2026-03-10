@@ -35,3 +35,8 @@ platform:
   roofline_analyzer: nvidia
   bottleneck_analyzer: nvidia
   rag_prescriber: nvidia
+
+templates:
+  kernel_optimization: triton_kernel_agent/templates/kernel_optimization.j2
+  reflexion_prompt: triton_kernel_agent/templates/reflexion_prompt.j2
+  triton_guidelines: triton_kernel_agent/templates/triton_guidelines.j2
