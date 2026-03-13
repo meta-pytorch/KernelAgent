@@ -234,6 +234,13 @@ class ROCmKernelProfiler:
 
             except Exception as e:
                 is_final = attempt >= max_retries
+                err_str = str(e)
+                if "signal" in err_str.lower() or "segfault" in err_str.lower() or "sigsegv" in err_str.lower():
+                    self.logger.error(
+                        f"❌ rocprof crashed with segfault (likely ROCm/PyTorch version mismatch). "
+                        f"Profiling unavailable — optimization will use timing-only fallback."
+                    )
+                    return None
                 if is_final:
                     self.logger.error(
                         f"❌ Unexpected error during profiling (final attempt): {e}",

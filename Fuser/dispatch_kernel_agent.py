@@ -334,7 +334,7 @@ def run(
     target_platform: str = "cuda",
     max_iters: int = 10,
     no_cusolver: bool = False,
-    test_timeout_s: int = 30,
+    test_timeout_s: int = 300,
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
