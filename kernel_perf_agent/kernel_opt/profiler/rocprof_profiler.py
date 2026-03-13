@@ -239,13 +239,14 @@ def _run_rocprof_stats(
     timeout: int,
 ) -> None:
     """Run rocprof --stats to collect kernel timing."""
-    cmd = [
-        rocprof_bin,
-        "--stats",
-        "-o", str(out_csv),
-        python_executable,
-        str(benchmark_script),
-    ]
+    # rocprofv3 requires --kernel-trace for --stats to work
+    is_v3 = "rocprofv3" in rocprof_bin
+    cmd = [rocprof_bin]
+    if is_v3:
+        cmd.extend(["--kernel-trace", "--stats", "-o", str(out_csv)])
+    else:
+        cmd.extend(["--stats", "-o", str(out_csv)])
+    cmd.extend(["--", python_executable, str(benchmark_script)])
     print(f"[rocprof] Running stats: {' '.join(cmd[:6])}...")
     result = subprocess.run(
         cmd,
@@ -274,10 +275,12 @@ def _run_rocprof_pmc(
     timeout: int,
 ) -> None:
     """Run rocprof -i <input_file> to collect PMC counters."""
+    # rocprofv3 uses --pmc or -i for counter collection
     cmd = [
         rocprof_bin,
         "-i", str(input_file),
         "-o", str(out_csv),
+        "--",
         python_executable,
         str(benchmark_script),
     ]

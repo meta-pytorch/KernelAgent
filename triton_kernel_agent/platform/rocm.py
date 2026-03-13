@@ -375,6 +375,7 @@ def _rocm_worker_process(
 
         shutil.copy(problem_file, workdir / "problem.py")
 
+        worker_kwargs.pop("target_platform", None)
         worker = OptimizationWorker(
             worker_id=worker_id,
             workdir=workdir,

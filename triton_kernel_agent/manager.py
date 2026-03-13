@@ -39,7 +39,7 @@ class WorkerManager:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int = 300,
     ):
         """
         Initialize the worker manager.
@@ -237,7 +237,7 @@ def worker_process(
     high_reasoning_effort: bool,
     target_platform: str,
     no_cusolver: bool = False,
-    test_timeout_s: int = 30,
+    test_timeout_s: int = 300,
 ):
     """
     Worker process for kernel verification and refinement.

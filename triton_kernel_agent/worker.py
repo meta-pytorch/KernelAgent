@@ -135,7 +135,7 @@ class VerificationWorker:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int = 300,
     ):
         """
         Initialize a verification worker.

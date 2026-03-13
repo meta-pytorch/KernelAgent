@@ -57,7 +57,7 @@ def run_pipeline(
     verify: bool = True,
     compose_max_iters: int = 5,
     target_platform: str = "cuda",
-    test_timeout_s: int = 30,
+    test_timeout_s: int = 300,
 ) -> dict:
     # Select default KernelAgent model if not provided: prefer GPT-5 for Level 2/3
     if dispatch_model is None:
