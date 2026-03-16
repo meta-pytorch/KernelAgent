@@ -18,7 +18,7 @@ These tests are written to be safe on CPU-only CI:
 - Oink itself is not installed as part of `pip install -e .`, so we import it
   by adding `./oink/src` to sys.path.
 - GPU / CuTeDSL correctness tests are skipped unless the environment is
-  properly configured (SM100 + torch + cuda-python + nvidia-cutlass-dsl).
+  properly configured (SM10x + torch + cuda-python + nvidia-cutlass-dsl).
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def test_oink_env_helpers(monkeypatch: pytest.MonkeyPatch):
     reason="torch not installed (CPU-only CI)",
 )
 def test_oink_rmsnorm_sm100_correctness():
-    """Optional correctness check (skips unless SM100 + deps are available)."""
+    """Optional correctness check (skips unless Blackwell SM10x + deps are available)."""
     import torch
 
     # Some environments may have a partial/namespace `torch` installed without
@@ -81,7 +81,7 @@ def test_oink_rmsnorm_sm100_correctness():
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
     if torch.cuda.get_device_capability() < (10, 0):
-        pytest.skip("requires SM100 / Blackwell")
+        pytest.skip("requires Blackwell / SM10x")
 
     # Optional deps required by the CuTeDSL path.
     if importlib.util.find_spec("cutlass") is None:
