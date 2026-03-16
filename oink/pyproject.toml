@@ -21,11 +21,6 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-[project.urls]
-Repository = "https://github.com/meta-pytorch/KernelAgent"
-Documentation = "https://github.com/meta-pytorch/KernelAgent/tree/main/oink"
-Issues = "https://github.com/meta-pytorch/KernelAgent/issues"
-
 # Keep dependencies minimal, but include the CuTeDSL stack required by the
 # Blackwell RMSNorm implementation.
 #
@@ -35,6 +30,11 @@ dependencies = [
   "nvidia-cutlass-dsl>=4.2.1",
   "cuda-python",
 ]
+
+[project.urls]
+Repository = "https://github.com/meta-pytorch/KernelAgent"
+Documentation = "https://github.com/meta-pytorch/KernelAgent/tree/main/oink"
+Issues = "https://github.com/meta-pytorch/KernelAgent/issues"
 
 [project.optional-dependencies]
 # Optional extras for running the in-repo benchmark suite (not needed for vLLM integration).

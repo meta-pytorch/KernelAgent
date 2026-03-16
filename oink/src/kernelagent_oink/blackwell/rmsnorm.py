@@ -1487,6 +1487,12 @@ class RMSNormSM100:
 
         N = self.N
 
+        # Q/K norm hot shape on Blackwell: head_dim=128.  A wider CTA than the
+        # legacy one-warp-per-row default reduces launch amortization and
+        # improves throughput on GB300 for both prefill- and decode-like shapes.
+        if N == 128 and self.dtype.width == 16:
+            return 16
+
         # DSv3 MLA (padded/strided) hot shape. Prefer a threads-per-row that
         # makes the tile width exactly match N with 128b vectors (bf16/fp16),
         # avoiding the ~33% padded work from rounding 1536 -> 2048.
@@ -1560,6 +1566,8 @@ class RMSNormSM100:
         nt = getattr(self, "_nt_override", None)
         if nt is not None:
             return int(nt)
+        if self.N == 128 and self.dtype.width == 16:
+            return 128
         if self.N == 1536 and self.dtype.width == 16:
             return 96
         if self.N == 7168 and self.dtype.width == 16:
@@ -2832,7 +2840,7 @@ def _rmsnorm_forward_ptr_into(
         # - Prefer direct-GMEM for SM100-friendly hidden sizes to reduce SMEM/barrier
         #   overhead, especially for small/medium-M cases.
         direct_gmem = _direct_gmem_from_policy(
-            default=bool(dtype.width == 16 and N in {4096, 6144, 7168, 8192})
+            default=bool(dtype.width == 16 and N in {128, 4096, 6144, 7168, 8192})
         )
         use_async = not direct_gmem
 
@@ -2843,6 +2851,8 @@ def _rmsnorm_forward_ptr_into(
             and (not has_weight or (weight.data_ptr() % 32) == 0)  # type: ignore[union-attr]
         )
         default_copy_bits = 256 if can_use_256 else 128
+        if dtype.width == 16 and N == 128:
+            default_copy_bits = 128
         # Quack-style fp32-weight policy: cap the *widest* dtype to 128b, so when
         # weights are fp32 we use 64b activation vectors (helps register pressure).
         if dtype.width == 16 and weight_dtype is not None and weight_dtype.width == 32:
@@ -2993,7 +3003,7 @@ def _rmsnorm_forward_ptr_into(
     # features (bias/residual/rstd) don't accidentally fall off a performance cliff.
     weight_dtype = TORCH2CUTE_DTYPE[weight.dtype] if weight is not None else None
     direct_gmem = _direct_gmem_from_policy(
-        default=bool(dtype.width == 16 and N in {4096, 6144, 7168, 8192})
+        default=bool(dtype.width == 16 and N in {128, 4096, 6144, 7168, 8192})
     )
     use_async = not direct_gmem
     can_use_256 = bool(
@@ -3006,6 +3016,8 @@ def _rmsnorm_forward_ptr_into(
         and (residual_out is None or (residual_out.data_ptr() % 32) == 0)
     )
     default_copy_bits = 256 if can_use_256 else 128
+    if dtype.width == 16 and N == 128:
+        default_copy_bits = 128
     if dtype.width == 16 and weight_dtype is not None and weight_dtype.width == 32:
         default_copy_bits = 64
     copy_bits = _copy_bits_from_policy(
