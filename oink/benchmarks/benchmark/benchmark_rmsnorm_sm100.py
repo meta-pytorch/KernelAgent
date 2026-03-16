@@ -23,14 +23,12 @@ import torch
 # Reduce fragmentation pressure on busy GPUs.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-# Ensure SM100 (GB200) architecture is recognized by CuTeDSL when running outside vLLM.
-os.environ.setdefault("CUTE_DSL_ARCH", "sm_100a")
-
 from bench_utils import (  # noqa: E402
     ErrorStatsAccumulator,
     collect_device_meta,
     detect_hbm_peak_gbps,
     do_bench_triton,
+    ensure_blackwell_arch_env,
     error_stats_to_row,
     ensure_oink_src_on_path,
     iter_row_blocks,
@@ -40,6 +38,10 @@ from bench_utils import (  # noqa: E402
     write_csv,
     write_json,
 )
+
+# Ensure the benchmark targets the actual Blackwell variant (e.g. GB300/SM103)
+# when running outside the Oink/vLLM plugin path.
+ensure_blackwell_arch_env()
 
 ensure_oink_src_on_path()
 

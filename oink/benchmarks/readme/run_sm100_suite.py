@@ -21,6 +21,8 @@ import sys
 from datetime import datetime
 from typing import List, Tuple
 
+import torch
+
 
 def _ts() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -56,6 +58,10 @@ def main() -> None:
 
     # Standardize env for standalone runs outside the vLLM plugin.
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+    if "CUTE_DSL_ARCH" not in os.environ and torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability()
+        if int(major) == 10:
+            os.environ["CUTE_DSL_ARCH"] = f"sm_{int(major)}{int(minor)}a"
     os.environ.setdefault("CUTE_DSL_ARCH", "sm_100a")
 
     out_dir = args.out_dir or f"/tmp/kernelagent_oink_sm100_suite_{_ts()}"

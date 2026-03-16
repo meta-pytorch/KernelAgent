@@ -26,17 +26,17 @@ from triton.testing import do_bench as triton_do_bench
 # Reduce fragmentation pressure on busy GPUs.
 os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
-# Ensure SM100 (GB200) architecture is recognized by CuTeDSL when running outside vLLM.
-os.environ.setdefault("CUTE_DSL_ARCH", "sm_100a")
-
 from bench_utils import (  # noqa: E402
     ErrorStatsAccumulator,
     collect_device_meta,
+    ensure_blackwell_arch_env,
     ensure_oink_src_on_path,
     error_stats_to_row,
     iter_row_blocks,
     write_json,
 )
+
+ensure_blackwell_arch_env()
 
 ensure_oink_src_on_path()
 

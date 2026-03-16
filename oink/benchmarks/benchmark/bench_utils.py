@@ -70,6 +70,28 @@ def collect_device_meta(device: Optional[torch.device] = None) -> DeviceMeta:
     )
 
 
+def ensure_blackwell_arch_env(device: Optional[torch.device] = None) -> str:
+    """Set a sensible CuTeDSL arch for Blackwell when not already pinned.
+
+    Benchmarks often run outside the Oink/vLLM plugin path, so they don't
+    benefit from the plugin's device-capability-based `CUTE_DSL_ARCH` setup.
+    On GB300 we want `sm_103a` instead of the older hard-coded `sm_100a`.
+    """
+    pinned = os.environ.get("CUTE_DSL_ARCH")
+    if pinned:
+        return pinned
+
+    arch = "sm_100a"
+    if torch.cuda.is_available():
+        if device is None:
+            device = torch.device("cuda")
+        major, minor = torch.cuda.get_device_capability(device)
+        if int(major) == 10:
+            arch = f"sm_{int(major)}{int(minor)}a"
+    os.environ["CUTE_DSL_ARCH"] = arch
+    return arch
+
+
 def detect_hbm_peak_gbps(device: Optional[torch.device] = None) -> float:
     """Approximate HBM peak bandwidth in GB/s for roofline fractions."""
     if device is None:

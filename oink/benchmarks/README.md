@@ -1,12 +1,12 @@
 # SM100 Benchmarks (KernelAgent-Oink vs Quack)
 
-This folder contains SM100 (GB200 / Blackwell) microbenchmarks for the Oink
+This folder contains SM10x (GB200 / GB300 / Blackwell) microbenchmarks for the Oink
 CuTeDSL kernels vendored into KernelAgent, comparing against Quack’s SM100
 kernels where Quack provides an equivalent API.
 
 ## Prereqs
 
-- GPU: **SM100** (`torch.cuda.get_device_capability() == (10, 0)`).
+- GPU: **SM10x / Blackwell** (`torch.cuda.get_device_capability()[0] == 10`).
 - Python deps in your environment:
   - `torch`
   - `nvidia-cutlass-dsl` (CuTeDSL)
@@ -19,6 +19,12 @@ Recommended env vars:
 ```bash
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export CUTE_DSL_ARCH=sm_100a
+```
+
+On **GB300 / SM103**, prefer:
+
+```bash
+export CUTE_DSL_ARCH=sm_103a
 ```
 
 ## Shape suites

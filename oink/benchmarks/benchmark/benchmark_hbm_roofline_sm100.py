@@ -45,9 +45,12 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 from bench_utils import (  # noqa: E402
     collect_device_meta,
     do_bench_triton,
+    ensure_blackwell_arch_env,
     parse_dtype,
     write_json,
 )
+
+ensure_blackwell_arch_env()
 
 
 @triton.jit
@@ -187,9 +190,11 @@ def main() -> None:
     dtype = parse_dtype(args.dtype)
     device = torch.device("cuda")
     props = torch.cuda.get_device_properties(device)
+    # SM100/SM10x (Blackwell) family. GB300 reports SM103; treat any SM10x as
+    # compatible for this simple bandwidth microbenchmark.
     cap = (int(props.major), int(props.minor))
-    if cap != (10, 0):
-        raise RuntimeError(f"Expected SM100 (10,0), got {cap} ({props.name})")
+    if cap[0] != 10:
+        raise RuntimeError(f"Expected SM10x (Blackwell), got {cap} ({props.name})")
 
     elem_size = torch.tensor(0, dtype=dtype).element_size()
     bytes_per_tensor = int(args.gb * (1024**3))

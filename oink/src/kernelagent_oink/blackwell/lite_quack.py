@@ -205,8 +205,20 @@ def atomic_add_f32(
     a: float | Float32, gmem_ptr: cute.Pointer, *, loc=None, ip=None
 ) -> Float32:
     """Atomic add into global memory (float32)."""
+    from cutlass import CUDA_VERSION
+
+    # NVVM atomicrmw API changed in CUDA 13.x: older builds (notably CUDA 12.9)
+    # require an explicit result type, while newer builds infer it.
+    if CUDA_VERSION.major == 12 and CUDA_VERSION.minor == 9:
+        return nvvm.atomicrmw(
+            res=T.f32(),
+            op=nvvm.AtomicOpKind.FADD,
+            ptr=gmem_ptr.llvm_ptr,
+            a=Float32(a).ir_value(loc=loc, ip=ip),
+            loc=loc,
+            ip=ip,
+        )
     return nvvm.atomicrmw(
-        res=T.f32(),
         op=nvvm.AtomicOpKind.FADD,
         ptr=gmem_ptr.llvm_ptr,
         a=Float32(a).ir_value(loc=loc, ip=ip),
