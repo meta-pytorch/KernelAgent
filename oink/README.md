@@ -114,16 +114,8 @@ plots below were measured on **GB200 / B200-class SM100** systems.
 We also benchmarked the real Llama4x-style Q/K-norm workload on **GB300
 (SM103)** using non-contiguous `q` / `k` views produced by `qkv.split()`. This
 benchmark reports both the direct CuTeDSL/CUTLASS baseline and the optimized
-Oink path for the production strided `[M, N]` views.
-
-Example command (from the `KernelAgent` repo root):
-
-```bash
-source /home/leyuan/.local/miniconda3/bin/activate oink
-export CUTE_DSL_ARCH=sm_103a
-export PYTORCH_ALLOC_CONF=expandable_segments:True
-python oink/qk_norm/benchmark_qk_norm_kernel.py
-```
+Oink path for the production strided `[M, N]` views. The baseline kernel is
+derived from the [CUTLASS CuTeDSL Blackwell RMSNorm example](https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/blackwell/rmsnorm.py).
 
 Representative steady-state medians from one GB300 run are shown below
 (absolute microseconds may vary slightly run to run, but the ranking and
