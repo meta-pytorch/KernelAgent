@@ -140,6 +140,10 @@ def profile_triton_kernel(
     # Preserve important environment variables
     env = os.environ.copy()
 
+    # Export the current process's sys.path as PYTHONPATH so that the
+    # NCU-spawned Python subprocess can find bundled modules
+    env["PYTHONPATH"] = ":".join(sys.path)
+
     # Add Triton-specific environment variables
     env["TRITON_CACHE_DIR"] = str(workdir / ".triton_cache")
 

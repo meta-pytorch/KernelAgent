@@ -226,12 +226,16 @@ def _run_test_multiprocess(
     Returns:
         Tuple of (success, stdout, stderr)
     """
+    # Use "spawn" context to avoid inheriting the parent's CUDA context,
+    # which is in an undefined state after fork. Spawn does fork+exec,
+    # giving each child a clean process.
+    ctx = mp.get_context("spawn")
     stdout, stderr = "", ""
     for test_file in test_files:
         if not test_file.exists():
             continue
-        result_queue = mp.Queue()
-        process = mp.Process(
+        result_queue = ctx.Queue()
+        process = ctx.Process(
             target=_run_test_process,
             args=(test_file, workdir, result_queue),
         )
@@ -251,9 +255,10 @@ def _run_test_multiprocess(
             success, stdout, stderr = result_queue.get_nowait()
             if not success:
                 logger.error(
-                    "Test %s failed. Exit code: %s, stderr: %s",
+                    "Test %s failed. Exit code: %s, stdout: %s, stderr: %s",
                     test_file.name,
                     process.exitcode,
+                    stdout[:500],
                     stderr[:500],
                 )
                 return False, stdout, stderr
