@@ -28,7 +28,6 @@ from typing import Any, Dict
 
 from kernel_perf_agent.kernel_opt.profiler.rocprof_profiler import (
     load_rocm_metrics,
-    metrics_to_prompt_rocm,
     profile_triton_kernel_rocm,
 )
 from triton_kernel_agent.opt_worker_component.profiling.rocprof_wrapper_factory import (
@@ -237,8 +236,8 @@ class ROCmKernelProfiler:
                 err_str = str(e)
                 if "signal" in err_str.lower() or "segfault" in err_str.lower() or "sigsegv" in err_str.lower():
                     self.logger.error(
-                        f"❌ rocprof crashed with segfault (likely ROCm/PyTorch version mismatch). "
-                        f"Profiling unavailable — optimization will use timing-only fallback."
+                        "❌ rocprof crashed with segfault (likely ROCm/PyTorch version mismatch). "
+                        "Profiling unavailable — optimization will use timing-only fallback."
                     )
                     return None
                 if is_final:

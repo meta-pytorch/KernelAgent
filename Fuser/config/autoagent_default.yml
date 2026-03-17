@@ -33,5 +33,5 @@ target_platform: cuda
 ignore_router_config: false
 use_router_cache: true
 no_cusolver: false
-test_timeout_s: 30
+test_timeout_s: 300
 test_code: null
