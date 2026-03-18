@@ -443,7 +443,7 @@ class FuserAgentUI:
         try:
             if extract_subgraphs_to_json is None:
                 return "*Subgraph extractor not available in this environment.*"
-            run_dir, json_path = extract_subgraphs_to_json(
+            run_dir, json_path, _fused_code_path = extract_subgraphs_to_json(
                 problem_path=problem_path,
                 model_name=model,
                 workers=workers,

@@ -340,6 +340,7 @@ def compose(
     verify: bool = False,
     max_iters: int = 5,
     target_platform: str = "cuda",
+    test_code: str | None = None,
 ) -> dict[str, Any]:
     if get_model_provider is None:
         raise SystemExit(
@@ -454,6 +455,40 @@ def compose(
         "target_platform": target_platform,
     }
     result.update(verify_info)
+
+    # Run additional user test against the composed kernel if provided
+    if test_code and last_code and result.get("success", False):
+        import re as _re
+
+        _import_re = _re.compile(
+            r"^\s*from\s+kernel\s+import\s+kernel_function\b[^\n]*$",
+            _re.MULTILINE,
+        )
+        # Build a test script: import kernel_function from the composed kernel,
+        # then run the user's test body
+        test_body = _import_re.sub("", test_code)
+        add_test_script = (
+            "import sys, os\n"
+            f"sys.path.insert(0, {str(composed_path.resolve().parent)!r})\n"
+            "from composed_kernel import kernel_function\n\n"
+            + test_body
+        )
+        add_test_path = out_dir / "additional_test.py"
+        add_test_path.write_text(add_test_script, encoding="utf-8")
+        add_rr = run_candidate(
+            artifacts_code_path=add_test_path,
+            run_root=out_dir / "additional_test_runs",
+            timeout_s=2400,
+            isolated=False,
+            deny_network=False,
+        )
+        result["additional_test_result"] = {
+            "passed": add_rr.passed,
+            "rc": add_rr.rc,
+            "reason": add_rr.reason,
+            "stdout_path": str(add_rr.stdout_path),
+            "stderr_path": str(add_rr.stderr_path),
+        }
 
     # Persist a small summary
     (out_dir / "composition_summary.json").write_text(

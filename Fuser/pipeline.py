@@ -58,6 +58,7 @@ def run_pipeline(
     compose_max_iters: int = 5,
     target_platform: str = "cuda",
     test_timeout_s: int = 30,
+    test_code: str | None = None,
 ) -> dict:
     # Select default KernelAgent model if not provided: prefer GPT-5 for Level 2/3
     if dispatch_model is None:
@@ -78,7 +79,7 @@ def run_pipeline(
             dispatch_model = "o4-mini"
 
     # Step 1: extract
-    run_dir, subgraphs_path = extract_subgraphs_to_json(
+    run_dir, subgraphs_path, fused_code_path = extract_subgraphs_to_json(
         problem_path=problem_path,
         model_name=extract_model,
         workers=workers,
@@ -114,6 +115,8 @@ def run_pipeline(
         target_platform=target_platform,
         max_iters=max_iters,
         test_timeout_s=test_timeout_s,
+        fused_code_path=fused_code_path,
+        test_code=test_code,
     )
 
     # Step 3: compose end-to-end
@@ -128,6 +131,7 @@ def run_pipeline(
         verify=verify,
         max_iters=compose_max_iters,
         target_platform=target_platform,
+        test_code=test_code,
     )
     return {
         "run_dir": str(run_dir),

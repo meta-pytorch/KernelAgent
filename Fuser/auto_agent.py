@@ -432,7 +432,9 @@ class AutoKernelRouter:
             },
         )
 
-    def _solve_with_fuser(self, problem_path: Path) -> RouteResult:
+    def _solve_with_fuser(
+        self, problem_path: Path, test_code: str | None = None
+    ) -> RouteResult:
         """Run the full fuser pipeline and convert any failure into a structured result.
 
         Important: downstream helpers (extract/compose) may raise SystemExit on
@@ -455,6 +457,7 @@ class AutoKernelRouter:
                 compose_max_iters=self.compose_max_iters,
                 target_platform=self.platform_config.name,
                 test_timeout_s=self.test_timeout_s,
+                test_code=test_code,
             )
         except BaseException as exc:  # catch SystemExit and others
             # Return a structured failure so caller can decide on fallback
@@ -572,9 +575,9 @@ class AutoKernelRouter:
             ka_res = self._solve_with_kernelagent(code, test_code=test_code)
             if ka_res.success or not self.allow_fallback:
                 return ka_res
-            return self._solve_with_fuser(problem_path)
+            return self._solve_with_fuser(problem_path, test_code=test_code)
         elif strategy == "fuser":
-            fuser_res = self._solve_with_fuser(problem_path)
+            fuser_res = self._solve_with_fuser(problem_path, test_code=test_code)
             if fuser_res.success or not self.allow_fallback:
                 return fuser_res
             return self._solve_with_kernelagent(code, test_code=test_code)
@@ -582,9 +585,9 @@ class AutoKernelRouter:
             ka_res = self._solve_with_kernelagent(code, test_code=test_code)
             if ka_res.success or not self.allow_fallback:
                 return ka_res
-            return self._solve_with_fuser(problem_path)
+            return self._solve_with_fuser(problem_path, test_code=test_code)
         else:  # fuser_then_kernel
-            fuser_res = self._solve_with_fuser(problem_path)
+            fuser_res = self._solve_with_fuser(problem_path, test_code=test_code)
             if fuser_res.success or not self.allow_fallback:
                 return fuser_res
             return self._solve_with_kernelagent(code, test_code=test_code)

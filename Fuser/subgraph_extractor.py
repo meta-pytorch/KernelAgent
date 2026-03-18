@@ -214,10 +214,10 @@ def extract_subgraphs_to_json(
     llm_timeout_s: int,
     run_timeout_s: int,
     target_platform: str = "cuda",
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     """Run Fuser to produce fused code, then use LLM to emit subgraphs JSON.
 
-    Returns (run_dir, json_path).
+    Returns (run_dir, json_path, fused_code_path).
     """
     # Run orchestrator
     cfg = OrchestratorConfig(
@@ -367,7 +367,12 @@ def extract_subgraphs_to_json(
     deduped = list(grouped.values())
     out_path = dirs["run_dir"] / "subgraphs.json"
     out_path.write_text(json.dumps(deduped, indent=2), encoding="utf-8")
-    return dirs["run_dir"], out_path
+
+    # Persist fused code so downstream stages can load the full model
+    fused_code_path = dirs["run_dir"] / "fused_code.py"
+    fused_code_path.write_text(fused_code, encoding="utf-8")
+
+    return dirs["run_dir"], out_path, fused_code_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -397,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(e), file=sys.stderr)
         return 2
 
-    run_dir, json_path = extract_subgraphs_to_json(
+    run_dir, json_path, _fused_code_path = extract_subgraphs_to_json(
         problem_path=problem_path,
         model_name=args.model,
         workers=args.workers,

@@ -335,6 +335,8 @@ def run(
     max_iters: int = 10,
     no_cusolver: bool = False,
     test_timeout_s: int = 30,
+    fused_code_path: Path | None = None,
+    test_code: str | None = None,
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -374,9 +376,21 @@ def run(
             no_cusolver=no_cusolver,
             test_timeout_s=test_timeout_s,
         )
+        # Build monkey-patch test if additional test provided
+        mp_test_code = None
+        if test_code and fused_code_path:
+            from .subgraph_validator import build_monkeypatch_test
+
+            mp_test_code = build_monkeypatch_test(
+                fused_code_path=fused_code_path,
+                subgraph_item=item,
+                user_test_code=test_code,
+                target_platform=target_platform,
+            )
+
         try:
             result = local_agent.generate_kernel(
-                problem_description=pdesc, test_code=None
+                problem_description=pdesc, test_code=mp_test_code
             )
         except Exception as exc:
             try:
