@@ -119,9 +119,20 @@ baseline here is a **Q/K-norm adaptation** derived from the
 [CUTLASS CuTeDSL Blackwell RMSNorm example](https://github.com/NVIDIA/cutlass/blob/main/examples/python/CuTeDSL/blackwell/rmsnorm.py),
 not the example kernel used unchanged.
 
-Representative steady-state medians from one GB300 run are shown below
-(absolute microseconds may vary slightly run to run, but the ranking and
-trend were stable).
+For roofline context, we also plot the same workload using a dedicated
+useful-bandwidth harness: median CUDA-event timing plus a logical IO model of
+one read + one write of the fused `[M, N]` tensor. This is the physically
+meaningful view for comparing against the measured practical GB300 BF16 stream
+roof, whereas the steady-state CUDA-graph replay medians below are better read
+as a latency view.
+
+<div align="center">
+  <img src="benchmarks/media/gb300_bf16_qk_norm_oink_vs_cutedsl_roofline.svg" alt="GB300 BF16: Q/K-norm roofline (Oink vs CuTeDSL)">
+</div>
+
+Representative steady-state CUDA-graph replay medians from one GB300 run are
+shown below (absolute microseconds may vary slightly run to run, but the
+ranking and trend were stable).
 
 #### Q path (`N=8192`, `scale=3.87`)
 
@@ -155,6 +166,9 @@ Takeaways from the GB300 Q/K-norm sweep:
 
 - For the user-relevant multi-row workloads, Oink beats the CuTeDSL/CUTLASS
   baseline by comfortably more than 20%.
+- In the roofline view, Oink gets close to the practical GB300 BF16 streaming
+  ceiling on the large-row Q/K shapes, while the CuTeDSL baseline stays much
+  farther from the roof.
 - The only cases below 20% are the tiny single-row latency-floor microcases:
   Q `M=1` is ~12% faster and K `M=1` is ~6% faster.
 - Correctness spot-check from the same harness:
