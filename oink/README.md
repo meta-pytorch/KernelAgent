@@ -134,33 +134,9 @@ Representative steady-state CUDA-graph replay medians from one GB300 run are
 shown below (absolute microseconds may vary slightly run to run, but the
 ranking and trend were stable).
 
-#### Q path (`N=8192`, `scale=3.87`)
-
-| M | CUTLASS (us) | Oink (us) | Speedup |
-|---:|---:|---:|---:|
-| 1 | 1.4 | 1.2 | 1.12x |
-| 32 | 1.9 | 1.4 | 1.39x |
-| 128 | 3.3 | 1.6 | 2.00x |
-| 512 | 7.5 | 2.7 | 2.74x |
-| 1024 | 12.6 | 4.0 | 3.12x |
-| 4096 | 47.3 | 16.4 | 2.88x |
-| 8192 | 93.7 | 38.0 | 2.47x |
-| 16384 | 186.1 | 76.0 | 2.45x |
-| 32768 | 371.5 | 152.7 | 2.43x |
-
-#### K path (`N=1024`, `scale=1.0`)
-
-| M | CUTLASS (us) | Oink (us) | Speedup |
-|---:|---:|---:|---:|
-| 1 | 1.3 | 1.2 | 1.06x |
-| 32 | 1.6 | 1.3 | 1.21x |
-| 128 | 1.6 | 1.3 | 1.21x |
-| 512 | 2.3 | 1.4 | 1.58x |
-| 1024 | 3.3 | 1.6 | 2.03x |
-| 4096 | 7.6 | 2.5 | 3.03x |
-| 8192 | 12.8 | 3.8 | 3.33x |
-| 16384 | 23.1 | 6.5 | 3.56x |
-| 32768 | 47.1 | 16.4 | 2.87x |
+- Q path: Oink is roughly **2.4–3.1x faster** than the CuTeDSL baseline on
+  representative multi-row workloads.
+- K path: Oink is roughly **2.0–3.6x faster** on the same sweep.
 
 Takeaways from the GB300 Q/K-norm sweep:
 
