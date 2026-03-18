@@ -196,13 +196,13 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "peak_fp16_tflops": 1307.4,  # BF16/FP16 matrix (without sparsity)
         "peak_bf16_tflops": 1307.4,
         "peak_memory_bw_gbps": 5300,  # 5.3 TB/s HBM3
-        "cu_count": 304,              # Compute Units (AMD equiv of SM)
-        "sm_count": 304,              # Alias for compatibility
+        "cu_count": 304,  # Compute Units (AMD equiv of SM)
+        "sm_count": 304,  # Alias for compatibility
         "max_threads_per_cu": 2048,
-        "max_threads_per_sm": 2048,   # Alias for compatibility
+        "max_threads_per_sm": 2048,  # Alias for compatibility
         "wavefront_size": 64,
-        "l1_cache_kb": 32,            # L1 per CU (vector L1D)
-        "l2_cache_mb": 256,           # Total Infinity Cache (across all dies)
+        "l1_cache_kb": 32,  # L1 per CU (vector L1D)
+        "l2_cache_mb": 256,  # Total Infinity Cache (across all dies)
         "memory_gb": 192,
         "memory_type": "HBM3",
         "form_factor": "OAM",
@@ -236,7 +236,7 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "architecture": "CDNA4",
         "gfx_target": "gfx950",
         "peak_fp32_tflops": 288.0,
-        "peak_fp16_tflops": 2304.0,   # BF16 matrix estimate
+        "peak_fp16_tflops": 2304.0,  # BF16 matrix estimate
         "peak_bf16_tflops": 2304.0,
         "peak_memory_bw_gbps": 8000,  # ~8 TB/s HBM3E
         "cu_count": 304,

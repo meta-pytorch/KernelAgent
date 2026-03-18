@@ -211,7 +211,9 @@ class ROCmKernelProfiler:
                 )
 
                 self._save_profiler_results(results)
-                self.logger.info(f"✅ rocprof profiling completed for round {round_num}")
+                self.logger.info(
+                    f"✅ rocprof profiling completed for round {round_num}"
+                )
                 return results
 
             except FileNotFoundError as e:
@@ -234,7 +236,11 @@ class ROCmKernelProfiler:
             except Exception as e:
                 is_final = attempt >= max_retries
                 err_str = str(e)
-                if "signal" in err_str.lower() or "segfault" in err_str.lower() or "sigsegv" in err_str.lower():
+                if (
+                    "signal" in err_str.lower()
+                    or "segfault" in err_str.lower()
+                    or "sigsegv" in err_str.lower()
+                ):
                     self.logger.error(
                         "❌ rocprof crashed with segfault (likely ROCm/PyTorch version mismatch). "
                         "Profiling unavailable — optimization will use timing-only fallback."

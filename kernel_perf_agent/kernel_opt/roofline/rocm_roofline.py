@@ -47,12 +47,12 @@ from typing import Any
 class ROCmRooflineConfig:
     """Configuration for ROCm roofline analysis."""
 
-    threshold_pct: float = 85.0       # Lower than NCU (heuristic, not exact SOL)
+    threshold_pct: float = 85.0  # Lower than NCU (heuristic, not exact SOL)
     early_stop: bool = True
     convergence_rounds: int = 5
     min_improvement_pct: float = 0.1
     underutilized_threshold: float = 40.0  # Both SOL < this → underutilized
-    miss_rate_amplifier: float = 1.5   # Scales memory SOL by L2 miss rate
+    miss_rate_amplifier: float = 1.5  # Scales memory SOL by L2 miss rate
 
 
 @dataclass
@@ -69,7 +69,7 @@ class ROCmRooflineResult:
     headroom_pct: float
 
     # Classification
-    bottleneck: str   # "compute" | "memory" | "underutilized"
+    bottleneck: str  # "compute" | "memory" | "underutilized"
     uses_tensor_cores: bool  # Always False on ROCm (matrix cores tracked differently)
 
     # Supporting data
@@ -130,11 +130,14 @@ class ROCmRooflineAnalyzer:
         l2_miss_rate = max(0.0, 100.0 - cache_hit_rate)
         amplified_memory_sol = min(
             100.0,
-            memory_sol * (1.0 + (l2_miss_rate / 100.0) * (self.config.miss_rate_amplifier - 1.0)),
+            memory_sol
+            * (1.0 + (l2_miss_rate / 100.0) * (self.config.miss_rate_amplifier - 1.0)),
         )
 
         if compute_sol == 0.0 and amplified_memory_sol == 0.0:
-            warnings.append("No compute or memory activity detected in rocprof counters")
+            warnings.append(
+                "No compute or memory activity detected in rocprof counters"
+            )
 
         efficiency = max(compute_sol, amplified_memory_sol)
         bottleneck = self._classify_bottleneck(compute_sol, amplified_memory_sol)
@@ -147,7 +150,7 @@ class ROCmRooflineAnalyzer:
             at_roofline=at_roofline,
             headroom_pct=round(max(0.0, 100.0 - efficiency), 2),
             bottleneck=bottleneck,
-            uses_tensor_cores=False,   # Matrix core detection not implemented yet
+            uses_tensor_cores=False,  # Matrix core detection not implemented yet
             tcc_cache_hit_rate_pct=round(cache_hit_rate, 2),
             valu_utilization_pct=round(valu_pct, 2),
             memory_bound_pct=round(mem_bound_pct, 2),
@@ -186,7 +189,7 @@ class ROCmRooflineAnalyzer:
             )
 
         if len(self._efficiency_history) >= self.config.convergence_rounds:
-            recent = self._efficiency_history[-self.config.convergence_rounds:]
+            recent = self._efficiency_history[-self.config.convergence_rounds :]
             improvement = max(recent) - min(recent)
             if improvement < self.config.min_improvement_pct:
                 return (

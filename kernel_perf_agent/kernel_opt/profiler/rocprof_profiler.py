@@ -49,23 +49,23 @@ from typing import Any, Dict, List, Optional
 
 # Pass 1: Wavefront / shader utilisation
 _PMC_PASS1 = [
-    "SQ_WAVES",               # total wavefronts launched
-    "SQ_INSTS_VALU",          # VALU (vector ALU) instructions executed
-    "SQ_INSTS_SALU",          # SALU (scalar ALU) instructions executed
-    "SQ_INSTS_VMEM_RD",       # vector memory read instructions
-    "SQ_INSTS_VMEM_WR",       # vector memory write instructions
-    "SQ_INSTS_LDS",           # LDS instructions
-    "SQ_WAIT_INST_ANY",       # stall cycles waiting on any instruction
+    "SQ_WAVES",  # total wavefronts launched
+    "SQ_INSTS_VALU",  # VALU (vector ALU) instructions executed
+    "SQ_INSTS_SALU",  # SALU (scalar ALU) instructions executed
+    "SQ_INSTS_VMEM_RD",  # vector memory read instructions
+    "SQ_INSTS_VMEM_WR",  # vector memory write instructions
+    "SQ_INSTS_LDS",  # LDS instructions
+    "SQ_WAIT_INST_ANY",  # stall cycles waiting on any instruction
 ]
 
 # Pass 2: L2 cache / memory bandwidth
 _PMC_PASS2 = [
-    "TCC_HIT_sum",            # L2 cache hits (sum over all TCC slices)
-    "TCC_MISS_sum",           # L2 cache misses
-    "TCC_EA_RDREQ_sum",       # EA read requests (to HBM)
-    "TCC_EA_WRREQ_sum",       # EA write requests (to HBM)
-    "FETCH_SIZE",             # bytes fetched from memory (in KB, vendor metric)
-    "WRITE_SIZE",             # bytes written to memory (in KB, vendor metric)
+    "TCC_HIT_sum",  # L2 cache hits (sum over all TCC slices)
+    "TCC_MISS_sum",  # L2 cache misses
+    "TCC_EA_RDREQ_sum",  # EA read requests (to HBM)
+    "TCC_EA_WRREQ_sum",  # EA write requests (to HBM)
+    "FETCH_SIZE",  # bytes fetched from memory (in KB, vendor metric)
+    "WRITE_SIZE",  # bytes written to memory (in KB, vendor metric)
 ]
 
 # Derived metric keys returned in the normalized metrics dict
@@ -85,10 +85,10 @@ ROCM_METRIC_KEYS = [
     "fetch_size_kb",
     "write_size_kb",
     # Derived
-    "valu_utilization_pct",   # SQ_INSTS_VALU / (SQ_WAVES * max_valu_per_wave)
-    "memory_bound_pct",       # heuristic: vmem instructions / total instructions
-    "compute_sol_pct",        # heuristic compute SOL for roofline compat
-    "memory_sol_pct",         # heuristic memory SOL for roofline compat
+    "valu_utilization_pct",  # SQ_INSTS_VALU / (SQ_WAVES * max_valu_per_wave)
+    "memory_bound_pct",  # heuristic: vmem instructions / total instructions
+    "compute_sol_pct",  # heuristic compute SOL for roofline compat
+    "memory_sol_pct",  # heuristic memory SOL for roofline compat
 ]
 
 
@@ -277,8 +277,10 @@ def _run_rocprof_pmc(
     # rocprofv3 uses --pmc or -i for counter collection
     cmd = [
         rocprof_bin,
-        "-i", str(input_file),
-        "-o", str(out_csv),
+        "-i",
+        str(input_file),
+        "-o",
+        str(out_csv),
         "--",
         python_executable,
         str(benchmark_script),
@@ -365,9 +367,20 @@ def _parse_pmc_csv(csv_path: Path) -> Dict[str, Any]:
     # Aggregate all rows by summing numeric counter columns
     aggregated: Dict[str, float] = {}
     counter_cols = [
-        k for k in rows[0].keys()
-        if k not in ("Index", "KernelName", "gpu-id", "queue-id",
-                     "queue-index", "pid", "tid", "sig", "obj")
+        k
+        for k in rows[0].keys()
+        if k
+        not in (
+            "Index",
+            "KernelName",
+            "gpu-id",
+            "queue-id",
+            "queue-index",
+            "pid",
+            "tid",
+            "sig",
+            "obj",
+        )
     ]
 
     for row in rows:
