@@ -3,6 +3,7 @@
 # Usage:
 #   python examples/run_opt_manager.py \
 #       --kernel-dir examples/optimize_01_matvec \
+#       --strategy amd
 #       --config examples/configs/amd.yaml
 
 strategy: beam_search

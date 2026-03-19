@@ -40,7 +40,7 @@ load_dotenv()
 _CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 
 # Available strategies and their config files.
-_STRATEGIES = ["beam_search", "greedy", "noop", "nvidia", "rocm"]
+_STRATEGIES = ["beam_search", "greedy", "noop", "nvidia", "amd"]
 
 
 def _run_strategy(
