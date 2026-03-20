@@ -30,6 +30,7 @@ Every stage writes artifacts to a run directory under `.optimize/<run_id>/`, inc
 - Linux or macOS
 - **GPU Requirements (one of the following):**
   - **CUDA**: NVIDIA GPU with CUDA support
+  - **ROCm**: AMD GPU with ROCm 6.x+ (e.g., Instinct MI300X)
   - **XPU**: Intel GPU with oneAPI support (Arc, Data Center GPUs, or integrated Xe graphics)
 - Triton (installed separately: `pip install triton` or nightly from source)
 - PyTorch (https://pytorch.org/get-started/locally/)
@@ -41,6 +42,29 @@ pip install -e .
 ```
 
 ### Platform-Specific PyTorch Installation
+
+#### AMD ROCm (AMD GPUs)
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
+```
+
+**Note:** AMD ROCm support requires:
+- ROCm 6.x installed and `rocprofv3` (or `rocprof`) on `$PATH`
+- Compatible AMD GPU (e.g., Instinct MI300X)
+
+For optimization, use the bundled config as a quickstart:
+```bash
+python examples/run_opt_manager.py \
+  --kernel-dir examples/optimize_01_matvec/ \
+  --config examples/configs/amd.yaml
+```
+
+Verify your ROCm installation:
+```python
+import torch
+print(torch.cuda.is_available())   # True if ROCm PyTorch detects GPU
+print(torch.version.hip)           # Should print the HIP/ROCm version
+```
 
 #### Intel XPU (Intel GPUs)
 ```bash
@@ -225,7 +249,17 @@ KernelAgent supports multiple GPU platforms for Triton kernel execution:
 | Platform | Device String | Flag | Status |
 |----------|---------------|------|--------|
 | NVIDIA CUDA | `cuda` | `--target-platform cuda` (default) | Fully supported |
+| AMD ROCm | `rocm` | `--target-platform rocm` | Supported |
 | Intel XPU | `xpu` | `--target-platform xpu` | Supported |
+
+### AMD ROCm Notes
+
+When targeting AMD ROCm, KernelAgent automatically:
+- Uses `rocprofv3` (or `rocprof` as fallback) for hardware profiling
+- Applies ROCm-specific Triton block/wave occupancy hints
+- Generates appropriate device availability checks
+
+See `examples/configs/amd.yaml` for a ready-to-use MI300X configuration.
 
 ### Intel XPU Notes
 
@@ -237,9 +271,9 @@ When targeting Intel XPU, KernelAgent automatically:
 
 ### Verifying Platform Setup
 ```python
-# Check CUDA availability
+# Check CUDA/ROCm availability
 import torch
-print("CUDA available:", torch.cuda.is_available())
+print("CUDA/ROCm available:", torch.cuda.is_available())
 
 # Check XPU availability
 print("XPU available:", hasattr(torch, 'xpu') and torch.xpu.is_available())
