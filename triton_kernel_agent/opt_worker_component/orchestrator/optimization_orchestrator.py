@@ -177,6 +177,11 @@ def _get_triton_kernel_metrics(ncu_metrics: dict[str, Any]) -> dict[str, Any]:
     NCU profiles all CUDA kernels including PyTorch internals (at::*).
     This function finds the actual Triton kernel metrics.
 
+    Note: This helper is NCU/CUDA-specific. On the ROCm path,
+    ``profiler_results.metrics`` is already a flat dict and should be
+    passed directly to ``ROCmRooflineAnalyzer.analyze`` without going
+    through this function.
+
     Args:
         ncu_metrics: Dict keyed by kernel name with metric dicts as values
 
@@ -379,33 +384,30 @@ class OptimizationOrchestrator:
                 self._profile_and_analyze(current_kernel, problem_file, round_num)
             )
 
-            # Log roofline for the kernel we just profiled
+            # Log roofline for the kernel we just profiled.
+            # _get_triton_kernel_metrics / roofline_analyzer are NCU-specific;
+            # on the ROCm path this block is a no-op (roofline is already logged
+            # inside _profile_and_analyze via bottleneck_analyzer.roofline).
             if ncu_metrics:
-                flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
-                roofline_check = self.roofline_analyzer.analyze(
-                    ncu_metrics=flat_metrics,
-                )
-                self.logger.info(
-                    f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
-                    f"{roofline_check.bottleneck}-bound, {roofline_check.efficiency_pct:.1f}% SOL "
-                    f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
-                    f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
-                )
+                try:
+                    flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
+                    roofline_check = self.roofline_analyzer.analyze(
+                        ncu_metrics=flat_metrics,
+                    )
+                    self.logger.info(
+                        f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
+                        f"{roofline_check.bottleneck}-bound, {roofline_check.efficiency_pct:.1f}% SOL "
+                        f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
+                        f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
+                    )
+                except Exception:
+                    pass  # ROCm path: roofline already logged in _profile_and_analyze
 
             if not bottleneck_results:
                 self.logger.warning(
-                    f"[{round_num}] Profiling failed, using timing-only fallback"
+                    f"[{round_num}] No analysis available, skipping round"
                 )
-                # Generate synthetic bottleneck analysis from kernel code structure
-                # This allows the LLM to still optimize based on code patterns
-                bottleneck_results = self._synthetic_bottleneck_analysis(
-                    current_kernel, problem_file, round_num
-                )
-                if not bottleneck_results:
-                    self.logger.warning(
-                        f"[{round_num}] Synthetic analysis also failed, skipping round"
-                    )
-                    continue
+                continue
 
             # Build optimization prompt using PromptManager with correct API
             # Select bottleneck based on bottleneck_id for beam search diversity
@@ -810,9 +812,9 @@ class OptimizationOrchestrator:
     def _profile_kernel_for_sol(
         self,
         kernel_code: str,
-        problem_file,
+        problem_file: Path,
         round_num: int,
-    ):
+    ) -> dict[str, Any] | None:
         """Profile a kernel to get its SOL metrics.
 
         This is a lightweight profiling specifically for SOL measurement,
@@ -855,169 +857,6 @@ class OptimizationOrchestrator:
 
         except Exception as e:
             self.logger.warning(f"[{round_num}] SOL profiling failed: {e}")
-            return None
-
-    def _synthetic_bottleneck_analysis(
-        self,
-        kernel_code: str,
-        problem_file,
-        round_num: int,
-    ):
-        """Generate synthetic bottleneck analysis when rocprof profiling is unavailable.
-
-        Analyzes kernel code patterns to infer likely bottlenecks.
-        Returns list of BottleneckResult compatible with the optimization pipeline.
-        """
-        try:
-            loads = len(re.findall(r"tl\.load", kernel_code))
-            stores = len(re.findall(r"tl\.store", kernel_code))
-            dots = len(re.findall(r"tl\.dot", kernel_code))
-            math_ops = len(
-                re.findall(r"tl\.(exp|log|sqrt|sin|cos|sigmoid)", kernel_code)
-            )
-            total_mem = loads + stores
-            total_compute = dots + math_ops
-
-            problem_text = ""
-            try:
-                if hasattr(problem_file, "read_text") and problem_file.exists():
-                    problem_text = problem_file.read_text()
-            except Exception:
-                pass
-            large_dims = re.findall(r"= (\d+)", problem_text)
-            max_dim = max((int(d) for d in large_dims), default=1024)
-
-            if total_mem > total_compute * 2 or max_dim > 100000:
-                category = "memory"
-                summary = (
-                    f"Memory-bound: {loads} loads, {stores} stores, max_dim={max_dim}"
-                )
-                root_causes = [
-                    {
-                        "cause": "High memory traffic relative to compute operations",
-                        "evidence": [
-                            {
-                                "metric": "load_count",
-                                "value": loads,
-                                "interpretation": "Number of tl.load calls",
-                            }
-                        ],
-                        "fixes": [
-                            {
-                                "fix": "Increase BLOCK_SIZE to improve memory coalescing and reduce launch overhead",
-                                "rationale": "Larger blocks amortize memory access latency",
-                            },
-                            {
-                                "fix": "Use vectorized loads (tl.load with larger contiguous blocks)",
-                                "rationale": "Reduces number of memory transactions",
-                            },
-                        ],
-                    },
-                    {
-                        "cause": f"Large tensor dimensions (up to {max_dim}) causing bandwidth saturation",
-                        "evidence": [
-                            {
-                                "metric": "max_dimension",
-                                "value": max_dim,
-                                "interpretation": "Largest tensor dimension in problem",
-                            }
-                        ],
-                        "fixes": [
-                            {
-                                "fix": "Consider tiling strategy to improve L2 cache hit rate",
-                                "rationale": "Tiling reduces HBM bandwidth pressure",
-                            },
-                            {
-                                "fix": "Reduce number of global memory accesses through register reuse",
-                                "rationale": "Keeping data in registers avoids repeated memory loads",
-                            },
-                        ],
-                    },
-                ]
-                recommended_fixes = [
-                    {
-                        "fix": "Increase BLOCK_SIZE for better memory throughput",
-                        "rationale": "Better coalescing and reduced overhead",
-                    },
-                    {
-                        "fix": "Add tiling to improve cache utilization",
-                        "rationale": "L2 cache reuse reduces HBM pressure",
-                    },
-                ]
-            elif total_compute > 0:
-                category = "compute"
-                summary = f"Compute-bound: {dots} dots, {math_ops} math ops"
-                root_causes = [
-                    {
-                        "cause": "High arithmetic intensity from dot products and math operations",
-                        "evidence": [
-                            {
-                                "metric": "dot_count",
-                                "value": dots,
-                                "interpretation": "Number of tl.dot calls",
-                            }
-                        ],
-                        "fixes": [
-                            {
-                                "fix": "Optimize BLOCK_SIZE for better occupancy on AMD CUs",
-                                "rationale": "Better occupancy hides compute latency",
-                            },
-                            {
-                                "fix": "Use vectorized operations where possible",
-                                "rationale": "VALU can process multiple elements per cycle",
-                            },
-                        ],
-                    },
-                ]
-                recommended_fixes = [
-                    {
-                        "fix": "Optimize thread block configuration for AMD GPU CU count",
-                        "rationale": "Maximize wave occupancy",
-                    },
-                ]
-            else:
-                category = "memory"
-                summary = "Unable to determine bottleneck from code analysis"
-                root_causes = [
-                    {
-                        "cause": "Kernel structure unclear - defaulting to memory optimization",
-                        "evidence": [],
-                        "fixes": [
-                            {
-                                "fix": "Try larger BLOCK_SIZE for better memory throughput",
-                                "rationale": "General optimization heuristic",
-                            },
-                        ],
-                    },
-                ]
-                recommended_fixes = [
-                    {
-                        "fix": "Ensure coalesced memory access patterns",
-                        "rationale": "Coalescing maximizes HBM bandwidth utilization",
-                    },
-                ]
-
-            result = BottleneckResult(
-                category=category,
-                summary=f"[Timing-only fallback] {summary}",
-                reasoning=(
-                    f"rocprof profiling unavailable (ROCm version mismatch). "
-                    f"Analysis based on kernel code patterns: "
-                    f"{loads} loads, {stores} stores, {dots} dots, {math_ops} math ops, "
-                    f"max dimension {max_dim}."
-                ),
-                root_causes=root_causes,
-                recommended_fixes=recommended_fixes,
-            )
-
-            self.logger.info(
-                f"[{round_num}] Synthetic analysis: {category}-bound "
-                f"(loads={loads}, stores={stores}, dots={dots})"
-            )
-            return [result]
-
-        except Exception as e:
-            self.logger.error(f"[{round_num}] Synthetic analysis failed: {e}")
             return None
 
     def _generate_optimized_kernel(self, opt_prompt: str, round_num: int) -> str | None:
