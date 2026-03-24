@@ -785,8 +785,14 @@ class OptimizationOrchestrator:
             Tuple of (bottleneck_results, roofline_result, ncu_metrics).
             All can be None if profiling fails.
         """
-        profiler_name = "rocprof" if self.profiler.__class__.__name__ == "ROCmKernelProfiler" else "NCU"
-        self.logger.info(f"[{round_num}] Profiling current kernel with {profiler_name}...")
+        profiler_name = (
+            "rocprof"
+            if self.profiler.__class__.__name__ == "ROCmKernelProfiler"
+            else "NCU"
+        )
+        self.logger.info(
+            f"[{round_num}] Profiling current kernel with {profiler_name}..."
+        )
         kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
         kernel_file_round.write_text(current_kernel)
 
@@ -830,7 +836,7 @@ class OptimizationOrchestrator:
                         {
                             "fix": "Reduce launch overhead and improve occupancy with conservative Triton meta-parameter tuning (e.g. BLOCK sizes, num_warps, num_stages) consistent with AMD execution characteristics.",
                             "rationale": "Provides actionable optimization direction even when hardware counters are unavailable.",
-                        }
+                        },
                     ],
                 )
                 return [synthetic], None, None
