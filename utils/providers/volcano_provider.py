@@ -47,5 +47,7 @@ class VolcanoProvider(OpenAICompatibleProvider):
             return 8192
         elif "4k" in model_name:
             return 4096
+        elif "seed" in model_name:
+            return 16384
         else:
             return 8192

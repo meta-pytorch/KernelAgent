@@ -82,6 +82,11 @@ AVAILABLE_MODELS = [
     ),
     # Volcano Cloud (火山引擎) Doubao Models
     ModelConfig(
+        name="doubao-seed-2.0-code",
+        provider_classes=[VolcanoProvider],
+        description="Doubao Seed 2.0 Code - code-specialized model from Volcano Cloud",
+    ),
+    ModelConfig(
         name="doubao-1-5-pro-32k",
         provider_classes=[VolcanoProvider],
         description="Doubao 1.5 Pro 32K - high-performance model from Volcano Cloud",
