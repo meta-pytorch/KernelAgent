@@ -18,6 +18,7 @@ from utils.providers.model_config import ModelConfig
 from utils.providers.openai_provider import OpenAIProvider
 from utils.providers.anthropic_provider import AnthropicProvider
 from utils.providers.relay_provider import RelayProvider
+from utils.providers.volcano_provider import VolcanoProvider
 
 
 # Registry of all available models (external/OSS version)
@@ -78,5 +79,36 @@ AVAILABLE_MODELS = [
         name="gpt-5-2",
         provider_classes=[RelayProvider],
         description="GPT-5.2 flagship model (Dec 2025) - Note the name is different from the OpenAI model",
+    ),
+    # Volcano Cloud (火山引擎) Doubao Models
+    ModelConfig(
+        name="doubao-1-5-pro-32k",
+        provider_classes=[VolcanoProvider],
+        description="Doubao 1.5 Pro 32K - high-performance model from Volcano Cloud",
+    ),
+    ModelConfig(
+        name="doubao-1-5-pro-256k",
+        provider_classes=[VolcanoProvider],
+        description="Doubao 1.5 Pro 256K - long-context model from Volcano Cloud",
+    ),
+    ModelConfig(
+        name="doubao-1-5-thinking-pro-32k",
+        provider_classes=[VolcanoProvider],
+        description="Doubao 1.5 Thinking Pro 32K - reasoning model from Volcano Cloud",
+    ),
+    ModelConfig(
+        name="doubao-1-5-thinking-pro-m-32k",
+        provider_classes=[VolcanoProvider],
+        description="Doubao 1.5 Thinking Pro M 32K - mid-size reasoning model from Volcano Cloud",
+    ),
+    ModelConfig(
+        name="doubao-pro-32k",
+        provider_classes=[VolcanoProvider],
+        description="Doubao Pro 32K - production model from Volcano Cloud",
+    ),
+    ModelConfig(
+        name="doubao-pro-128k",
+        provider_classes=[VolcanoProvider],
+        description="Doubao Pro 128K - long-context production model from Volcano Cloud",
     ),
 ]
