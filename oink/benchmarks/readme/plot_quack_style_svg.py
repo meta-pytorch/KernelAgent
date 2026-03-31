@@ -27,12 +27,26 @@ The intent is to match Quack's README visual style:
   - thick lines + markers, dashed y-grid, compact legend
   - optional horizontal roofline line (measured STREAM-like HBM peak)
 
-Example:
+Example (preset suite):
   python oink/benchmarks/readme/plot_quack_style_svg.py \\
     --in-dir /tmp/kernelagent_oink_sm100_suite_bf16 \\
     --suite quack_suite \\
     --roofline-json /tmp/hbm_roofline_sm100_bf16.json \\
     --out oink/benchmarks/media/sm100_bf16_oink_vs_quack.svg
+
+Example (single op via --ops):
+  python oink/benchmarks/readme/plot_quack_style_svg.py \\
+    --in-dir /tmp/kernelagent_oink_sm100_suite_bf16 \\
+    --ops rmsnorm \\
+    --roofline-json /tmp/hbm_roofline_sm100_bf16.json \\
+    --out oink/benchmarks/media/sm100_bf16_oink_vs_quack_rmsnorm.svg
+
+Example (combine ops via --ops):
+  python oink/benchmarks/readme/plot_quack_style_svg.py \\
+    --in-dir /tmp/kernelagent_oink_sm100_suite_bf16 \\
+    --ops rmsnorm softmax \\
+    --roofline-json /tmp/hbm_roofline_sm100_bf16.json \\
+    --out oink/benchmarks/media/sm100_bf16_oink_vs_quack_rmsnorm_softmax.svg
 
 For completeness, we can also include LayerNorm as an extra panel (Quack's
 own README plot does not include LayerNorm):
@@ -52,6 +66,9 @@ Note on DSv3 suite:
   single-row figure where the CrossEntropy panel uses its own x-axis.
 - The RMSNorm panel uses the real block primitive (fused residual-add + RMSNorm)
   when available: `fused_add_rmsnorm_dsv3.json`.
+
+Available --ops names: rmsnorm, softmax, cross_entropy, layernorm, fused_add_rmsnorm.
+Not all ops are available for every --suite; see _OP_REGISTRY below.
 """
 
 from __future__ import annotations
@@ -63,6 +80,34 @@ import os
 from collections import defaultdict
 from statistics import median
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+
+# Per-op panel registry keyed by op name → suite → (panel_title, json_filename).
+# Used by --ops to select individual panels without a preset suite.
+_OP_REGISTRY: Dict[str, Dict[str, Tuple[str, str]]] = {
+    "rmsnorm": {
+        "quack_suite": ("RMSNorm (fp32 weight)", "rmsnorm_fwd_quack_suite_wfp32.json"),
+        "dsv3": ("RMSNorm (fp32 weight)", "rmsnorm_fwd_dsv3_wfp32.json"),
+    },
+    "softmax": {
+        "quack_suite": ("Softmax (fwd+bwd)", "softmax_fwd_bwd_quack_suite.json"),
+        "dsv3": ("Softmax (fwd+bwd)", "softmax_fwd_bwd_dsv3.json"),
+    },
+    "cross_entropy": {
+        "quack_suite": (
+            "Cross-Entropy (fwd+bwd)",
+            "cross_entropy_fwd_bwd_quack_suite.json",
+        ),
+        "dsv3": ("Cross-Entropy (fwd+bwd)", "cross_entropy_fwd_bwd_dsv3.json"),
+    },
+    "layernorm": {
+        "quack_suite": ("LayerNorm (fwd)", "layernorm_fwd_quack_suite.json"),
+        "dsv3": ("LayerNorm (fwd)", "layernorm_fwd_dsv3.json"),
+    },
+    "fused_add_rmsnorm": {
+        "dsv3": ("Fused Add+RMSNorm (fwd)", "fused_add_rmsnorm_dsv3.json"),
+    },
+}
 
 
 def _load_json(path: str) -> Dict[str, Any]:
@@ -367,6 +412,22 @@ def main() -> None:
         type=str,
         default="quack_suite",
         choices=["quack_suite", "dsv3", "dsv3_all", "dsv3_cross_entropy"],
+        help=(
+            "Suite preset (also selects JSON filenames when using --ops). "
+            "Ignored for panel selection when --ops is provided."
+        ),
+    )
+    p.add_argument(
+        "--ops",
+        type=str,
+        nargs="+",
+        choices=sorted(_OP_REGISTRY.keys()),
+        default=None,
+        help=(
+            "Select individual op panels instead of a preset suite. "
+            "One or more of: %(choices)s. "
+            "Uses --suite to resolve the correct JSON filename per op."
+        ),
     )
     p.add_argument(
         "--include-layernorm",
@@ -405,15 +466,34 @@ def main() -> None:
         _read_roofline_gbps(args.roofline_json) if args.roofline_json else None
     )
 
-    panel_files = list(_panel_files_for_suite(str(args.suite)))
-    if args.include_layernorm:
-        if args.suite != "quack_suite":
-            raise SystemExit(
-                "--include-layernorm is only supported for `--suite quack_suite`."
+    # Resolve panels: --ops overrides --suite preset selection.
+    if args.ops:
+        suite_key = str(args.suite)
+        # For dsv3_all / dsv3_cross_entropy, resolve ops against the base "dsv3" key.
+        registry_key = "dsv3" if suite_key.startswith("dsv3") else suite_key
+        panel_files: List[Tuple[str, str]] = []
+        for op in args.ops:
+            suite_map = _OP_REGISTRY.get(op)
+            if suite_map is None:
+                raise SystemExit(f"Unknown op: {op}")
+            entry = suite_map.get(registry_key)
+            if entry is None:
+                available = ", ".join(sorted(suite_map.keys()))
+                raise SystemExit(
+                    f"Op '{op}' is not available for suite '{suite_key}'. "
+                    f"Available suites for this op: {available}"
+                )
+            panel_files.append(entry)
+    else:
+        panel_files = list(_panel_files_for_suite(str(args.suite)))
+        if args.include_layernorm:
+            if args.suite != "quack_suite":
+                raise SystemExit(
+                    "--include-layernorm is only supported for `--suite quack_suite`."
+                )
+            panel_files.append(
+                ("LayerNorm (fwd)", _layernorm_file_for_suite(str(args.suite)))
             )
-        panel_files.append(
-            ("LayerNorm (fwd)", _layernorm_file_for_suite(str(args.suite)))
-        )
 
     panels: List[Tuple[str, Dict[Tuple[int, int], Dict[str, float]]]] = []
     for panel_title, filename in panel_files:
@@ -434,27 +514,39 @@ def main() -> None:
         payload = _load_json(first_json)
         rows = payload.get("rows", [])
         dtype = rows[0].get("dtype", "") if rows else ""
-        if args.suite == "quack_suite":
+        if args.ops:
+            # Build title from selected op panel names.
+            op_names = " / ".join(title for title, _f in panel_files)
+            title = f"SM100 {dtype.upper()} — {op_names}"
+        elif args.suite == "quack_suite":
             suite_name = "Quack-suite"
         elif args.suite == "dsv3":
             suite_name = "DSv3 (hidden-size ops)"
         elif args.suite == "dsv3_all":
             suite_name = "DSv3 (4 ops)"
         elif args.suite == "dsv3_cross_entropy":
-            # Keep this short: this suite is rendered as a single panel, so the
-            # figure is much narrower than the 3-panel plots.
             suite_name = "DSv3 CrossEntropy"
         else:
             suite_name = str(args.suite)
-        suffix = (
-            " (+LayerNorm)"
-            if (args.suite == "quack_suite" and args.include_layernorm)
-            else ""
-        )
-        if args.suite == "dsv3_cross_entropy":
-            title = f"SM100 {dtype.upper()} — {suite_name}{suffix}"
-        else:
-            title = f"SM100 {dtype.upper()} Kernel Benchmarks (Oink vs Quack) — {suite_name}{suffix}"
+        if not args.ops:
+            suffix = (
+                " (+LayerNorm)"
+                if (args.suite == "quack_suite" and args.include_layernorm)
+                else ""
+            )
+            if args.suite == "dsv3_cross_entropy":
+                title = f"SM100 {dtype.upper()} — {suite_name}{suffix}"
+            else:
+                title = f"SM100 {dtype.upper()} Kernel Benchmarks (Oink vs Quack) — {suite_name}{suffix}"
+
+    # Use per-panel x-axes when ops with different shape semantics are combined
+    # (e.g. cross_entropy uses vocab-like N, while others use hidden-size N).
+    if args.ops:
+        has_cross = "cross_entropy" in args.ops
+        has_others = any(op != "cross_entropy" for op in args.ops)
+        per_panel_x = has_cross and has_others
+    else:
+        per_panel_x = str(args.suite) == "dsv3_all"
 
     _plot(
         panels=panels,
@@ -462,7 +554,7 @@ def main() -> None:
         out_path=str(args.out),
         title=title,
         shape_policy=str(args.shape_policy),
-        per_panel_x=(str(args.suite) == "dsv3_all"),
+        per_panel_x=per_panel_x,
     )
     print(f"Wrote: {os.path.abspath(args.out)}")
 
