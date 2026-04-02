@@ -17,14 +17,16 @@ GPU Specifications Database - Updated with Specific SKUs
 
 This module contains the GPU hardware specifications database used for
 performance analysis and bottleneck identification. Updated to include
-specific SKU variants for multi-SKU GPUs like A100 and H100.
+specific SKU variants for multi-SKU GPUs like A100 and H100, and AMD
+Instinct GPUs for ROCm support.
 
 Sources:
 - NVIDIA official specifications and datasheets
+- AMD official specifications and datasheets
 - TechPowerUp GPU Database
 - Manufacturer datasheets
 
-Last Updated: January 2026
+Last Updated: March 2026
 """
 
 from types import MappingProxyType
@@ -180,6 +182,95 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "memory_type": "GDDR7",
         "form_factor": "PCIe",
         "tdp_w": 360,
+    },
+    # -----------------------------------------------------------------------
+    # AMD Instinct GPU SKUs (ROCm / HIP)
+    # -----------------------------------------------------------------------
+    # AMD Instinct MI300X (CDNA3 / gfx942)
+    # Sources: AMD product page, Hot Chips 35 (2023)
+    "AMD Instinct MI300X": {
+        "name": "AMD Instinct MI300X",
+        "architecture": "CDNA3",
+        "gfx_target": "gfx942",
+        "peak_fp32_tflops": 163.4,
+        "peak_fp16_tflops": 1307.4,  # BF16/FP16 matrix (without sparsity)
+        "peak_bf16_tflops": 1307.4,
+        "peak_memory_bw_gbps": 5300,  # 5.3 TB/s HBM3
+        "cu_count": 304,  # Compute Units (AMD equiv of SM)
+        "sm_count": 304,  # Alias for compatibility
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,  # Alias for compatibility
+        "wavefront_size": 64,
+        "l1_cache_kb": 32,  # L1 per CU (vector L1D)
+        "l2_cache_mb": 256,  # Total Infinity Cache (across all dies)
+        "memory_gb": 192,
+        "memory_type": "HBM3",
+        "form_factor": "OAM",
+        "tdp_w": 750,
+    },
+    # AMD Instinct MI300A (CDNA3 / gfx942, APU variant)
+    "AMD Instinct MI300A": {
+        "name": "AMD Instinct MI300A",
+        "architecture": "CDNA3",
+        "gfx_target": "gfx942",
+        "peak_fp32_tflops": 122.6,
+        "peak_fp16_tflops": 980.6,
+        "peak_bf16_tflops": 980.6,
+        "peak_memory_bw_gbps": 3200,  # Unified HBM3 (shared with CPU)
+        "cu_count": 228,
+        "sm_count": 228,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 32,
+        "l2_cache_mb": 192,
+        "memory_gb": 128,
+        "memory_type": "HBM3",
+        "form_factor": "OAM",
+        "tdp_w": 550,
+    },
+    # AMD Instinct MI350X (CDNA4 / gfx950)
+    # Sources: AMD press release (Nov 2024), estimated specs
+    "AMD Instinct MI350X": {
+        "name": "AMD Instinct MI350X",
+        "architecture": "CDNA4",
+        "gfx_target": "gfx950",
+        "peak_fp32_tflops": 288.0,
+        "peak_fp16_tflops": 2304.0,  # BF16 matrix estimate
+        "peak_bf16_tflops": 2304.0,
+        "peak_memory_bw_gbps": 8000,  # ~8 TB/s HBM3E
+        "cu_count": 304,
+        "sm_count": 304,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 32,
+        "l2_cache_mb": 256,
+        "memory_gb": 288,
+        "memory_type": "HBM3E",
+        "form_factor": "OAM",
+        "tdp_w": 1000,
+    },
+    # AMD Instinct MI250X (CDNA2 / gfx90a)
+    "AMD Instinct MI250X": {
+        "name": "AMD Instinct MI250X",
+        "architecture": "CDNA2",
+        "gfx_target": "gfx90a",
+        "peak_fp32_tflops": 47.9,
+        "peak_fp16_tflops": 383.0,
+        "peak_bf16_tflops": 383.0,
+        "peak_memory_bw_gbps": 3277,  # HBM2e
+        "cu_count": 220,
+        "sm_count": 220,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 32,
+        "memory_gb": 128,
+        "memory_type": "HBM2e",
+        "form_factor": "OAM",
+        "tdp_w": 560,
     },
 }
 

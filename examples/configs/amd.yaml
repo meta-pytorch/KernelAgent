@@ -1,0 +1,39 @@
+# AMD platform config for MI300X
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --strategy amd
+#       --config examples/configs/amd.yaml
+
+strategy: beam_search
+num_workers: 4
+strategy_config:
+  num_top_kernels: 2
+  num_bottlenecks: 2
+openai_model: gpt-5
+high_reasoning_effort: true
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: rocm
+gpu_name: "AMD Instinct MI300X"
+
+platform:
+  # Manager-level components
+  verifier: rocm
+  benchmarker: rocm
+  worker_runner: rocm
+  # Worker-level components
+  specs_provider: rocm
+  profiler: rocm
+  roofline_analyzer: rocm
+  bottleneck_analyzer: rocm
+  rag_prescriber: rocm
+
+templates:
+  kernel_optimization: triton_kernel_agent/templates/kernel_optimization.j2
+  reflexion_prompt: triton_kernel_agent/templates/reflexion_prompt.j2
+  triton_guidelines: triton_kernel_agent/templates/triton_guidelines.j2
