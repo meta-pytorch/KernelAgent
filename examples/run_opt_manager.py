@@ -39,8 +39,9 @@ load_dotenv()
 # Hardcoded config directory relative to this script.
 _CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 
-# Available strategies and their config files.
-_STRATEGIES = ["beam_search", "greedy", "noop", "nvidia"]
+def _discover_strategies() -> list[str]:
+    """Discover available strategies from yaml files in the configs directory."""
+    return sorted(p.stem for p in _CONFIGS_DIR.glob("*.yaml"))
 
 
 def _run_strategy(
@@ -113,9 +114,8 @@ def main():
     )
     parser.add_argument(
         "--strategy",
-        choices=_STRATEGIES + ["all"],
         default="beam_search",
-        help="Optimization strategy to use (default: beam_search)",
+        help="Optimization strategy to use, or 'all' to run every config in configs/ (default: beam_search)",
     )
     parser.add_argument(
         "--max-rounds",
@@ -164,7 +164,7 @@ def main():
     # Run selected strategy
     if args.strategy == "all":
         results = {}
-        for strategy in _STRATEGIES:
+        for strategy in _discover_strategies():
             results[strategy] = _run_strategy(
                 strategy,
                 kernel_code,

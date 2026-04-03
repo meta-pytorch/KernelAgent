@@ -69,12 +69,16 @@ def get_model_provider(
     """
     model_name_to_config = _get_model_name_to_config()
     if model_name not in model_name_to_config:
-        available = list(model_name_to_config.keys())
-        raise ValueError(
-            f"Model '{model_name}' not found. Available models: {available}"
-        )
+        # Default to RelayProvider for unknown models
+        from .relay_provider import RelayProvider
 
-    model_config = model_name_to_config[model_name]
+        model_config = ModelConfig(
+            name=model_name,
+            provider_classes=[RelayProvider],
+            description=f"Unknown model '{model_name}' (defaulting to Relay)",
+        )
+    else:
+        model_config = model_name_to_config[model_name]
 
     # Determine which providers to try
     if preferred_provider is not None:
