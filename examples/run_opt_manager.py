@@ -39,6 +39,7 @@ load_dotenv()
 # Hardcoded config directory relative to this script.
 _CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 
+
 def _discover_strategies() -> list[str]:
     """Discover available strategies from yaml files in the configs directory."""
     return sorted(p.stem for p in _CONFIGS_DIR.glob("*.yaml"))
