@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Compact public facade for the Blackwell RMSNorm implementation.
 
 The heavy kernel implementation lives in `._rmsnorm_impl` so this module stays
@@ -7,6 +5,8 @@ small and easy to navigate while preserving the historical public import path:
 
     from kernelagent_oink.blackwell import rmsnorm
 """
+
+from __future__ import annotations
 
 from . import _rmsnorm_impl as _impl
 
