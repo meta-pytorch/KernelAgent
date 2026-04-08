@@ -14,7 +14,9 @@ _CUDA_HOME = "/usr/local/cuda-13.0"
 _NVCC = f"{_CUDA_HOME}/bin/nvcc"
 _CACHE_DIR = Path(os.environ.get("CUTE_DSL_CACHE_DIR", "/tmp")) / "oink_smallm_cuda"
 _BUILD_LOCK = threading.Lock()
-_LAUNCHER = None
+_LAUNCHER_NOWEIGHT = None
+_LAUNCHER_NOWEIGHT_LARGE = None
+_LAUNCHER_NOWEIGHT_LARGE_FP32 = None
 _BUILD_FAILED = False
 
 _CUDA_SRC = r"""
@@ -38,6 +40,13 @@ constexpr int kElemsPerThread = kFloat4sPerThread * kBf16PerFloat4;
 constexpr int kWarpsPerRow = kRowThreads / 32;
 constexpr int kFloat4sPerRow = kHidden / kBf16PerFloat4;
 constexpr float kInvHidden = 1.0f / float(kHidden);
+
+__device__ __forceinline__ float bf16_square_fma(float sum, __nv_bfloat16 x) {
+  asm("fma.rn.f32.bf16 %0, %1, %1, %0;"
+      : "+f"(sum)
+      : "h"(*(reinterpret_cast<unsigned short*>(&x))));
+  return sum;
+}
 
 __global__ __launch_bounds__(kRowThreads) void rmsnorm_noweight_4096_bf16_kernel(
     int M,
@@ -123,6 +132,144 @@ extern "C" void launch_rmsnorm_noweight_4096_bf16(
       reinterpret_cast<const float4*>(input),
       reinterpret_cast<float4*>(output));
 }
+
+template <int kVectorFloat4PerThread>
+__global__ void rmsnorm_noweight_4096_bf16_warp_kernel(
+    int M,
+    float eps,
+    const float4* __restrict__ input,
+    float4* __restrict__ output) {
+  constexpr int kThreadGroupSize = 32;
+  constexpr int kElemsPerThreadWarp = kVectorFloat4PerThread * kBf16PerFloat4;
+
+  const int sample_idx = blockIdx.x * blockDim.y + threadIdx.y;
+  if (sample_idx >= M) {
+    return;
+  }
+
+  float4 row_data[kVectorFloat4PerThread];
+  __nv_bfloat16* row_bf16 = reinterpret_cast<__nv_bfloat16*>(row_data);
+
+#pragma unroll
+  for (int i = 0; i < kVectorFloat4PerThread; ++i) {
+    row_data[i] = input[
+        sample_idx * kThreadGroupSize * kVectorFloat4PerThread
+        + i * kThreadGroupSize + threadIdx.x];
+  }
+
+  float sum = 0.0f;
+#pragma unroll
+  for (int i = 0; i < kElemsPerThreadWarp; ++i) {
+    sum = bf16_square_fma(sum, row_bf16[i]);
+  }
+  sum = warp_reduce_sum<32>(sum);
+  const float denom = rsqrtf(eps + sum * kInvHidden);
+  const __nv_bfloat16 denom_bf16 = __float2bfloat16_rn(denom);
+
+#pragma unroll
+  for (int i = 0; i < kElemsPerThreadWarp; ++i) {
+    row_bf16[i] = __hmul(row_bf16[i], denom_bf16);
+  }
+
+#pragma unroll
+  for (int i = 0; i < kVectorFloat4PerThread; ++i) {
+    const int idx =
+        sample_idx * kThreadGroupSize * kVectorFloat4PerThread
+        + i * kThreadGroupSize + threadIdx.x;
+    output[idx] = row_data[i];
+  }
+}
+
+extern "C" void launch_rmsnorm_noweight_4096_bf16_warp(
+    int M,
+    float eps,
+    const void* input,
+    void* output,
+    void* stream,
+    int cta_dim_y) {
+  const int rows_per_cta = cta_dim_y > 0 ? cta_dim_y : 1;
+  dim3 block(32, rows_per_cta);
+  dim3 grid((M + rows_per_cta - 1) / rows_per_cta);
+  rmsnorm_noweight_4096_bf16_warp_kernel<16>
+      <<<grid, block, 0, static_cast<cudaStream_t>(stream)>>>(
+          M,
+          eps,
+          reinterpret_cast<const float4*>(input),
+          reinterpret_cast<float4*>(output));
+}
+
+template <int kVectorFloat4PerThread>
+__global__ void rmsnorm_noweight_4096_bf16_warp_fp32_kernel(
+    int M,
+    float eps,
+    const float4* __restrict__ input,
+    float4* __restrict__ output) {
+  constexpr int kThreadGroupSize = 32;
+  constexpr int kElemsPerThreadWarp = kVectorFloat4PerThread * kBf16PerFloat4;
+
+  const int sample_idx = blockIdx.x * blockDim.y + threadIdx.y;
+  if (sample_idx >= M) {
+    return;
+  }
+
+  float data[kElemsPerThreadWarp];
+
+#pragma unroll
+  for (int i = 0; i < kVectorFloat4PerThread; ++i) {
+    float4 input_v = input[
+        sample_idx * kThreadGroupSize * kVectorFloat4PerThread
+        + i * kThreadGroupSize + threadIdx.x];
+    const __nv_bfloat16* temp = reinterpret_cast<const __nv_bfloat16*>(&input_v);
+#pragma unroll
+    for (int j = 0; j < kBf16PerFloat4; ++j) {
+      data[i * kBf16PerFloat4 + j] = __bfloat162float(temp[j]);
+    }
+  }
+
+  float sum = 0.0f;
+#pragma unroll
+  for (int i = 0; i < kElemsPerThreadWarp; ++i) {
+    sum += data[i] * data[i];
+  }
+  sum = warp_reduce_sum<32>(sum);
+  const float denom = rsqrtf(eps + sum * kInvHidden);
+
+#pragma unroll
+  for (int i = 0; i < kElemsPerThreadWarp; ++i) {
+    data[i] *= denom;
+  }
+
+#pragma unroll
+  for (int i = 0; i < kVectorFloat4PerThread; ++i) {
+    float4 output_v;
+    __nv_bfloat16* temp = reinterpret_cast<__nv_bfloat16*>(&output_v);
+#pragma unroll
+    for (int j = 0; j < kBf16PerFloat4; ++j) {
+      temp[j] = __float2bfloat16(data[i * kBf16PerFloat4 + j]);
+    }
+    output[
+        sample_idx * kThreadGroupSize * kVectorFloat4PerThread
+        + i * kThreadGroupSize + threadIdx.x] = output_v;
+  }
+}
+
+extern "C" void launch_rmsnorm_noweight_4096_bf16_warp_fp32(
+    int M,
+    float eps,
+    const void* input,
+    void* output,
+    void* stream,
+    int cta_dim_y) {
+  const int rows_per_cta = cta_dim_y > 0 ? cta_dim_y : 1;
+  dim3 block(32, rows_per_cta);
+  dim3 grid((M + rows_per_cta - 1) / rows_per_cta);
+  rmsnorm_noweight_4096_bf16_warp_fp32_kernel<16>
+      <<<grid, block, 0, static_cast<cudaStream_t>(stream)>>>(
+          M,
+          eps,
+          reinterpret_cast<const float4*>(input),
+          reinterpret_cast<float4*>(output));
+}
 """
 
 
@@ -130,6 +277,28 @@ def _smallm_bounds() -> tuple[int, int]:
     min_m = int(os.environ.get("OINK_RMSNORM_SMALLM_MIN_M", "4096"))
     max_m = int(os.environ.get("OINK_RMSNORM_SMALLM_MAX_M", "4096"))
     return min_m, max_m
+
+
+def _largem_bounds() -> tuple[int, int]:
+    min_m = int(os.environ.get("OINK_RMSNORM_LARGEM_MIN_M", "8192"))
+    max_m = int(os.environ.get("OINK_RMSNORM_LARGEM_MAX_M", str(1 << 30)))
+    return min_m, max_m
+
+
+def _largem_cta_dim_y(M: int) -> int:
+    override = os.environ.get("OINK_RMSNORM_LARGEM_CTA_DIM_Y", "").strip()
+    if override:
+        return max(1, int(override))
+    if M < 12288:
+        return 1
+    if M < 65536:
+        return 2
+    return 4
+
+
+def _largem_variant() -> str:
+    variant = os.environ.get("OINK_RMSNORM_LARGEM_VARIANT", "auto").strip().lower()
+    return variant or "auto"
 
 
 def _disabled() -> bool:
@@ -146,14 +315,14 @@ def _artifact_paths() -> tuple[Path, Path]:
 
 
 def _build_launcher():
-    global _LAUNCHER, _BUILD_FAILED
+    global _LAUNCHER_NOWEIGHT, _LAUNCHER_NOWEIGHT_LARGE, _LAUNCHER_NOWEIGHT_LARGE_FP32, _BUILD_FAILED
     if _disabled() or _BUILD_FAILED:
         return None
-    if _LAUNCHER is not None:
-        return _LAUNCHER
+    if _LAUNCHER_NOWEIGHT is not None:
+        return _LAUNCHER_NOWEIGHT
     with _BUILD_LOCK:
-        if _LAUNCHER is not None:
-            return _LAUNCHER
+        if _LAUNCHER_NOWEIGHT is not None:
+            return _LAUNCHER_NOWEIGHT
         if _BUILD_FAILED:
             return None
         cu_path, so_path = _artifact_paths()
@@ -175,20 +344,42 @@ def _build_launcher():
                 ]
                 subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
             lib = ctypes.CDLL(str(so_path))
-            fn = lib.launch_rmsnorm_noweight_4096_bf16
-            fn.argtypes = [
+            fn_noweight = lib.launch_rmsnorm_noweight_4096_bf16
+            fn_noweight.argtypes = [
                 ctypes.c_int,
                 ctypes.c_float,
                 ctypes.c_void_p,
                 ctypes.c_void_p,
                 ctypes.c_void_p,
             ]
-            fn.restype = None
-            _LAUNCHER = fn
+            fn_noweight.restype = None
+            fn_noweight_large = lib.launch_rmsnorm_noweight_4096_bf16_warp
+            fn_noweight_large.argtypes = [
+                ctypes.c_int,
+                ctypes.c_float,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            fn_noweight_large.restype = None
+            fn_noweight_large_fp32 = lib.launch_rmsnorm_noweight_4096_bf16_warp_fp32
+            fn_noweight_large_fp32.argtypes = [
+                ctypes.c_int,
+                ctypes.c_float,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+            ]
+            fn_noweight_large_fp32.restype = None
+            _LAUNCHER_NOWEIGHT = fn_noweight
+            _LAUNCHER_NOWEIGHT_LARGE = fn_noweight_large
+            _LAUNCHER_NOWEIGHT_LARGE_FP32 = fn_noweight_large_fp32
         except Exception:
             _BUILD_FAILED = True
             return None
-    return _LAUNCHER
+    return _LAUNCHER_NOWEIGHT
 
 
 def can_use_smallm_noweight_cuda(x: Tensor, out: Tensor) -> bool:
@@ -206,18 +397,47 @@ def can_use_smallm_noweight_cuda(x: Tensor, out: Tensor) -> bool:
     return min_m <= int(x.shape[0]) <= max_m
 
 
-def try_rmsnorm_smallm_noweight_cuda(x: Tensor, out: Tensor, eps: float) -> bool:
-    if not can_use_smallm_noweight_cuda(x, out):
+def can_use_largem_noweight_cuda(x: Tensor, out: Tensor) -> bool:
+    if x.dtype is not torch.bfloat16 or out.dtype is not torch.bfloat16:
         return False
+    if not x.is_cuda or not out.is_cuda:
+        return False
+    if x.dim() != 2 or out.dim() != 2 or x.shape != out.shape:
+        return False
+    if int(x.shape[1]) != 4096:
+        return False
+    if x.stride() != (4096, 1) or out.stride() != (4096, 1):
+        return False
+    min_m, max_m = _largem_bounds()
+    return min_m <= int(x.shape[0]) <= max_m
+
+
+def try_rmsnorm_smallm_noweight_cuda(x: Tensor, out: Tensor, eps: float) -> bool:
     launcher = _build_launcher()
     if launcher is None:
         return False
     stream = torch.cuda.current_stream(x.device).cuda_stream
-    launcher(
-        int(x.shape[0]),
-        float(eps),
-        ctypes.c_void_p(int(x.data_ptr())),
-        ctypes.c_void_p(int(out.data_ptr())),
-        ctypes.c_void_p(int(stream)),
-    )
-    return True
+    if can_use_smallm_noweight_cuda(x, out):
+        launcher(
+            int(x.shape[0]),
+            float(eps),
+            ctypes.c_void_p(int(x.data_ptr())),
+            ctypes.c_void_p(int(out.data_ptr())),
+            ctypes.c_void_p(int(stream)),
+        )
+        return True
+    if can_use_largem_noweight_cuda(x, out) and _LAUNCHER_NOWEIGHT_LARGE is not None:
+        variant = _largem_variant()
+        launcher = _LAUNCHER_NOWEIGHT_LARGE
+        if variant == "fp32" and _LAUNCHER_NOWEIGHT_LARGE_FP32 is not None:
+            launcher = _LAUNCHER_NOWEIGHT_LARGE_FP32
+        launcher(
+            int(x.shape[0]),
+            float(eps),
+            ctypes.c_void_p(int(x.data_ptr())),
+            ctypes.c_void_p(int(out.data_ptr())),
+            ctypes.c_void_p(int(stream)),
+            int(_largem_cta_dim_y(int(x.shape[0]))),
+        )
+        return True
+    return False

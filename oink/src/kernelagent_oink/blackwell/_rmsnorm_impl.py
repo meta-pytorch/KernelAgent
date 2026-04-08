@@ -19,18 +19,11 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import re
-import subprocess
-import sys
-import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-_HERE = os.path.dirname(__file__)
+# Vendored/adapted from Quack's SM100 RMSNorm with Oink-specific B200 tuning.
 
-# Vendored and adapted from Quack's SM100 RMSNorm so Oink stays self-contained
-# while preserving Quack-style numerics, pointer entrypoints, and B200 tuning.
-
-# CuTeDSL cache bytecode is not stable across versions, so isolate the default
-# cache directory by `nvidia-cutlass-dsl` version unless the user overrides it.
+# CuTeDSL cache bytecode is version-sensitive, so isolate the default cache.
 if "CUTE_DSL_CACHE_DIR" not in os.environ:
     try:
         _dsl_ver = importlib.metadata.version("nvidia-cutlass-dsl")
@@ -62,30 +55,35 @@ from cutlass import Float32, Int32, const_expr  # noqa: E402
 from cutlass.cute import runtime as rt  # noqa: E402
 from cutlass.cute.runtime import from_dlpack  # noqa: E402
 
-# Shared fast-launch utilities (env-flag parsing, stable ctypes args, pointer
-# helpers, and the global fast-launch enable/disable state).
+# Shared fast-launch helpers.
 from kernelagent_oink.blackwell.fast_launch import (  # noqa: E402
+    GenericFastLaunch as _GenericFastLaunch,
     StableF32Arg as _StableF32Arg,
     StableI32Arg as _StableI32Arg,
     _env_flag,
-    disable_fast_launch as _disable_fast_launch,
-    fast_launch_enabled as _fast_launch_enabled,
-    set_runtime_ptr as _set_runtime_ptr,
-    tls_cache as _tls_fast_launch_cache,
+    build_fast_launcher as _build_generic_fast_launcher,
 )
 from kernelagent_oink.blackwell._rmsnorm_smallm_cuda import (  # noqa: E402
     try_rmsnorm_smallm_noweight_cuda,
+)
+from kernelagent_oink.blackwell._rmsnorm_simple_weightonly import (  # noqa: E402
+    try_simple_weightonly_rmsnorm_forward,
+)
+from kernelagent_oink.blackwell import lite_quack as qutils  # noqa: E402
+from kernelagent_oink.blackwell.lite_quack import (  # noqa: E402
+    _KERNEL_ACCEPTS_LAYOUT_ARGS,
+    TORCH2CUTE_DTYPE,
+    RMSNormBackward as BaseRMSNormBackward,
+    convert_from_dlpack as convert_from_dlpack_cute,
+    get_sm_count,
+    row_reduce,
 )
 
 # Simple compile cache declared early so direct execution works
 _PTR_COMPILE_CACHE = {}
 
 
-# Cache a (1, sm_count) fp32 ones row used for GEMM-based dw/db partial reductions.
-#
-# On SM100, `dw_partial.sum(dim=0)` can be a double-digit microsecond tail for
-# Quack-suite small shapes (e.g. M=8192, N=4096). A cached GEMM-based reduction
-# is consistently faster and avoids per-call allocation overhead.
+# Cached fp32 ones row for GEMM-based partial reductions.
 _DW_REDUCE_ONES_CACHE: dict[tuple[int, int], Tensor] = {}
 
 
@@ -110,69 +108,19 @@ def _reduce_partial_sum_fp32(partial: Tensor, *, device_index: int) -> Tensor:
     return torch.mm(ones, partial).squeeze(0)
 
 
-# Fused-add RMSNorm schedule knobs (read once at import time; set env vars before
-# importing this module if you want to override).
+# Fused-add schedule knobs; set env vars before importing to override.
 _DIRECT_GMEM_POLICY = (
     os.environ.get("OINK_RMSNORM_DIRECT_GMEM", "auto").strip().lower() or "auto"
 )
 _COPY_BITS_POLICY = (
     os.environ.get("OINK_RMSNORM_COPY_BITS", "auto").strip().lower() or "auto"
 )
-_ENABLE_CLUSTER_ILP = _env_flag("OINK_RMSNORM_ENABLE_CLUSTER_ILP", default=False)
-_ENABLE_CLUSTER_ILP_UNSAFE = _env_flag(
-    "OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE", default=False
-)
-_ENABLE_TPR256 = _env_flag("OINK_RMSNORM_ENABLE_TPR256", default=False)
 _ENABLE_STAGE2 = _env_flag("OINK_RMSNORM_ENABLE_STAGE2", default=False)
 
-# Forward dispatch control:
-# - Default behavior: use the pointer-based path when safe, otherwise fall back
-#   to the stage-2 module (then the torch reference).
-# - If you want to force stage-2 even when the pointer path is available (for
-#   experimentation / A-B testing), set this env var **before** importing this
-#   module.
+# Forward dispatch control.
 _FORCE_RMSNORM_STAGE2_FWD = _env_flag(
     "KERNELAGENT_OINK_FORCE_RMSNORM_STAGE2", default=False
 )
-
-
-def _parse_version_tuple(version: str) -> tuple[int, int, int]:
-    parts = version.split(".")
-    nums: list[int] = []
-    for part in parts[:3]:
-        match = re.match(r"^(\d+)", part)
-        nums.append(int(match.group(1)) if match is not None else 0)
-    while len(nums) < 3:
-        nums.append(0)
-    return nums[0], nums[1], nums[2]
-
-
-def _cutlass_dsl_version() -> tuple[int, int, int] | None:
-    try:
-        return _parse_version_tuple(importlib.metadata.version("nvidia-cutlass-dsl"))
-    except Exception:
-        return None
-
-
-_CUTLASS_DSL_VERSION = _cutlass_dsl_version()
-# CuTeDSL 4.3.4 tightened some kernel argument expectations (notably around
-# passing Layout/Shape/Constexpr objects into @cute.kernel functions). Keep the
-# older signature for 4.3.2, but switch to a 4.3.4-compatible signature when we
-# detect 4.3.4+ (or when version detection is unavailable).
-_KERNEL_ACCEPTS_LAYOUT_ARGS = (
-    _CUTLASS_DSL_VERSION is not None and _CUTLASS_DSL_VERSION < (4, 3, 4)
-)
-
-if _ENABLE_CLUSTER_ILP and not _ENABLE_CLUSTER_ILP_UNSAFE:
-    # We have observed reproducible segfaults in some CuTeDSL builds when using
-    # cluster launches for this schedule. Require an explicit UNSAFE opt-in to
-    # avoid accidental crashes.
-    _ENABLE_CLUSTER_ILP = False
-    print(
-        "Oink: OINK_RMSNORM_ENABLE_CLUSTER_ILP requested but disabled by default due to "
-        "known instability; set OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE=1 to force-enable.",
-        file=sys.stderr,
-    )
 
 
 def _direct_gmem_from_policy(*, default: bool) -> bool:
@@ -249,8 +197,10 @@ def _resolve_forward_launch_config(
     default_copy_bits = 256 if can_use_256 else 128
     if dtype.width == 16 and N == 128:
         default_copy_bits = 128
+    if dtype.width == 16 and N == 4096:
+        default_copy_bits = 128
     if dtype.width == 16 and weight_dtype is not None and weight_dtype.width == 32:
-        default_copy_bits = 64
+        default_copy_bits = 128 if N == 4096 else 64
 
     copy_bits = _copy_bits_from_policy(
         default=default_copy_bits, can_use_256=can_use_256
@@ -312,10 +262,6 @@ def _should_force_stage2_forward(
 
     M, N = int(x.shape[0]), int(x.shape[1])
 
-    # Empirical B200 routing based on in-repo RMSNorm benchmarks:
-    # - fp32 weights: stage-2 wins clearly for large DSv3-like rows.
-    # - same-dtype weights continue to prefer the pointer path here; the
-    #   available stage-2 fallback is not a correctness/performance upgrade.
     if weight.dtype is torch.float32:
         if N == 7168 and M >= 16384:
             return True
@@ -338,9 +284,6 @@ def _forward_launch_overrides(
     nt_default: int | None = None
     cluster_n_default: int | None = None
 
-    # For bf16/fp16 activations with fp32 weights at N=7168, the pointer path's
-    # default 224-thread row schedule is best once stage-2 takes over (M>=16384),
-    # but a narrower 128-thread row wins consistently on smaller DSv3-like rows.
     if (
         dtype.width == 16
         and weight_dtype is not None
@@ -363,6 +306,109 @@ def _forward_launch_overrides(
         tpr_default if tpr is None else tpr,
         nt_default if nt is None else nt,
         cluster_n_default if cluster_n is None else cluster_n,
+    )
+
+
+def _force_stage2_forward_launch_config(
+    launch_cfg: _ForwardLaunchConfig,
+    *,
+    M: int,
+    N: int,
+    dtype: type[cutlass.Numeric],
+    weight: Tensor | None,
+    weight_dtype: type[cutlass.Numeric] | None,
+) -> _ForwardLaunchConfig:
+    if (
+        dtype.width != 16
+        or weight is None
+        or weight_dtype is None
+        or weight_dtype.width != 32
+    ):
+        return launch_cfg
+    if N == 7168 and M >= 16384:
+        stage = 1
+        tpr_override, nt_override = 128, 128
+    elif M >= 65536 and N in {6144, 8192}:
+        stage = 2
+        tpr_override, nt_override = 128, (128 if N == 6144 else 256)
+    else:
+        return launch_cfg
+    return replace(
+        launch_cfg,
+        direct_gmem=False,
+        use_async=True,
+        copy_bits=128,
+        assumed_align=16,
+        weight_assumed_align=_weight_assumed_align(
+            default=16,
+            weight=weight,
+            weight_dtype=weight_dtype,
+        ),
+        stage=stage,
+        tpr_override=tpr_override,
+        nt_override=nt_override,
+        cluster_n_override=None,
+    )
+
+
+def _override_simple_weight_only_forward_launch_config(
+    launch_cfg: _ForwardLaunchConfig,
+    *,
+    M: int,
+    N: int,
+    dtype: type[cutlass.Numeric],
+    weight: Tensor | None,
+    weight_dtype: type[cutlass.Numeric] | None,
+) -> _ForwardLaunchConfig:
+    if (
+        _DIRECT_GMEM_POLICY != "auto"
+        or _COPY_BITS_POLICY != "auto"
+        or os.environ.get("OINK_RMSNORM_TPR", "").strip()
+        or os.environ.get("OINK_RMSNORM_NT", "").strip()
+        or os.environ.get("OINK_RMSNORM_CLUSTER_N", "").strip()
+        or _ENABLE_STAGE2
+    ):
+        return launch_cfg
+    if (
+        dtype.width != 16
+        or weight is None
+        or weight_dtype is None
+        or weight_dtype.width != 16
+        or M < 4096
+    ):
+        return launch_cfg
+
+    if N == 7168:
+        if M >= 262144:
+            return launch_cfg
+        stage = 2
+        if M == 131072:
+            tpr_override, nt_override = 64, 64
+        elif M >= 65536:
+            tpr_override, nt_override = 128, 128
+        else:
+            tpr_override, nt_override = None, None
+    elif N == 8192 and M >= 65536:
+        stage = 1
+        tpr_override, nt_override = 128, 128
+    else:
+        return launch_cfg
+
+    return replace(
+        launch_cfg,
+        direct_gmem=False,
+        use_async=True,
+        copy_bits=128,
+        assumed_align=16,
+        weight_assumed_align=_weight_assumed_align(
+            default=16,
+            weight=weight,
+            weight_dtype=weight_dtype,
+        ),
+        stage=stage,
+        tpr_override=tpr_override,
+        nt_override=nt_override,
+        cluster_n_override=None,
     )
 
 
@@ -408,6 +454,21 @@ def _apply_launch_overrides(
         op._cluster_n_override = cluster_n_override  # type: ignore[attr-defined]
 
 
+def _specialized_bf16_threads(N: int, copy_bits: int) -> tuple[int, int] | None:
+    if N == 128:
+        return 16, 128
+    if N == 1536:
+        return 96, 96
+    if N == 7168:
+        return 224, 224
+    if N == 6144:
+        threads = 192 if copy_bits >= 256 else 256
+        return threads, threads
+    if N == 8192:
+        return 256, 256
+    return None
+
+
 def _current_stream_handle(device_index: int) -> int:
     if torch.cuda.current_device() != device_index:
         torch.cuda.set_device(device_index)
@@ -441,6 +502,35 @@ def _make_rmsnorm_op(
         cluster_n_override=cluster_n_override,
     )
     return op
+
+
+def _match_stride(tensor: Tensor | None, ref: Tensor | None) -> Tensor | None:
+    if tensor is None or ref is None or tensor.stride() == ref.stride():
+        return tensor
+    out = torch.empty_strided(ref.shape, ref.stride(), device=ref.device, dtype=ref.dtype)
+    out.copy_(tensor)
+    return out
+
+
+def _rmsnorm_ref_outputs(
+    x: Tensor,
+    weight: Tensor | None,
+    bias: Tensor | None,
+    residual: Tensor | None,
+    eps: float,
+    store_rstd: bool,
+) -> tuple[Tensor, Tensor | None, Tensor | None]:
+    y = _match_stride(rmsnorm_ref(x, weight, bias, residual, eps), x)
+    rstd = None
+    if store_rstd:
+        xf = x.float()
+        if residual is not None:
+            xf = xf + residual.float()
+        rstd = torch.rsqrt(xf.square().mean(dim=-1) + eps).to(torch.float32)
+    residual_out = None
+    if residual is not None:
+        residual_out = _match_stride((x.float() + residual.float()).to(x.dtype), residual)
+    return y, rstd, residual_out
 
 
 def _make_forward_ptrs(
@@ -547,111 +637,15 @@ def _make_bwd_ptrs(
     )
 
 
-class _BasePtrFastLaunch:
-    def __init__(
-        self,
-        *,
-        compiled: object,
-        executor: object,
-        capi_func: object,
-        stream: cuda.CUstream,
-        packed_args: object,
-        keepalive: tuple[object, ...],
-        ptr_slots: tuple[tuple[object | None, str], ...],
-        scalar_slots: tuple[tuple[object, str, object], ...],
-    ):
-        self._compiled = compiled
-        self._capi_func = capi_func
-        self._stream = stream
-        self._packed_args = packed_args
-        self._keepalive = keepalive
-        self._cuda_result = getattr(executor, "cuda_result", None)
-        self._use_fast_launch = True
-        self._ptr_slots = ptr_slots
-        self._ptr_last = [-1] * len(ptr_slots)
-        self._scalar_slots = scalar_slots
-        self._scalar_last = [initial for _, _, initial in scalar_slots]
-
-    def launch(self, **kwargs) -> None:
-        if not _fast_launch_enabled() or not self._use_fast_launch:
-            self._fallback_launch(**kwargs)
-            return
-        try:
-            for idx, (runtime_ptr, tensor_name) in enumerate(self._ptr_slots):
-                if runtime_ptr is None:
-                    continue
-                device_ptr = kwargs[tensor_name].data_ptr()
-                if device_ptr != self._ptr_last[idx]:
-                    _set_runtime_ptr(runtime_ptr, device_ptr)
-                    self._ptr_last[idx] = device_ptr
-            for idx, (stable_arg, arg_name, _) in enumerate(self._scalar_slots):
-                value = kwargs[arg_name]
-                if value != self._scalar_last[idx]:
-                    stable_arg.set(value)
-                    self._scalar_last[idx] = value
-        except AttributeError:
-            self._disable_fast_launch()
-            self._fallback_launch(**kwargs)
-            return
-
-        if self._cuda_result is not None:
-            self._cuda_result.value = 0
-
-        ret = self._capi_func(self._packed_args)  # type: ignore[misc]
-        if ret != 0:
-            raise RuntimeError(f"CuTeDSL capi_func returned non-zero: {ret}")
-        if self._cuda_result is not None:
-            err = int(self._cuda_result.value)
-            if err != 0:
-                raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
-
-    def _disable_fast_launch(self) -> None:
-        self._use_fast_launch = False
-        _disable_fast_launch()
-
-
-class _PtrRmsnormFastLaunch(_BasePtrFastLaunch):
-    def __init__(
-        self,
-        *,
-        compiled: object,
-        executor: object,
-        capi_func: object,
-        ptr_x: object,
-        ptr_w: object | None,
-        ptr_out: object,
-        arg_m: _StableI32Arg,
-        arg_n: _StableI32Arg,
-        arg_ld: _StableI32Arg,
-        arg_eps: _StableF32Arg,
-        stream: cuda.CUstream,
-        assumed_align: int,
-        assumed_align_w: int,
-        weight_dtype: type[cutlass.Numeric] | None,
-        packed_args: object,
-        keepalive: tuple[object, ...],
-    ):
-        del arg_n
-        super().__init__(
-            compiled=compiled,
-            executor=executor,
-            capi_func=capi_func,
-            stream=stream,
-            packed_args=packed_args,
-            keepalive=keepalive,
-            ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_out, "out")),
-            scalar_slots=(
-                (arg_m, "M", -1),
-                (arg_ld, "ld", -1),
-                (arg_eps, "eps", float("nan")),
-            ),
-        )
-        self._assumed_align = int(assumed_align)
-        self._assumed_align_w = int(assumed_align_w)
-        self._weight_dtype = weight_dtype
-
+def _make_rmsnorm_fallback_launch(
+    *,
+    compiled: object,
+    stream: cuda.CUstream,
+    assumed_align: int,
+    assumed_align_w: int,
+    weight_dtype: type[cutlass.Numeric] | None,
+):
     def _fallback_launch(
-        self,
         *,
         x: Tensor,
         weight: Tensor | None,
@@ -663,14 +657,14 @@ class _PtrRmsnormFastLaunch(_BasePtrFastLaunch):
         **_: object,
     ) -> None:
         dtype = TORCH2CUTE_DTYPE[x.dtype]
-        ptr_x = _make_gmem_ptr(dtype, x.data_ptr(), assumed_align=self._assumed_align)
-        ptr_out = _make_gmem_ptr(dtype, out.data_ptr(), assumed_align=self._assumed_align)
+        ptr_x = _make_gmem_ptr(dtype, x.data_ptr(), assumed_align=assumed_align)
+        ptr_out = _make_gmem_ptr(dtype, out.data_ptr(), assumed_align=assumed_align)
         ptr_w = _make_optional_gmem_ptr(
             weight,
-            self._weight_dtype or dtype,
-            assumed_align=self._assumed_align_w,
+            weight_dtype or dtype,
+            assumed_align=assumed_align_w,
         )
-        self._compiled(
+        compiled(
             ptr_x,
             ptr_w,
             None,
@@ -681,49 +675,20 @@ class _PtrRmsnormFastLaunch(_BasePtrFastLaunch):
             Int32(M),
             Int32(N),
             Int32(ld),
-            self._stream,
+            stream,
             Float32(eps),
         )
 
+    return _fallback_launch
 
-class _PtrFusedAddRmsnormFastLaunch(_BasePtrFastLaunch):
-    def __init__(
-        self,
-        *,
-        compiled: object,
-        executor: object,
-        capi_func: object,
-        ptr_x: object,
-        ptr_w: object,
-        ptr_res: object,
-        arg_m: _StableI32Arg,
-        arg_n: _StableI32Arg,
-        arg_ld_x: _StableI32Arg,
-        arg_eps: _StableF32Arg,
-        stream: cuda.CUstream,
-        assumed_align: int,
-        packed_args: object,
-        keepalive: tuple[object, ...],
-    ):
-        del arg_n
-        super().__init__(
-            compiled=compiled,
-            executor=executor,
-            capi_func=capi_func,
-            stream=stream,
-            packed_args=packed_args,
-            keepalive=keepalive,
-            ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_res, "residual")),
-            scalar_slots=(
-                (arg_m, "M", -1),
-                (arg_ld_x, "ld_x", -1),
-                (arg_eps, "eps", float("nan")),
-            ),
-        )
-        self._assumed_align = int(assumed_align)
 
+def _make_fused_add_fallback_launch(
+    *,
+    compiled: object,
+    stream: cuda.CUstream,
+    assumed_align: int,
+):
     def _fallback_launch(
-        self,
         *,
         x: Tensor,
         weight: Tensor,
@@ -740,74 +705,32 @@ class _PtrFusedAddRmsnormFastLaunch(_BasePtrFastLaunch):
             weight=weight,
             residual=residual,
             dtype=dtype,
-            assumed_align=self._assumed_align,
+            assumed_align=assumed_align,
         )
-        self._compiled(
+        compiled(
             ptr_x,
             ptr_w,
             ptr_res,
             Int32(M),
             Int32(N),
             Int32(ld_x),
-            self._stream,
+            stream,
             Float32(eps),
         )
 
+    return _fallback_launch
 
-class _PtrRmsnormBwdFastLaunch(_BasePtrFastLaunch):
-    def __init__(
-        self,
-        *,
-        compiled: object,
-        executor: object,
-        capi_func: object,
-        ptr_x: object,
-        ptr_w: object | None,
-        ptr_dout: object,
-        ptr_rstd: object,
-        ptr_dx: object,
-        ptr_dw_partial: object | None,
-        arg_m: _StableI32Arg,
-        arg_n: _StableI32Arg,
-        arg_ld: _StableI32Arg,
-        arg_sm_count: _StableI32Arg,
-        stream: cuda.CUstream,
-        assumed_align_x: int,
-        assumed_align_w: int,
-        assumed_align_dw: int,
-        weight_dtype: type[cutlass.Numeric] | None,
-        packed_args: object,
-        keepalive: tuple[object, ...],
-    ):
-        del arg_n
-        super().__init__(
-            compiled=compiled,
-            executor=executor,
-            capi_func=capi_func,
-            stream=stream,
-            packed_args=packed_args,
-            keepalive=keepalive,
-            ptr_slots=(
-                (ptr_x, "x"),
-                (ptr_w, "weight"),
-                (ptr_dout, "dout"),
-                (ptr_rstd, "rstd"),
-                (ptr_dx, "dx"),
-                (ptr_dw_partial, "dw_partial"),
-            ),
-            scalar_slots=(
-                (arg_m, "M", -1),
-                (arg_ld, "ld", -1),
-                (arg_sm_count, "sm_count", -1),
-            ),
-        )
-        self._assumed_align_x = int(assumed_align_x)
-        self._assumed_align_w = int(assumed_align_w)
-        self._assumed_align_dw = int(assumed_align_dw)
-        self._weight_dtype = weight_dtype
 
+def _make_rmsnorm_bwd_fallback_launch(
+    *,
+    compiled: object,
+    stream: cuda.CUstream,
+    assumed_align_x: int,
+    assumed_align_w: int,
+    assumed_align_dw: int,
+    weight_dtype: type[cutlass.Numeric] | None,
+):
     def _fallback_launch(
-        self,
         *,
         x: Tensor,
         weight: Tensor | None,
@@ -822,27 +745,27 @@ class _PtrRmsnormBwdFastLaunch(_BasePtrFastLaunch):
         **_: object,
     ) -> None:
         dtype = TORCH2CUTE_DTYPE[x.dtype]
-        ptr_x = _make_gmem_ptr(dtype, x.data_ptr(), assumed_align=self._assumed_align_x)
-        ptr_dout = _make_gmem_ptr(
-            dtype, dout.data_ptr(), assumed_align=self._assumed_align_x
-        )
-        ptr_dx = _make_gmem_ptr(dtype, dx.data_ptr(), assumed_align=self._assumed_align_x)
+        ptr_x = _make_gmem_ptr(dtype, x.data_ptr(), assumed_align=assumed_align_x)
+        ptr_dout = _make_gmem_ptr(dtype, dout.data_ptr(), assumed_align=assumed_align_x)
+        ptr_dx = _make_gmem_ptr(dtype, dx.data_ptr(), assumed_align=assumed_align_x)
         ptr_rstd = _make_gmem_ptr(
             TORCH2CUTE_DTYPE[rstd.dtype],
             rstd.data_ptr(),
-            assumed_align=self._assumed_align_x,
+            assumed_align=assumed_align_x,
         )
         ptr_w = _make_optional_gmem_ptr(
             weight,
-            self._weight_dtype or dtype,
-            assumed_align=self._assumed_align_w,
+            weight_dtype or dtype,
+            assumed_align=assumed_align_w,
         )
         ptr_dw_partial = _make_optional_gmem_ptr(
             dw_partial,
-            TORCH2CUTE_DTYPE[dw_partial.dtype] if dw_partial is not None else cutlass.Float32,
-            assumed_align=self._assumed_align_dw,
+            TORCH2CUTE_DTYPE[dw_partial.dtype]
+            if dw_partial is not None
+            else cutlass.Float32,
+            assumed_align=assumed_align_dw,
         )
-        self._compiled(
+        compiled(
             ptr_x,
             ptr_w,
             ptr_dout,
@@ -853,48 +776,10 @@ class _PtrRmsnormBwdFastLaunch(_BasePtrFastLaunch):
             Int32(N),
             Int32(ld),
             Int32(sm_count),
-            self._stream,
+            stream,
         )
 
-def _build_fast_launcher(
-    *,
-    key: tuple[object, ...],
-    compiled: object,
-    device_index: int,
-    stream_handle: int,
-    execution_args_builder,
-    keepalive_items: tuple[object, ...],
-    launcher_builder,
-):
-    if not _fast_launch_enabled():
-        return None
-    cache = _tls_fast_launch_cache()
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-
-    stream = cuda.CUstream(int(stream_handle))
-    executor = compiled.to(device_index)  # type: ignore[attr-defined]
-    try:
-        exe_args, adapted_args = executor.generate_execution_args(
-            *execution_args_builder(stream)
-        )
-        packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
-        capi_func = compiled.capi_func  # type: ignore[attr-defined]
-    except AttributeError:
-        _disable_fast_launch()
-        return None
-
-    launcher = launcher_builder(
-        executor=executor,
-        capi_func=capi_func,
-        stream=stream,
-        packed_args=packed_args,
-        keepalive=(executor, *keepalive_items, stream, *adapted_args),
-    )
-    cache[key] = launcher
-    return launcher
-
+    return _fallback_launch
 
 def _get_fast_ptr_rmsnorm_bwd_launcher(
     *,
@@ -909,9 +794,7 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
     assumed_align_x: int,
     assumed_align_w: int,
     assumed_align_dw: int,
-) -> _PtrRmsnormBwdFastLaunch | None:
-    if not _fast_launch_enabled():
-        return None
+) -> _GenericFastLaunch | None:
     assumed_align_x = int(assumed_align_x)
     assumed_align_w = int(assumed_align_w)
     assumed_align_dw = int(assumed_align_dw)
@@ -929,11 +812,6 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
         assumed_align_w,
         assumed_align_dw,
     )
-    cache = _tls_fast_launch_cache()
-    cached = cache.get(key)
-    if cached is not None:
-        return cached  # type: ignore[return-value]
-
     ptr_x = _make_gmem_ptr(dtype, 0, assumed_align=assumed_align_x)
     ptr_w = (
         _make_gmem_ptr(weight_dtype or dtype, 0, assumed_align=assumed_align_w)
@@ -952,10 +830,12 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
     arg_n = _StableI32Arg(N)
     arg_ld = _StableI32Arg(N)
     arg_sm_count = _StableI32Arg(0)
-    stream = cuda.CUstream(int(stream_handle))
-    executor = compiled.to(device_index)  # type: ignore[attr-defined]
-    try:
-        exe_args, adapted_args = executor.generate_execution_args(
+    return _build_generic_fast_launcher(
+        key=key,
+        compiled=compiled,
+        device_index=device_index,
+        stream_handle=stream_handle,
+        execution_args_builder=lambda stream: (
             ptr_x,
             ptr_w,
             ptr_dout,
@@ -967,53 +847,41 @@ def _get_fast_ptr_rmsnorm_bwd_launcher(
             arg_ld,
             arg_sm_count,
             stream,
-        )
-        packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
-        capi_func = compiled.capi_func  # type: ignore[attr-defined]
-    except AttributeError:
-        _disable_fast_launch()
-        return None
-
-    keepalive: tuple[object, ...] = (
-        executor,
-        ptr_x,
-        ptr_w,
-        ptr_dout,
-        ptr_rstd,
-        ptr_dx,
-        ptr_dw_partial,
-        arg_m,
-        arg_n,
-        arg_ld,
-        arg_sm_count,
-        stream,
-        *adapted_args,
+        ),
+        keepalive_items=(
+            ptr_x,
+            ptr_w,
+            ptr_dout,
+            ptr_rstd,
+            ptr_dx,
+            ptr_dw_partial,
+            arg_m,
+            arg_n,
+            arg_ld,
+            arg_sm_count,
+        ),
+        ptr_slots=(
+            (ptr_x, "x"),
+            (ptr_w, "weight"),
+            (ptr_dout, "dout"),
+            (ptr_rstd, "rstd"),
+            (ptr_dx, "dx"),
+            (ptr_dw_partial, "dw_partial"),
+        ),
+        scalar_slots=(
+            (arg_m, "M", -1),
+            (arg_ld, "ld", -1),
+            (arg_sm_count, "sm_count", -1),
+        ),
+        fallback_launch_builder=lambda stream: _make_rmsnorm_bwd_fallback_launch(
+            compiled=compiled,
+            stream=stream,
+            assumed_align_x=assumed_align_x,
+            assumed_align_w=assumed_align_w,
+            assumed_align_dw=assumed_align_dw,
+            weight_dtype=weight_dtype if has_weight else None,
+        ),
     )
-
-    launcher = _PtrRmsnormBwdFastLaunch(
-        compiled=compiled,
-        executor=executor,
-        capi_func=capi_func,
-        ptr_x=ptr_x,
-        ptr_w=ptr_w,
-        ptr_dout=ptr_dout,
-        ptr_rstd=ptr_rstd,
-        ptr_dx=ptr_dx,
-        ptr_dw_partial=ptr_dw_partial,
-        arg_m=arg_m,
-        arg_n=arg_n,
-        arg_ld=arg_ld,
-        arg_sm_count=arg_sm_count,
-        stream=stream,
-        assumed_align_x=assumed_align_x,
-        assumed_align_w=assumed_align_w,
-        assumed_align_dw=assumed_align_dw,
-        weight_dtype=weight_dtype if has_weight else None,
-        packed_args=packed_args,
-        keepalive=keepalive,
-    )
-    cache[key] = launcher
-    return launcher
 
 
 def _get_fast_ptr_rmsnorm_launcher(
@@ -1028,7 +896,7 @@ def _get_fast_ptr_rmsnorm_launcher(
     assumed_align: int = 16,
     assumed_align_w: int | None = None,
     eps: float,
-) -> _PtrRmsnormFastLaunch | None:
+) -> _GenericFastLaunch | None:
     assumed_align = int(assumed_align)
     assumed_align_w = int(assumed_align if assumed_align_w is None else assumed_align_w)
     key = (
@@ -1054,7 +922,7 @@ def _get_fast_ptr_rmsnorm_launcher(
     arg_n = _StableI32Arg(N)
     arg_ld = _StableI32Arg(N)
     arg_eps = _StableF32Arg(eps)
-    return _build_fast_launcher(
+    return _build_generic_fast_launcher(
         key=key,
         compiled=compiled,
         device_index=device_index,
@@ -1074,19 +942,14 @@ def _get_fast_ptr_rmsnorm_launcher(
             arg_eps,
         ),
         keepalive_items=(ptr_x, ptr_w, ptr_out, arg_m, arg_n, arg_ld, arg_eps),
-        launcher_builder=lambda **common: _PtrRmsnormFastLaunch(
+        ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_out, "out")),
+        scalar_slots=((arg_m, "M", -1), (arg_ld, "ld", -1), (arg_eps, "eps", float("nan"))),
+        fallback_launch_builder=lambda stream: _make_rmsnorm_fallback_launch(
             compiled=compiled,
-            ptr_x=ptr_x,
-            ptr_w=ptr_w,
-            ptr_out=ptr_out,
-            arg_m=arg_m,
-            arg_n=arg_n,
-            arg_ld=arg_ld,
-            arg_eps=arg_eps,
+            stream=stream,
             assumed_align=assumed_align,
             assumed_align_w=assumed_align_w,
             weight_dtype=weight_dtype if has_weight else None,
-            **common,
         ),
     )
 
@@ -1104,7 +967,7 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
     direct_gmem: bool,
     assumed_align: int,
     eps: float,
-) -> _PtrFusedAddRmsnormFastLaunch | None:
+) -> _GenericFastLaunch | None:
     assumed_align = int(assumed_align)
     key = (
         "ptr_fused_add_fast",
@@ -1126,7 +989,7 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
     arg_n = _StableI32Arg(N)
     arg_ld_x = _StableI32Arg(N)
     arg_eps = _StableF32Arg(eps)
-    return _build_fast_launcher(
+    return _build_generic_fast_launcher(
         key=key,
         compiled=compiled,
         device_index=device_index,
@@ -1142,33 +1005,14 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
             arg_eps,
         ),
         keepalive_items=(ptr_x, ptr_w, ptr_res, arg_m, arg_n, arg_ld_x, arg_eps),
-        launcher_builder=lambda **common: _PtrFusedAddRmsnormFastLaunch(
+        ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_res, "residual")),
+        scalar_slots=((arg_m, "M", -1), (arg_ld_x, "ld_x", -1), (arg_eps, "eps", float("nan"))),
+        fallback_launch_builder=lambda stream: _make_fused_add_fallback_launch(
             compiled=compiled,
-            ptr_x=ptr_x,
-            ptr_w=ptr_w,
-            ptr_res=ptr_res,
-            arg_m=arg_m,
-            arg_n=arg_n,
-            arg_ld_x=arg_ld_x,
-            arg_eps=arg_eps,
+            stream=stream,
             assumed_align=assumed_align,
-            **common,
         ),
     )
-
-
-# Local helpers for reduction, dtype mapping, and coordinate/predicate utilities.
-#
-# NOTE: Avoid `from . import ...` imports here: CuTeDSL's AST preprocessor may
-# mishandle that form (module=None in the AST). Use fully-qualified imports.
-from kernelagent_oink.blackwell import lite_quack as qutils  # noqa: E402
-from kernelagent_oink.blackwell.lite_quack import (  # noqa: E402
-    TORCH2CUTE_DTYPE,
-    RMSNormBackward as BaseRMSNormBackward,
-    convert_from_dlpack as convert_from_dlpack_cute,
-    get_sm_count,
-    row_reduce,
-)
 
 
 # -------------------------
@@ -1212,170 +1056,6 @@ def copy_tiled(
 # -------------------------
 
 
-# Defined here (below fast-launch helpers) to keep import-time policy/config at
-# the top of the file lightweight. Only called lazily from RMSNormSM100.
-#
-# CuTeDSL stability probe for the experimental cluster_n>1 + direct-GMEM schedule.
-#
-# Some CuTeDSL builds segfault during JIT compilation when combining:
-# - cluster launches (cluster_n>1) and
-# - direct-GMEM loads/stores (no staging SMEM tiles).
-#
-# We keep the schedule gated behind `OINK_RMSNORM_ENABLE_CLUSTER_ILP=1` +
-# `OINK_RMSNORM_ENABLE_CLUSTER_ILP_UNSAFE=1`, and additionally run a one-time
-# out-of-process compile probe so we can safely fall back to the staged SMEM
-# path instead of crashing the parent process.
-#
-# This is (currently) sensitive to the vector width: we have observed
-# reproducible segfaults for the 256b universal-copy path, while the 128b path
-# can succeed. Cache the maximum supported copy width (0 = unsupported).
-_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS: int | None = None
-_CLUSTER_DIRECT_GMEM_PROBE_LOCK = threading.Lock()
-_CLUSTER_DIRECT_GMEM_PROBE_WARNED = False
-
-
-def _probe_cluster_direct_gmem_max_copy_bits() -> int:
-    global _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
-    global _CLUSTER_DIRECT_GMEM_PROBE_WARNED
-
-    override = os.environ.get("OINK_RMSNORM_CLUSTER_DIRECT_GMEM_MAX_COPY_BITS")
-    if override is not None and override.strip() != "":
-        try:
-            value = int(override)
-        except ValueError:
-            value = 0
-        value = 256 if value >= 256 else 128 if value >= 128 else 0
-        _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = value
-        return value
-
-    if _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS is not None:
-        return _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
-
-    with _CLUSTER_DIRECT_GMEM_PROBE_LOCK:
-        if _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS is not None:
-            return _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS
-
-        script_template = r"""
-import os
-
-os.environ["OINK_CUTEDSL_FAST_LAUNCH"] = "0"
-
-import cutlass
-import cutlass.cute as cute
-import cuda.bindings.driver as cuda
-from cutlass import Float32, Int32
-from cutlass.cute import runtime as rt
-
-from kernelagent_oink.blackwell import rmsnorm
-
-N = 7168
-dtype = cutlass.BFloat16
-
-copy_bits = int(os.environ["OINK_PROBE_COPY_BITS"])
-assumed_align = int(os.environ["OINK_PROBE_ASSUMED_ALIGN"])
-
-op = rmsnorm.RMSNormSM100(
-    N,
-    dtype,
-    stage=1,
-    copy_bits=copy_bits,
-    use_async=False,
-    direct_gmem=True,
-)
-op._cluster_n_override = 2  # 2 CTAs per row
-
-ptr_x = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-ptr_res = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-ptr_w = rt.make_ptr(dtype, 0, mem_space=rt.AddressSpace.gmem, assumed_align=assumed_align)
-
-_ = cute.compile(
-    op.launch_from_ptrs_fused_add_inplace,
-    ptr_x,
-    ptr_w,
-    ptr_res,
-    Int32(4096),
-    Int32(N),
-    Int32(N),
-    cuda.CUstream(0),
-    Float32(1e-6),
-)
-print(f"ok {copy_bits}")
-"""
-
-        env = os.environ.copy()
-        # The probe runs in a fresh subprocess, so it won't inherit any
-        # benchmark-harness sys.path tweaks. Ensure the in-tree Oink source is
-        # importable so `import kernelagent_oink...` works reliably.
-        oink_src = os.path.abspath(os.path.join(_HERE, "..", ".."))
-        if os.path.isdir(oink_src):
-            py_path = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = oink_src + (os.pathsep + py_path if py_path else "")
-        env["PYTHONNOUSERSITE"] = "1"
-
-        def run_probe(copy_bits: int, assumed_align: int):
-            probe_env = env.copy()
-            probe_env["OINK_PROBE_COPY_BITS"] = str(copy_bits)
-            probe_env["OINK_PROBE_ASSUMED_ALIGN"] = str(assumed_align)
-            return subprocess.run(
-                [sys.executable, "-c", script_template],
-                env=probe_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=120.0,
-            )
-
-        proc_256 = None
-        proc_128 = None
-        try:
-            proc_256 = run_probe(256, 32)
-            if proc_256.returncode == 0:
-                max_bits = 256
-            else:
-                proc_128 = run_probe(128, 16)
-                max_bits = 128 if proc_128.returncode == 0 else 0
-        except Exception:
-            max_bits = 0
-
-        if not _CLUSTER_DIRECT_GMEM_PROBE_WARNED and max_bits != 256:
-            _CLUSTER_DIRECT_GMEM_PROBE_WARNED = True
-            if max_bits == 128:
-                print(
-                    "Oink: cluster_n>1 + direct_gmem 256b compile probe failed; "
-                    "using 128b copies for the cluster ILP schedule.",
-                    file=sys.stderr,
-                )
-                if proc_256 is not None and proc_256.stderr:
-                    tail = "\n".join(proc_256.stderr.splitlines()[-12:])
-                    print(f"Oink: probe stderr tail:\n{tail}", file=sys.stderr)
-            else:
-                rc_256 = proc_256.returncode if proc_256 is not None else "not run"
-                rc_128 = proc_128.returncode if proc_128 is not None else "not run"
-                print(
-                    "Oink: cluster_n>1 + direct_gmem compile probe failed; "
-                    f"falling back to staged SMEM path "
-                    f"(256b rc={rc_256}, 128b rc={rc_128}).",
-                    file=sys.stderr,
-                )
-                if (
-                    proc_256 is not None
-                    and proc_256.returncode != 0
-                    and proc_256.stderr
-                ):
-                    tail = "\n".join(proc_256.stderr.splitlines()[-12:])
-                    print(f"Oink: 256b probe stderr tail:\n{tail}", file=sys.stderr)
-                if (
-                    proc_128 is not None
-                    and proc_128.returncode != 0
-                    and proc_128.stderr
-                ):
-                    tail = "\n".join(proc_128.stderr.splitlines()[-12:])
-                    print(f"Oink: 128b probe stderr tail:\n{tail}", file=sys.stderr)
-
-        _CLUSTER_DIRECT_GMEM_MAX_COPY_BITS = max_bits
-        return max_bits
-
-
 class RMSNormSM100:
     def __init__(
         self,
@@ -1397,47 +1077,16 @@ class RMSNormSM100:
         self.direct_gmem = bool(direct_gmem)
 
     def _threads_per_row(self) -> int:
-        # Manual override (used by specialized schedules like 2-rows/CTA).
         tpr = getattr(self, "_tpr_override", None)
         if tpr is not None:
             return int(tpr)
 
-        N = self.N
-
-        # Q/K norm hot shape on Blackwell: head_dim=128.  A wider CTA than the
-        # legacy one-warp-per-row default reduces launch amortization and
-        # improves throughput on GB300 for both prefill- and decode-like shapes.
-        if N == 128 and self.dtype.width == 16:
-            return 16
-
-        # DSv3 MLA (padded/strided) hot shape. Prefer a threads-per-row that
-        # makes the tile width exactly match N with 128b vectors (bf16/fp16),
-        # avoiding the ~33% padded work from rounding 1536 -> 2048.
-        if N == 1536 and self.dtype.width == 16:
-            return 96
-
-        # DSv3 default hidden size (7168). Choose a threads-per-row that matches
-        # the selected vector width to avoid padded work. Using 224 threads/row
-        # yields exact tiles for all supported copy widths we use on SM100:
-        # - 64b copies (vec=4 for bf16/fp16): 7168/4 = 1792 = 8 * 224
-        # - 128b copies (vec=8 for bf16/fp16): 7168/8 = 896 = 4 * 224
-        # - 256b copies (vec=16 for bf16/fp16): 7168/16 = 448 = 2 * 224
-        if N == 7168 and self.dtype.width == 16:
-            return 224
-
-        # DSv3-ish N buckets (6144/8192): use larger threads/row so each thread
-        # holds fewer elements in registers. For 256b vectors, pick a threads/row
-        # that yields an exact tile without padding.
         if self.dtype.width == 16:
-            if N == 6144:
-                if self.copy_bits >= 256:
-                    return 192
-                if self.copy_bits <= 128:
-                    return 256
-            if N == 8192:
-                return 256
+            special = _specialized_bf16_threads(self.N, self.copy_bits)
+            if special is not None:
+                return special[0]
 
-        # Small-N: at least one warp per row (kernel assumes 1 row/CTA).
+        N = self.N
         if N <= 1024:
             return 32
         if N <= 4096:
@@ -1451,52 +1100,26 @@ class RMSNormSM100:
         if cn is not None:
             return int(cn)
         N = self.N
-        # Default policy
         if N <= 8192:
             return 1
-        if const_expr(self.dtype.width == 16):
-            if N <= 16 * 1024:
-                return 2
-            elif N <= 32 * 1024:
-                return 2
-            elif N <= 64 * 1024:
-                return 4
-            elif N <= 128 * 1024:
-                return 8
-            else:
-                return 16
-        else:
-            if N <= 32 * 1024:
-                return 1
-            elif N <= 64 * 1024:
-                return 2
-            elif N <= 128 * 1024:
-                return 4
-            elif N <= 256 * 1024:
-                return 8
-            else:
-                return 16
+        limits = (
+            ((16 * 1024, 2), (32 * 1024, 2), (64 * 1024, 4), (128 * 1024, 8))
+            if const_expr(self.dtype.width == 16)
+            else ((32 * 1024, 1), (64 * 1024, 2), (128 * 1024, 4), (256 * 1024, 8))
+        )
+        for bound, cluster_n in limits:
+            if N <= bound:
+                return cluster_n
+        return 16
 
     def _num_threads(self) -> int:
-        # Favor 128 threads up to N=16k to reduce per-row partitioning overhead.
-        # This keeps cols_per_block=1 at N=8192 (bf16), which benchmarks faster for large-M.
         nt = getattr(self, "_nt_override", None)
         if nt is not None:
             return int(nt)
-        if self.N == 128 and self.dtype.width == 16:
-            return 128
-        if self.N == 1536 and self.dtype.width == 16:
-            return 96
-        if self.N == 7168 and self.dtype.width == 16:
-            return 224
         if self.dtype.width == 16:
-            if self.N == 6144:
-                if self.copy_bits >= 256:
-                    return 192
-                if self.copy_bits <= 128:
-                    return 256
-            if self.N == 8192:
-                return 256
+            special = _specialized_bf16_threads(self.N, self.copy_bits)
+            if special is not None:
+                return special[1]
         if self.N <= 1024:
             return 32
         return 128 if self.N <= 16384 else 256
@@ -1507,7 +1130,6 @@ class RMSNormSM100:
         assert num_threads % cute.arch.WARP_SIZE == 0
         tpr = self._threads_per_row()
         cluster_n = self._cluster_n()
-        # Allow tails: compute number of vector columns with ceil
         num_cols_vec = cute.ceil_div(self.N, vecsize)
         num_blocks_N = cute.ceil_div(num_cols_vec, tpr * cluster_n)
         cols_per_block = num_threads // tpr
@@ -1522,7 +1144,6 @@ class RMSNormSM100:
         return tiler_mn, tv_layout
 
     def _smem_bytes(self, tiler_mn, num_warps) -> int:
-        # smem for X tile (+ residual if present) + reduction buffers + mbar(s)
         return (
             cute.size_in_bytes(self.dtype, cute.make_layout(tiler_mn))
             + self.stage
@@ -1958,20 +1579,19 @@ class RMSNormSM100:
             thr_copy.partition_D(gRstd_i) if const_expr(mRstd is not None) else None
         )
 
-        # Stage-2 intra-row K-loop cp.async ping-pong (two tiles). This reduces
-        # per-thread fragment size and can improve memory-latency hiding for
-        # N=7168 at large M. It is enabled by setting `stage=2` when constructing
-        # the RMSNormSM100 op (see `_fused_add_rmsnorm_forward_ptr_inplace`).
+        # Stage-2 intra-row K-loop cp.async path for the large-`N` Blackwell
+        # rows where the legacy stage-2 fallback was still measurably ahead of
+        # the generic one-row schedule.
         if const_expr(
             self.stage > 1
             and not self.direct_gmem
             and use_async
             and cluster_n == 1
-            and shape[1] == 7168
+            and (shape[1] == 6144 or shape[1] == 7168 or shape[1] == 8192)
         ):
             vecsize = tv_layout.shape[1][0]
             tpr = threads_per_row
-            target_tile_n = const_expr(4096)
+            target_tile_n = const_expr(4096 if shape[1] != 8192 else 8192)
             tile_factor = const_expr(target_tile_n // (vecsize * tpr))
             if const_expr(tile_factor > 0):
                 tile_n = vecsize * tpr * tile_factor
@@ -2658,6 +2278,8 @@ def _rmsnorm_forward_ptr(
     residual: Tensor | None,
     eps: float,
     store_rstd: bool,
+    *,
+    force_stage2: bool = False,
 ) -> tuple[Tensor, Tensor | None, Tensor | None]:
     """Pointer-path RMSNorm forward that bypasses DLPack."""
     assert x.is_cuda
@@ -2688,6 +2310,7 @@ def _rmsnorm_forward_ptr(
         residual_out=residual_out,
         rstd=rstd,
         eps=eps,
+        force_stage2=force_stage2,
     )
     return out, rstd, residual_out
 
@@ -2701,6 +2324,7 @@ def _rmsnorm_forward_ptr_into(
     residual_out: Tensor | None,
     rstd: Tensor | None,
     eps: float,
+    force_stage2: bool = False,
 ) -> None:
     """Launch pointer-path forward into preallocated outputs."""
     assert x.is_cuda
@@ -2710,13 +2334,20 @@ def _rmsnorm_forward_ptr_into(
     dtype = TORCH2CUTE_DTYPE[x.dtype]
 
     if bias is None and residual is None and residual_out is None and rstd is None:
-        # Cache packed launch args to cut Python overhead on small batches.
         stream_handle = _current_stream_handle(device_index)
         has_weight = weight is not None
 
         if (
             not has_weight
             and try_rmsnorm_smallm_noweight_cuda(x, out, float(eps))
+        ):
+            return
+
+        if has_weight and try_simple_weightonly_rmsnorm_forward(
+            x,
+            weight,
+            out,
+            float(eps),
         ):
             return
 
@@ -2730,17 +2361,34 @@ def _rmsnorm_forward_ptr_into(
             weight_dtype=weight_dtype,
             aligned_tensors=(out, weight),
         )
+        launch_cfg = _override_simple_weight_only_forward_launch_config(
+            launch_cfg,
+            M=int(M),
+            N=int(N),
+            dtype=dtype,
+            weight=weight,
+            weight_dtype=weight_dtype,
+        )
+        if force_stage2:
+            launch_cfg = _force_stage2_forward_launch_config(
+                launch_cfg,
+                M=int(M),
+                N=int(N),
+                dtype=dtype,
+                weight=weight,
+                weight_dtype=weight_dtype,
+            )
 
         compiled_key = (
             "ptr",
             N,
             dtype,
             weight_dtype,
-            False,  # residual
+            False,
             has_weight,
-            False,  # bias
-            False,  # residual_out
-            False,  # rstd
+            False,
+            False,
+            False,
             launch_cfg.stage,
             launch_cfg.copy_bits,
             launch_cfg.use_async,
@@ -2780,11 +2428,11 @@ def _rmsnorm_forward_ptr_into(
                 op.launch_from_ptrs,
                 ptr_x,
                 ptr_w,
-                None,  # ptr_b
-                None,  # ptr_res
+                None,
+                None,
                 ptr_out,
-                None,  # ptr_res_out
-                None,  # ptr_rstd
+                None,
+                None,
                 Int32(M),
                 Int32(N),
                 ld,
@@ -2823,11 +2471,11 @@ def _rmsnorm_forward_ptr_into(
         compiled(
             ptr_x,
             ptr_w,
-            None,  # ptr_b
-            None,  # ptr_res
+            None,
+            None,
             ptr_out,
-            None,  # ptr_res_out
-            None,  # ptr_rstd
+            None,
+            None,
             Int32(M),
             Int32(N),
             ld,
@@ -2836,7 +2484,6 @@ def _rmsnorm_forward_ptr_into(
         )
         return
 
-    # General path for bias/residual/rstd, reusing the same launch policy.
     weight_dtype = TORCH2CUTE_DTYPE[weight.dtype] if weight is not None else None
     launch_cfg = _resolve_forward_launch_config(
         M=int(M),
@@ -2847,6 +2494,15 @@ def _rmsnorm_forward_ptr_into(
         weight_dtype=weight_dtype,
         aligned_tensors=(out, weight, bias, residual, residual_out),
     )
+    if force_stage2:
+        launch_cfg = _force_stage2_forward_launch_config(
+            launch_cfg,
+            M=int(M),
+            N=int(N),
+            dtype=dtype,
+            weight=weight,
+            weight_dtype=weight_dtype,
+        )
 
     stream_handle = _current_stream_handle(device_index)
     key = (
@@ -2971,35 +2627,14 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
     use_async = not direct_gmem
     tpr_override: int | None = None
     nt_override: int | None = None
-    cluster_n_override: int | None = None
-    direct_gmem_max_copy_bits: int | None = None
 
     if _ENABLE_STAGE2 and dtype.width == 16 and N == 7168 and M >= 4096:
         stage = 2
         direct_gmem = False
         use_async = True
 
-    # Cluster ILP is still explicitly opt-in because some CuTeDSL builds are unstable.
-    if _ENABLE_CLUSTER_ILP and not _ENABLE_STAGE2:
-        if dtype.width == 16 and N == 7168 and M >= 4096:
-            cluster_n_override = 2
-            if direct_gmem:
-                # Probe cluster + direct-GMEM out of process to avoid compiler crashes.
-                max_bits = _probe_cluster_direct_gmem_max_copy_bits()
-                if max_bits == 0:
-                    direct_gmem = False
-                    use_async = True
-                else:
-                    direct_gmem_max_copy_bits = max_bits
-
-    if _ENABLE_TPR256 and cluster_n_override is None and not _ENABLE_STAGE2:
-        if dtype.width == 16 and N == 7168 and M >= 4096:
-            tpr_override = 256
-            nt_override = 256
-
     can_use_256 = bool(
         direct_gmem
-        and (direct_gmem_max_copy_bits is None or direct_gmem_max_copy_bits >= 256)
         and dtype.width == 16
         and (x.data_ptr() % 32) == 0
         and (residual.data_ptr() % 32) == 0
@@ -3029,7 +2664,7 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
         tpr_override,
         nt_override,
         direct_gmem,
-        cluster_n_override,
+        None,
     )
     compiled = _PTR_COMPILE_CACHE.get(key)
     if compiled is None:
@@ -3042,7 +2677,7 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
             direct_gmem=direct_gmem,
             tpr_override=tpr_override,
             nt_override=nt_override,
-            cluster_n_override=cluster_n_override,
+            cluster_n_override=None,
         )
         ptr_x, ptr_w, ptr_res = _make_fused_add_ptrs(
             x=x,
@@ -3071,11 +2706,11 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
         N=N,
         device_index=device_index,
         stream_handle=stream_handle,
-        copy_bits=copy_bits,
-        use_async=use_async,
-        tpr=tpr_override or 0,
-        direct_gmem=direct_gmem,
-        assumed_align=assumed_align,
+            copy_bits=copy_bits,
+            use_async=use_async,
+            tpr=tpr_override or 0,
+            direct_gmem=direct_gmem,
+            assumed_align=assumed_align,
         eps=eps,
     )
     if launcher is not None:
@@ -3118,9 +2753,6 @@ def rmsnorm_forward(
 ) -> tuple[Tensor, Tensor | None, Tensor | None]:
     assert x.is_cuda
     assert x.dim() == 2, "Use (M, N) tensor; flatten batch/seq beforehand."
-    M, N = x.shape
-
-    # Prefer the pointer path when the input layout and dtypes are compatible.
     force_stage2 = _FORCE_RMSNORM_STAGE2_FWD or _should_force_stage2_forward(
         x=x,
         weight=weight,
@@ -3129,79 +2761,19 @@ def rmsnorm_forward(
         store_rstd=store_rstd,
     )
 
-    use_ptr = (not force_stage2) and _can_use_ptr_path(x, weight, bias, residual)
+    use_ptr = _can_use_ptr_path(x, weight, bias, residual)
 
     if use_ptr:
-        return _rmsnorm_forward_ptr(x, weight, bias, residual, eps, store_rstd)
-
-    # Lazy-import the stage-2 fallback so the common pointer path stays light.
-    try:
-        import importlib
-
-        rms2 = importlib.import_module(
-            ".rmsnorm_with_stage2",
-            package=__package__ or "kernelagent_oink.blackwell",
-        )
-    except Exception:
-        rms2 = None  # type: ignore[assignment]
-    if rms2 is not None:
-        y, rstd, residual_out = rms2.rmsnorm_forward_with_stage2(
+        return _rmsnorm_forward_ptr(
             x,
-            weight=weight,
-            bias=bias,
-            residual=residual,
-            eps=eps,
-            store_rstd=store_rstd,
+            weight,
+            bias,
+            residual,
+            eps,
+            store_rstd,
+            force_stage2=force_stage2,
         )
-        # Preserve stride contracts for torch.compile consistency, even
-        # when using the optional stage-2 implementation.
-        if y.stride() != x.stride():
-            y_strided = torch.empty_strided(
-                x.shape, x.stride(), device=x.device, dtype=x.dtype
-            )
-            y_strided.copy_(y)
-            y = y_strided
-        if residual is not None and residual_out is not None:
-            if residual_out.stride() != residual.stride():
-                residual_out_strided = torch.empty_strided(
-                    residual.shape,
-                    residual.stride(),
-                    device=residual.device,
-                    dtype=residual.dtype,
-                )
-                residual_out_strided.copy_(residual_out)
-                residual_out = residual_out_strided
-        return y, rstd, residual_out
-
-    # Safe fallback (correctness-first). This is expected to be rare in vLLM.
-    y = rmsnorm_ref(x, weight, bias, residual, eps)
-    # Preserve the input stride contract even on the fallback path so
-    # torch.compile sees a consistent output layout across all branches.
-    if y.stride() != x.stride():
-        y_strided = torch.empty_strided(
-            x.shape, x.stride(), device=x.device, dtype=x.dtype
-        )
-        y_strided.copy_(y)
-        y = y_strided
-    rstd = None
-    if store_rstd:
-        xf = x.float()
-        if residual is not None:
-            xf = xf + residual.float()
-        rstd = torch.rsqrt(xf.square().mean(dim=-1) + eps).to(torch.float32)
-    residual_out = None
-    if residual is not None:
-        residual_out = (x.float() + residual.float()).to(x.dtype)
-        if residual_out.stride() != residual.stride():
-            residual_out_strided = torch.empty_strided(
-                residual.shape,
-                residual.stride(),
-                device=residual.device,
-                dtype=residual.dtype,
-            )
-            residual_out_strided.copy_(residual_out)
-            residual_out = residual_out_strided
-    return y, rstd, residual_out
+    return _rmsnorm_ref_outputs(x, weight, bias, residual, eps, store_rstd)
 
 
 def rmsnorm_ref(
@@ -3890,22 +3462,4 @@ def rmsnorm_backward(
     return dx, dw, db, dresidual
 
 
-# Quack-style alias for benchmarks
 rmsnorm_bwd = rmsnorm_backward
-
-
-if __name__ == "__main__":
-    # Minimal ad-hoc test (functionality only). For performance comparisons, use the benchmark harness.
-    if not torch.cuda.is_available():
-        print("CUDA not available; functional test skipped.")
-        sys.exit(0)
-    M, N = 1024, 8192
-    dtype = torch.bfloat16
-    x = torch.randn(M, N, device="cuda", dtype=dtype)
-    w = torch.randn(N, device="cuda", dtype=dtype)
-    y_ref = rmsnorm_ref(x, w)
-    y, _, _ = rmsnorm_forward(x, w)
-    torch.testing.assert_close(y, y_ref, rtol=1e-3, atol=1e-3)
-    print("RMSNormSM100 correctness check passed.")
-
-# (compile cache moved to top)

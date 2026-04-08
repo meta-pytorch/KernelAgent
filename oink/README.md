@@ -98,9 +98,9 @@ The repo includes a Quack-style benchmark suite (tables + SVG plots) to compare
 Oink against Quack and to reproduce the reported speedups. The pre-generated
 plots below were measured on **GB200 / B200-class SM100** systems.
 
-In short, Oink’s edge comes from lower pointer-path launch overhead and Blackwell-specific schedule routing for the common RMSNorm shapes.
+In short, Oink’s edge comes from lower pointer-path launch overhead plus Blackwell-tuned shape routing for both hot small-`M` and larger RMSNorm rows.
 
-For the Paulius-style no-weight BF16 `4096x4096` microbenchmark, Oink’s specialized small-`M` path now runs at `0.0072 ms` versus Paulius at `0.0103 ms` (`1.43x` faster, kernel-only on B200).
+On the current B200 forward sweep, Oink holds `1.12x` / `1.06x` geomean over Quack for same-dtype weights on the Quack-suite / DSv3 sets, and `1.18x` / `1.06x` for fp32 weights, with worst output rel-L2 `1.45e-5` (Quack `2.01e-5`).
 
 - How to run + methodology: `oink/benchmarks/README.md`
 - Pre-generated plots: `oink/benchmarks/media/`

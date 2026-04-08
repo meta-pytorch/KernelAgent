@@ -39,6 +39,8 @@ import os
 import threading
 from typing import Any
 
+import cuda.bindings.driver as cuda  # type: ignore
+
 _FAST_LAUNCH_TLS = threading.local()
 
 
@@ -119,3 +121,104 @@ def set_runtime_ptr(ptr: Any, device_ptr: int) -> None:
     if getattr(ptr, "_c_pointer", None) is None:
         ptr.__c_pointers__()  # type: ignore[attr-defined]
     ptr._desc.value = device_ptr  # type: ignore[attr-defined]
+
+
+class GenericFastLaunch:
+    def __init__(
+        self,
+        *,
+        capi_func: object,
+        executor: object,
+        packed_args: object,
+        keepalive: tuple[object, ...],
+        ptr_slots: tuple[tuple[object | None, str], ...],
+        scalar_slots: tuple[tuple[object, str, object], ...],
+        fallback_launch,
+    ):
+        self._capi_func = capi_func
+        self._packed_args = packed_args
+        self._keepalive = keepalive
+        self._cuda_result = getattr(executor, "cuda_result", None)
+        self._use_fast_launch = True
+        self._ptr_slots = ptr_slots
+        self._ptr_last = [-1] * len(ptr_slots)
+        self._scalar_slots = scalar_slots
+        self._scalar_last = [initial for _, _, initial in scalar_slots]
+        self._fallback_launch = fallback_launch
+
+    def launch(self, **kwargs) -> None:
+        if not fast_launch_enabled() or not self._use_fast_launch:
+            self._fallback_launch(**kwargs)
+            return
+        try:
+            for idx, (runtime_ptr, tensor_name) in enumerate(self._ptr_slots):
+                if runtime_ptr is None:
+                    continue
+                device_ptr = kwargs[tensor_name].data_ptr()
+                if device_ptr != self._ptr_last[idx]:
+                    set_runtime_ptr(runtime_ptr, device_ptr)
+                    self._ptr_last[idx] = device_ptr
+            for idx, (stable_arg, arg_name, _) in enumerate(self._scalar_slots):
+                value = kwargs[arg_name]
+                if value != self._scalar_last[idx]:
+                    stable_arg.set(value)
+                    self._scalar_last[idx] = value
+        except AttributeError:
+            self._use_fast_launch = False
+            disable_fast_launch()
+            self._fallback_launch(**kwargs)
+            return
+
+        if self._cuda_result is not None:
+            self._cuda_result.value = 0
+        ret = self._capi_func(self._packed_args)  # type: ignore[misc]
+        if ret != 0:
+            raise RuntimeError(f"CuTeDSL capi_func returned non-zero: {ret}")
+        if self._cuda_result is not None:
+            err = int(self._cuda_result.value)
+            if err != 0:
+                raise RuntimeError(f"CuTeDSL kernel launch failed (cuda_result={err})")
+
+
+def build_fast_launcher(
+    *,
+    key: tuple[object, ...],
+    compiled: object,
+    device_index: int,
+    stream_handle: int,
+    execution_args_builder,
+    keepalive_items: tuple[object, ...],
+    ptr_slots: tuple[tuple[object | None, str], ...],
+    scalar_slots: tuple[tuple[object, str, object], ...],
+    fallback_launch_builder,
+):
+    if not fast_launch_enabled():
+        return None
+    cache = tls_cache()
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    stream = cuda.CUstream(int(stream_handle))
+    executor = compiled.to(device_index)  # type: ignore[attr-defined]
+    try:
+        exe_args, adapted_args = executor.generate_execution_args(
+            *execution_args_builder(stream)
+        )
+        packed_args = executor._get_invoke_packed_args(list(exe_args))  # type: ignore[attr-defined]
+        capi_func = compiled.capi_func  # type: ignore[attr-defined]
+    except AttributeError:
+        disable_fast_launch()
+        return None
+
+    launcher = GenericFastLaunch(
+        capi_func=capi_func,
+        executor=executor,
+        packed_args=packed_args,
+        keepalive=(executor, *keepalive_items, stream, *adapted_args),
+        ptr_slots=ptr_slots,
+        scalar_slots=scalar_slots,
+        fallback_launch=fallback_launch_builder(stream),
+    )
+    cache[key] = launcher
+    return launcher
