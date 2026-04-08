@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Backward-compatible stage-2 RMSNorm facade.
 
 The stage-2 scheduling policy now lives in `._rmsnorm_impl` so the optimized
 pointer path and the compatibility fallback share one implementation.
 """
+
+from __future__ import annotations
 
 from ._rmsnorm_impl import RMSNormSM100, rmsnorm_forward
 
