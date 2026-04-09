@@ -123,4 +123,53 @@ def register(*, force: bool = False) -> None:
     _OPS_REGISTERED = True
 
 
-__all__ = ["register"]
+_ALL_KERNELS_REGISTERED = False
+
+
+def register_all_kernels(*, force: bool = False) -> None:
+    """Register Oink custom ops *and* override PyTorch's native aten operators.
+
+    This is the main entry point for redirecting standard PyTorch calls
+    (``F.rms_norm``, ``F.layer_norm``, ``F.softmax``, etc.) to Oink's SM100
+    CuTeDSL kernels. It performs two steps:
+
+    1. Calls :func:`register` to define ``torch.ops.oink.rmsnorm`` and
+       ``torch.ops.oink.fused_add_rms_norm`` custom ops.
+    2. Patches the following aten ops at the CUDA dispatch key so that
+       PyTorch's built-in operators transparently use the Oink kernels:
+
+       - ``aten::_fused_rms_norm``  /  ``aten::_fused_rms_norm_backward``
+       - ``aten::native_layer_norm``  /  ``aten::native_layer_norm_backward``
+       - ``aten::_softmax``  /  ``aten::_softmax_backward_data``
+
+    Unsupported inputs (wrong dtype, SM < 100) fall back to PyTorch's
+    original CUDA kernels automatically.
+
+    Args:
+        force: If *True*, register regardless of the
+            ``VLLM_USE_OINK_RMSNORM`` environment variable.
+    """
+    global _ALL_KERNELS_REGISTERED
+    if _ALL_KERNELS_REGISTERED:
+        return
+
+    # Step 1: register torch.ops.oink.* custom ops.
+    register(force=force)
+
+    if not _OPS_REGISTERED:
+        # register() decided to bail (missing deps, no CUDA, env gate, etc.).
+        return
+
+    # Step 2: override aten ops on CUDA.
+    try:
+        from .aten_override import override_all_aten_kernels
+
+        override_all_aten_kernels()
+    except Exception as e:  # pragma: no cover
+        logger.exception("Oink: failed to override aten ops: %s", e)
+        return
+
+    _ALL_KERNELS_REGISTERED = True
+
+
+__all__ = ["register", "register_all_kernels"]
