@@ -507,7 +507,9 @@ def _make_rmsnorm_op(
 def _match_stride(tensor: Tensor | None, ref: Tensor | None) -> Tensor | None:
     if tensor is None or ref is None or tensor.stride() == ref.stride():
         return tensor
-    out = torch.empty_strided(ref.shape, ref.stride(), device=ref.device, dtype=ref.dtype)
+    out = torch.empty_strided(
+        ref.shape, ref.stride(), device=ref.device, dtype=ref.dtype
+    )
     out.copy_(tensor)
     return out
 
@@ -529,7 +531,9 @@ def _rmsnorm_ref_outputs(
         rstd = torch.rsqrt(xf.square().mean(dim=-1) + eps).to(torch.float32)
     residual_out = None
     if residual is not None:
-        residual_out = _match_stride((x.float() + residual.float()).to(x.dtype), residual)
+        residual_out = _match_stride(
+            (x.float() + residual.float()).to(x.dtype), residual
+        )
     return y, rstd, residual_out
 
 
@@ -553,9 +557,7 @@ def _make_forward_ptrs(
             weight_dtype or dtype,
             assumed_align=launch_cfg.weight_assumed_align,
         ),
-        _make_optional_gmem_ptr(
-            bias, dtype, assumed_align=launch_cfg.assumed_align
-        ),
+        _make_optional_gmem_ptr(bias, dtype, assumed_align=launch_cfg.assumed_align),
         _make_optional_gmem_ptr(
             residual, dtype, assumed_align=launch_cfg.assumed_align
         ),
@@ -594,8 +596,10 @@ def _apply_backward_launch_overrides(
 ) -> None:
     if atomic_dw:
         return
-    if N == 4096 and dtype.width == 16 and (
-        weight_dtype.width == 16 or weight_dtype is cutlass.Float32
+    if (
+        N == 4096
+        and dtype.width == 16
+        and (weight_dtype.width == 16 or weight_dtype is cutlass.Float32)
     ):
         op._tpr_override = 256  # type: ignore[attr-defined]
         op._nt_override = 256  # type: ignore[attr-defined]
@@ -621,13 +625,9 @@ def _make_bwd_ptrs(
 ):
     return (
         _make_gmem_ptr(dtype, x.data_ptr(), assumed_align=assumed_align_x),
-        _make_gmem_ptr(
-            weight_dtype, weight.data_ptr(), assumed_align=assumed_align_w
-        ),
+        _make_gmem_ptr(weight_dtype, weight.data_ptr(), assumed_align=assumed_align_w),
         _make_gmem_ptr(dtype, dout.data_ptr(), assumed_align=assumed_align_x),
-        _make_gmem_ptr(
-            cutlass.Float32, rstd.data_ptr(), assumed_align=assumed_align_x
-        ),
+        _make_gmem_ptr(cutlass.Float32, rstd.data_ptr(), assumed_align=assumed_align_x),
         _make_gmem_ptr(dtype, dx.data_ptr(), assumed_align=assumed_align_x),
         _make_gmem_ptr(
             cutlass.Float32,
@@ -780,6 +780,7 @@ def _make_rmsnorm_bwd_fallback_launch(
         )
 
     return _fallback_launch
+
 
 def _get_fast_ptr_rmsnorm_bwd_launcher(
     *,
@@ -943,7 +944,11 @@ def _get_fast_ptr_rmsnorm_launcher(
         ),
         keepalive_items=(ptr_x, ptr_w, ptr_out, arg_m, arg_n, arg_ld, arg_eps),
         ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_out, "out")),
-        scalar_slots=((arg_m, "M", -1), (arg_ld, "ld", -1), (arg_eps, "eps", float("nan"))),
+        scalar_slots=(
+            (arg_m, "M", -1),
+            (arg_ld, "ld", -1),
+            (arg_eps, "eps", float("nan")),
+        ),
         fallback_launch_builder=lambda stream: _make_rmsnorm_fallback_launch(
             compiled=compiled,
             stream=stream,
@@ -1006,7 +1011,11 @@ def _get_fast_ptr_fused_add_rmsnorm_launcher(
         ),
         keepalive_items=(ptr_x, ptr_w, ptr_res, arg_m, arg_n, arg_ld_x, arg_eps),
         ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_res, "residual")),
-        scalar_slots=((arg_m, "M", -1), (arg_ld_x, "ld_x", -1), (arg_eps, "eps", float("nan"))),
+        scalar_slots=(
+            (arg_m, "M", -1),
+            (arg_ld_x, "ld_x", -1),
+            (arg_eps, "eps", float("nan")),
+        ),
         fallback_launch_builder=lambda stream: _make_fused_add_fallback_launch(
             compiled=compiled,
             stream=stream,
@@ -2337,10 +2346,7 @@ def _rmsnorm_forward_ptr_into(
         stream_handle = _current_stream_handle(device_index)
         has_weight = weight is not None
 
-        if (
-            not has_weight
-            and try_rmsnorm_smallm_noweight_cuda(x, out, float(eps))
-        ):
+        if not has_weight and try_rmsnorm_smallm_noweight_cuda(x, out, float(eps)):
             return
 
         if has_weight and try_simple_weightonly_rmsnorm_forward(
@@ -2539,17 +2545,19 @@ def _rmsnorm_forward_ptr_into(
             nt_override=launch_cfg.nt_override,
             cluster_n_override=launch_cfg.cluster_n_override,
         )
-        ptr_x, ptr_w, ptr_b, ptr_res, ptr_out, ptr_res_out, ptr_rstd = _make_forward_ptrs(
-            x=x,
-            weight=weight,
-            bias=bias,
-            residual=residual,
-            out=out,
-            residual_out=residual_out,
-            rstd=rstd,
-            dtype=dtype,
-            weight_dtype=weight_dtype,
-            launch_cfg=launch_cfg,
+        ptr_x, ptr_w, ptr_b, ptr_res, ptr_out, ptr_res_out, ptr_rstd = (
+            _make_forward_ptrs(
+                x=x,
+                weight=weight,
+                bias=bias,
+                residual=residual,
+                out=out,
+                residual_out=residual_out,
+                rstd=rstd,
+                dtype=dtype,
+                weight_dtype=weight_dtype,
+                launch_cfg=launch_cfg,
+            )
         )
         stream = cuda.CUstream(stream_handle)
         ld = Int32(int(x.stride(0)))
@@ -2706,11 +2714,11 @@ def _fused_add_rmsnorm_forward_ptr_inplace(
         N=N,
         device_index=device_index,
         stream_handle=stream_handle,
-            copy_bits=copy_bits,
-            use_async=use_async,
-            tpr=tpr_override or 0,
-            direct_gmem=direct_gmem,
-            assumed_align=assumed_align,
+        copy_bits=copy_bits,
+        use_async=use_async,
+        tpr=tpr_override or 0,
+        direct_gmem=direct_gmem,
+        assumed_align=assumed_align,
         eps=eps,
     )
     if launcher is not None:

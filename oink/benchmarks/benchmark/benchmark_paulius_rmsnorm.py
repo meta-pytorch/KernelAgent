@@ -65,7 +65,14 @@ def _build_paulius_binary(src_dir: Path) -> Path:
     env = os.environ.copy()
     env["CUDA_HOME"] = "/usr/local/cuda-13.0"
     env["PATH"] = f"/usr/local/cuda-13.0/bin:{env.get('PATH', '')}"
-    subprocess.run(cmd, cwd=src_dir, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        cmd,
+        cwd=src_dir,
+        env=env,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     return out
 
 
@@ -111,7 +118,9 @@ def _run_paulius(
     )
     parsed = _parse_paulius_output(proc.stdout)
     if not parsed:
-        raise RuntimeError(f"Failed to parse Paulius output:\n{proc.stdout}\n{proc.stderr}")
+        raise RuntimeError(
+            f"Failed to parse Paulius output:\n{proc.stdout}\n{proc.stderr}"
+        )
     ms, gbps = min(parsed, key=lambda row: row[0])
     return ms, gbps, {"raw_stdout": proc.stdout, "raw_stderr": proc.stderr}
 
@@ -127,7 +136,11 @@ def main() -> None:
     print(f"Running on {torch.cuda.get_device_name(device)} (SM{sm})")
 
     p = argparse.ArgumentParser()
-    p.add_argument("--paulius-dir", type=str, default=os.path.expanduser("~/fbsource/fbcode/scripts/paulius/rmsnorm"))
+    p.add_argument(
+        "--paulius-dir",
+        type=str,
+        default=os.path.expanduser("~/fbsource/fbcode/scripts/paulius/rmsnorm"),
+    )
     p.add_argument("--gpu-id", type=int, default=0)
     p.add_argument("--warmup-reps", type=int, default=10)
     p.add_argument("--timing-reps", type=int, default=100)
@@ -183,7 +196,9 @@ def main() -> None:
         }
         if M == 4096:
             oink_ms = _bench_oink_smallm_noweight(M, N)
-            oink_gbps = bytes_io_model_fwd(M, N, torch.bfloat16) / (oink_ms * 1e-3) / 1e9
+            oink_gbps = (
+                bytes_io_model_fwd(M, N, torch.bfloat16) / (oink_ms * 1e-3) / 1e9
+            )
             row.update(
                 {
                     "oink_kernel_ms": oink_ms,

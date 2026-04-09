@@ -58,7 +58,12 @@ class _SimpleWeightOnlyConfig:
 
     @property
     def cache_key(self) -> tuple[object, int, int, int]:
-        return (self.dtype, int(self.N), int(self.threads_per_row), int(self.num_threads))
+        return (
+            self.dtype,
+            int(self.N),
+            int(self.threads_per_row),
+            int(self.num_threads),
+        )
 
     @staticmethod
     def make_tv_layout(threads_per_row, rows_per_block, vec_size, num_vec_blocks):
@@ -81,7 +86,9 @@ class _SimpleWeightOnlyRMSNorm:
         self.cfg = cfg
 
     @cute.jit
-    def __call__(self, x_ptr, w_ptr, o_ptr, M: Int32, eps: Float32, stream: cuda.CUstream):
+    def __call__(
+        self, x_ptr, w_ptr, o_ptr, M: Int32, eps: Float32, stream: cuda.CUstream
+    ):
         cfg = self.cfg
         mX = cute.make_tensor(x_ptr, cute.make_layout((M, cfg.N), stride=(cfg.N, 1)))
         mW = cute.make_tensor(w_ptr, cute.make_layout((cfg.N,), stride=(1,)))
@@ -102,7 +109,15 @@ class _SimpleWeightOnlyRMSNorm:
         )
 
     @cute.kernel
-    def kernel(self, mX: cute.Tensor, mW: cute.Tensor, mO: cute.Tensor, eps: Float32, tv_layout: cute.Layout, tiler_mn: cute.Shape):
+    def kernel(
+        self,
+        mX: cute.Tensor,
+        mW: cute.Tensor,
+        mO: cute.Tensor,
+        eps: Float32,
+        tv_layout: cute.Layout,
+        tiler_mn: cute.Shape,
+    ):
         cfg = self.cfg
         tidx, _, _ = cute.arch.thread_idx()
         bidx, _, _ = cute.arch.block_idx()
@@ -112,20 +127,45 @@ class _SimpleWeightOnlyRMSNorm:
         rows_per_block = tiler_mn[0]
 
         smem = utils.SmemAllocator()
-        sX = smem.allocate_tensor(mX.element_type, cute.make_ordered_layout(tiler_mn, order=(1, 0)), byte_alignment=16)
-        reduction_buffer = smem.allocate_tensor(Float32, cute.make_ordered_layout((rows_per_block, (warps_per_row, 1)), order=(1, 0)), byte_alignment=4)
+        sX = smem.allocate_tensor(
+            mX.element_type,
+            cute.make_ordered_layout(tiler_mn, order=(1, 0)),
+            byte_alignment=16,
+        )
+        reduction_buffer = smem.allocate_tensor(
+            Float32,
+            cute.make_ordered_layout(
+                (rows_per_block, (warps_per_row, 1)), order=(1, 0)
+            ),
+            byte_alignment=4,
+        )
 
         idX = cute.make_identity_tensor(mX.shape)
         gX = cute.local_tile(mX, tiler_mn, (bidx, 0))
         gO = cute.local_tile(mO, tiler_mn, (bidx, 0))
         cX = cute.local_tile(idX, tiler_mn, (bidx, 0))
 
-        mW2 = cute.make_tensor(mW.iterator, cute.prepend(mW.layout, cute.make_layout((tiler_mn[0],), stride=(0,))))
+        mW2 = cute.make_tensor(
+            mW.iterator,
+            cute.prepend(mW.layout, cute.make_layout((tiler_mn[0],), stride=(0,))),
+        )
         gW = cute.local_tile(mW2, tiler_mn, (0, 0))
 
-        copy_atom_load_x = cute.make_copy_atom(cute.nvgpu.cpasync.CopyG2SOp(), mX.element_type, num_bits_per_copy=_SimpleWeightOnlyConfig.COPY_BITS)
-        copy_atom_load_w = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), mX.element_type, num_bits_per_copy=_SimpleWeightOnlyConfig.COPY_BITS)
-        copy_atom_store = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), mO.element_type, num_bits_per_copy=_SimpleWeightOnlyConfig.COPY_BITS)
+        copy_atom_load_x = cute.make_copy_atom(
+            cute.nvgpu.cpasync.CopyG2SOp(),
+            mX.element_type,
+            num_bits_per_copy=_SimpleWeightOnlyConfig.COPY_BITS,
+        )
+        copy_atom_load_w = cute.make_copy_atom(
+            cute.nvgpu.CopyUniversalOp(),
+            mX.element_type,
+            num_bits_per_copy=_SimpleWeightOnlyConfig.COPY_BITS,
+        )
+        copy_atom_store = cute.make_copy_atom(
+            cute.nvgpu.CopyUniversalOp(),
+            mO.element_type,
+            num_bits_per_copy=_SimpleWeightOnlyConfig.COPY_BITS,
+        )
 
         tiled_copy_x = cute.make_tiled_copy(copy_atom_load_x, tv_layout, tiler_mn)
         tiled_copy_w = cute.make_tiled_copy(copy_atom_load_w, tv_layout, tiler_mn)
@@ -155,7 +195,9 @@ class _SimpleWeightOnlyRMSNorm:
 
         cute.autovec_copy(tXsX, tXrX)
         x = tXrX.load().to(Float32)
-        sum_sq = row_reduce_add(x * x, threads_per_row, reduction_buffer, None, None, Float32(0.0))
+        sum_sq = row_reduce_add(
+            x * x, threads_per_row, reduction_buffer, None, None, Float32(0.0)
+        )
         rstd = cute.math.rsqrt(sum_sq / cfg.N + eps, fastmath=True)
         cute.arch.barrier()
 
@@ -177,7 +219,11 @@ def _get_simple_weightonly_config(
     weight: Tensor,
     out: Tensor,
 ) -> _SimpleWeightOnlyConfig | None:
-    if x.dtype is not torch.bfloat16 or weight.dtype is not x.dtype or out.dtype is not x.dtype:
+    if (
+        x.dtype is not torch.bfloat16
+        or weight.dtype is not x.dtype
+        or out.dtype is not x.dtype
+    ):
         return None
     if not x.is_cuda or not weight.is_cuda or not out.is_cuda:
         return None
@@ -185,7 +231,11 @@ def _get_simple_weightonly_config(
         return None
     if x.shape != out.shape or int(weight.shape[0]) != int(x.shape[1]):
         return None
-    if x.stride() != (int(x.shape[1]), 1) or out.stride() != x.stride() or weight.stride() != (1,):
+    if (
+        x.stride() != (int(x.shape[1]), 1)
+        or out.stride() != x.stride()
+        or weight.stride() != (1,)
+    ):
         return None
     M, N = int(x.shape[0]), int(x.shape[1])
     threads = _SIMPLE_WEIGHTONLY_SHAPES.get((M, N))
@@ -232,7 +282,7 @@ def _get_fast_launcher(
     arg_m = StableI32Arg(0)
     arg_eps = StableF32Arg(eps)
     key = (
-        'simple_weightonly_fast',
+        "simple_weightonly_fast",
         id(compiled),
         cfg.dtype,
         int(cfg.N),
@@ -246,17 +296,39 @@ def _get_fast_launcher(
         compiled=compiled,
         device_index=device_index,
         stream_handle=stream_handle,
-        execution_args_builder=lambda stream: (ptr_x, ptr_w, ptr_o, arg_m, arg_eps, stream),
+        execution_args_builder=lambda stream: (
+            ptr_x,
+            ptr_w,
+            ptr_o,
+            arg_m,
+            arg_eps,
+            stream,
+        ),
         keepalive_items=(ptr_x, ptr_w, ptr_o, arg_m, arg_eps),
-        ptr_slots=((ptr_x, 'x'), (ptr_w, 'weight'), (ptr_o, 'out')),
-        scalar_slots=((arg_m, 'M', -1), (arg_eps, 'eps', float('nan'))),
+        ptr_slots=((ptr_x, "x"), (ptr_w, "weight"), (ptr_o, "out")),
+        scalar_slots=((arg_m, "M", -1), (arg_eps, "eps", float("nan"))),
         fallback_launch_builder=lambda stream: (
             lambda **kwargs: compiled(
-                make_ptr(cfg.dtype, kwargs['x'].data_ptr(), cute.AddressSpace.gmem, assumed_align=16),
-                make_ptr(cfg.dtype, kwargs['weight'].data_ptr(), cute.AddressSpace.gmem, assumed_align=16),
-                make_ptr(cfg.dtype, kwargs['out'].data_ptr(), cute.AddressSpace.gmem, assumed_align=16),
-                Int32(kwargs['M']),
-                Float32(kwargs['eps']),
+                make_ptr(
+                    cfg.dtype,
+                    kwargs["x"].data_ptr(),
+                    cute.AddressSpace.gmem,
+                    assumed_align=16,
+                ),
+                make_ptr(
+                    cfg.dtype,
+                    kwargs["weight"].data_ptr(),
+                    cute.AddressSpace.gmem,
+                    assumed_align=16,
+                ),
+                make_ptr(
+                    cfg.dtype,
+                    kwargs["out"].data_ptr(),
+                    cute.AddressSpace.gmem,
+                    assumed_align=16,
+                ),
+                Int32(kwargs["M"]),
+                Float32(kwargs["eps"]),
                 stream,
             )
         ),
@@ -288,7 +360,9 @@ def try_simple_weightonly_rmsnorm_forward(
         return True
     compiled(
         make_ptr(cfg.dtype, x.data_ptr(), cute.AddressSpace.gmem, assumed_align=16),
-        make_ptr(cfg.dtype, weight.data_ptr(), cute.AddressSpace.gmem, assumed_align=16),
+        make_ptr(
+            cfg.dtype, weight.data_ptr(), cute.AddressSpace.gmem, assumed_align=16
+        ),
         make_ptr(cfg.dtype, out.data_ptr(), cute.AddressSpace.gmem, assumed_align=16),
         Int32(int(x.shape[0])),
         Float32(float(eps)),

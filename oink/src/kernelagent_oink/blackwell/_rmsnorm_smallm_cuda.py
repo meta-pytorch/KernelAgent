@@ -315,7 +315,11 @@ def _artifact_paths() -> tuple[Path, Path]:
 
 
 def _build_launcher():
-    global _LAUNCHER_NOWEIGHT, _LAUNCHER_NOWEIGHT_LARGE, _LAUNCHER_NOWEIGHT_LARGE_FP32, _BUILD_FAILED
+    global \
+        _LAUNCHER_NOWEIGHT, \
+        _LAUNCHER_NOWEIGHT_LARGE, \
+        _LAUNCHER_NOWEIGHT_LARGE_FP32, \
+        _BUILD_FAILED
     if _disabled() or _BUILD_FAILED:
         return None
     if _LAUNCHER_NOWEIGHT is not None:
