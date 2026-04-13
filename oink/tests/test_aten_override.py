@@ -19,15 +19,15 @@ properly patches PyTorch's aten ops and that the overridden kernels produce
 numerically correct results compared to PyTorch's native CUDA kernels.
 
 The correctness tests capture the original CUDA kernel *before* the override
-is applied, then compare the override's output against it.  This mirrors the
-approach used in PyTorch's own quack override tests.
+is applied, then compare the override's output against it.
 """
 
 from __future__ import annotations
 
 import math
-import unittest
+import types
 
+import pytest
 import torch
 
 # ---------------------------------------------------------------------------
@@ -42,6 +42,9 @@ if TEST_CUDA:
     _SM = 10 * _major + _minor
 
 SM100_OR_LATER = _SM >= 100
+
+requires_cuda = pytest.mark.skipif(not TEST_CUDA, reason="CUDA not available")
+requires_sm100 = pytest.mark.skipif(not SM100_OR_LATER, reason="requires SM100+")
 
 # ---------------------------------------------------------------------------
 # Capture original CUDA kernels *before* any override is applied.
@@ -76,79 +79,27 @@ if TEST_CUDA:
         pass
 
 # ---------------------------------------------------------------------------
-# Apply the override (module-level so it happens once).
+# Apply the override (module-level, happens once).
 # ---------------------------------------------------------------------------
 
 _OVERRIDE_APPLIED = False
 
 if TEST_CUDA and SM100_OR_LATER:
     try:
-        from kernelagent_oink.aten_override import (
-            _ATEN_LIB,
-            _fallbacks,
-            override_all_aten_kernels,
-        )
+        from kernelagent_oink.aten_override import override_all_aten_kernels
 
         override_all_aten_kernels()
         _OVERRIDE_APPLIED = True
     except Exception:
         pass
 
+requires_override = pytest.mark.skipif(
+    not _OVERRIDE_APPLIED, reason="override not applied"
+)
 
-# =========================================================================
-# Registration tests
-# =========================================================================
-
-
-class TestAtenOverrideRegistration(unittest.TestCase):
-    """Verify that override_all_aten_kernels sets up state correctly."""
-
-    @unittest.skipIf(not TEST_CUDA, "CUDA not available")
-    @unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-    def test_override_sets_library(self):
-        """The aten Library object should be non-None after override."""
-        from kernelagent_oink.aten_override import _ATEN_LIB
-
-        self.assertIsNotNone(
-            _ATEN_LIB, "override_all_aten_kernels did not create the Library"
-        )
-
-    @unittest.skipIf(not TEST_CUDA, "CUDA not available")
-    @unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-    def test_all_fallbacks_captured(self):
-        """All 6 fallback kernels should have been captured."""
-        from kernelagent_oink.aten_override import _fallbacks
-
-        expected_ops = [
-            "_fused_rms_norm",
-            "_fused_rms_norm_backward",
-            "native_layer_norm",
-            "native_layer_norm_backward",
-            "_softmax",
-            "_softmax_backward_data",
-        ]
-        for op in expected_ops:
-            self.assertIn(op, _fallbacks, f"fallback not captured for {op}")
-            self.assertIsNotNone(_fallbacks[op], f"fallback is None for {op}")
-
-    @unittest.skipIf(not TEST_CUDA, "CUDA not available")
-    @unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-    def test_custom_ops_registered(self):
-        """torch.ops.oink.rmsnorm should be callable after registration."""
-        from kernelagent_oink import register_all_kernels
-
-        register_all_kernels(force=True)
-        self.assertTrue(
-            hasattr(torch.ops, "oink"), "torch.ops.oink namespace missing"
-        )
-        self.assertTrue(
-            hasattr(torch.ops.oink, "rmsnorm"), "torch.ops.oink.rmsnorm missing"
-        )
-
-
-# =========================================================================
-# Correctness tests — RMSNorm
-# =========================================================================
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 SHAPES = [(8, 128), (4, 8, 32), (2, 16, 512), (4, 32, 1024)]
 DTYPES = [torch.float16, torch.bfloat16, torch.float32]
@@ -161,92 +112,185 @@ def _atol_for(dtype):
     return 1e-5
 
 
-@unittest.skipIf(not TEST_CUDA, "CUDA not available")
-@unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-@unittest.skipIf(not _OVERRIDE_APPLIED, "override not applied")
-class TestRMSNormOverride(unittest.TestCase):
-    """Compare oink RMSNorm override against the captured ATen fallback."""
+# =========================================================================
+# Registration tests
+# =========================================================================
 
-    def _run_fwd(self, shape, dtype):
+
+@requires_cuda
+@requires_sm100
+def test_override_sets_library():
+    """The aten Library object should be non-None after override."""
+    from kernelagent_oink.aten_override import _ATEN_LIB
+
+    assert _ATEN_LIB is not None, "override_all_aten_kernels did not create Library"
+
+
+@requires_cuda
+@requires_sm100
+def test_all_fallbacks_captured():
+    """All 6 fallback kernels should have been captured."""
+    from kernelagent_oink.aten_override import _fallbacks
+
+    expected_ops = [
+        "_fused_rms_norm",
+        "_fused_rms_norm_backward",
+        "native_layer_norm",
+        "native_layer_norm_backward",
+        "_softmax",
+        "_softmax_backward_data",
+    ]
+    for op in expected_ops:
+        assert op in _fallbacks, f"fallback not captured for {op}"
+        assert _fallbacks[op] is not None, f"fallback is None for {op}"
+
+
+@requires_cuda
+@requires_sm100
+def test_custom_ops_registered():
+    """torch.ops.oink.rmsnorm should be callable after registration."""
+    from kernelagent_oink import register_all_kernels
+
+    register_all_kernels(force=True)
+    assert hasattr(torch.ops, "oink"), "torch.ops.oink namespace missing"
+    assert hasattr(torch.ops.oink, "rmsnorm"), "torch.ops.oink.rmsnorm missing"
+
+
+# =========================================================================
+# Availability / stride-guard tests (no GPU required for some)
+# =========================================================================
+
+
+def test_oink_availability_checks(monkeypatch: pytest.MonkeyPatch):
+    """Probe is_oink_available_for_device with mocked CUDA."""
+    from kernelagent_oink.aten_override import _is_supported
+
+    # Mock a CUDA tensor with SM90 (below threshold).
+    fake_tensor = types.SimpleNamespace(
+        is_cuda=True, dtype=torch.float16, device=torch.device("cuda:0")
+    )
+
+    # SM90 → not supported.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda d: (9, 0))
+    # Clear the cached SM value.
+    from kernelagent_oink.aten_override import _get_device_sm
+
+    _get_device_sm.cache_clear()
+    assert _is_supported(fake_tensor) is False
+
+    # SM100 → supported.
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda d: (10, 0))
+    _get_device_sm.cache_clear()
+    assert _is_supported(fake_tensor) is True
+
+    # float64 → not supported even on SM100.
+    fake_f64 = types.SimpleNamespace(
+        is_cuda=True, dtype=torch.float64, device=torch.device("cuda:0")
+    )
+    assert _is_supported(fake_f64) is False
+
+    _get_device_sm.cache_clear()
+
+
+def test_can_view_as_2d_stride_guard():
+    """Verify _can_view_as_2d correctly identifies non-viewable layouts."""
+    from kernelagent_oink.aten_override import _can_view_as_2d
+
+    x = torch.zeros((2, 3, 4))
+    assert _can_view_as_2d(x) is True
+
+    # Size-1 dims should be ignored by the viewability check.
+    base = torch.zeros((2, 10, 4))
+    x_singleton = base[:, :1, :]
+    assert _can_view_as_2d(x_singleton) is True
+
+    # Middle-dimension stride break: view(-1, hidden) should be invalid.
+    x2 = x[:, ::2, :]
+    with pytest.raises(RuntimeError):
+        x2.view(-1, x2.shape[-1])
+    assert _can_view_as_2d(x2) is False
+
+
+def test_is_oink_stride_compatible_2d():
+    """Verify vectorization alignment check."""
+    from kernelagent_oink.aten_override import _is_oink_stride_compatible_2d
+
+    # Standard contiguous tensor (stride(0)==N, stride(1)==1) → compatible.
+    x = torch.zeros(4, 128, dtype=torch.float16)
+    assert _is_oink_stride_compatible_2d(x) is True
+
+    # Padded row: stride(0) % 16 == 0 → compatible.
+    base = torch.zeros(4, 256, dtype=torch.float16)
+    x_padded = base[:, :128]  # stride(0)=256, stride(1)=1
+    assert x_padded.stride(0) == 256
+    assert _is_oink_stride_compatible_2d(x_padded) is True
+
+    # 1D tensor → not compatible.
+    assert _is_oink_stride_compatible_2d(torch.zeros(128)) is False
+
+    # Wrong dtype → not compatible.
+    assert _is_oink_stride_compatible_2d(torch.zeros(4, 128, dtype=torch.float64)) is False
+
+
+# =========================================================================
+# Correctness tests — RMSNorm
+# =========================================================================
+
+
+@requires_cuda
+@requires_sm100
+@requires_override
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_rmsnorm_fwd(dtype):
+    atol = _atol_for(dtype)
+    for shape in SHAPES:
         normalized_shape = [shape[-1]]
         x = torch.randn(*shape, dtype=dtype, device="cuda")
         w = torch.randn(*normalized_shape, dtype=dtype, device="cuda")
 
-        # Oink (through overridden aten op)
         y, rstd = torch.ops.aten._fused_rms_norm(x, normalized_shape, w, EPS)
-
-        # Reference (captured original kernel)
         y_ref, rstd_ref = _orig_fused_rms_norm(x, normalized_shape, w, EPS)
 
-        atol = _atol_for(dtype)
         torch.testing.assert_close(
             y, y_ref, atol=atol, rtol=0, msg=f"fwd y shape={shape} dtype={dtype}"
         )
         torch.testing.assert_close(
-            rstd,
-            rstd_ref,
-            atol=1e-5,
-            rtol=0,
+            rstd, rstd_ref, atol=1e-5, rtol=0,
             msg=f"fwd rstd shape={shape} dtype={dtype}",
         )
 
-    def test_fwd_fp16(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.float16)
 
-    def test_fwd_bf16(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.bfloat16)
-
-    def test_fwd_fp32(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.float32)
-
-    def _run_bwd(self, shape, dtype):
+@requires_cuda
+@requires_sm100
+@requires_override
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_rmsnorm_bwd(dtype):
+    atol = 3e-1 if dtype == torch.bfloat16 else _atol_for(dtype)
+    for shape in SHAPES:
         normalized_shape = [shape[-1]]
         x = torch.randn(*shape, dtype=dtype, device="cuda")
         w = torch.randn(*normalized_shape, dtype=dtype, device="cuda")
         grad_out = torch.randn(*shape, dtype=dtype, device="cuda")
 
-        # Oink
         x1 = x.detach().requires_grad_(True)
         w1 = w.detach().requires_grad_(True)
         y1, _ = torch.ops.aten._fused_rms_norm(x1, normalized_shape, w1, EPS)
         y1.backward(grad_out)
 
-        # Reference
         x2 = x.detach().requires_grad_(True)
         w2 = w.detach().requires_grad_(True)
         y2, _ = _orig_fused_rms_norm(x2, normalized_shape, w2, EPS)
         y2.backward(grad_out)
 
-        atol = 3e-1 if dtype == torch.bfloat16 else _atol_for(dtype)
         torch.testing.assert_close(
-            x1.grad,
-            x2.grad,
-            atol=atol,
-            rtol=0,
+            x1.grad, x2.grad, atol=atol, rtol=0,
             msg=f"bwd x_grad shape={shape} dtype={dtype}",
         )
         torch.testing.assert_close(
-            w1.grad,
-            w2.grad,
-            atol=atol,
-            rtol=0,
+            w1.grad, w2.grad, atol=atol, rtol=0,
             msg=f"bwd w_grad shape={shape} dtype={dtype}",
         )
-
-    def test_bwd_fp16(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.float16)
-
-    def test_bwd_bf16(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.bfloat16)
-
-    def test_bwd_fp32(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.float32)
 
 
 # =========================================================================
@@ -254,67 +298,51 @@ class TestRMSNormOverride(unittest.TestCase):
 # =========================================================================
 
 
-@unittest.skipIf(not TEST_CUDA, "CUDA not available")
-@unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-@unittest.skipIf(not _OVERRIDE_APPLIED, "override not applied")
-class TestLayerNormOverride(unittest.TestCase):
-    """Compare oink LayerNorm override against the captured ATen fallback."""
-
-    def _run_fwd(self, shape, dtype):
+@requires_cuda
+@requires_sm100
+@requires_override
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_layernorm_fwd(dtype):
+    atol = _atol_for(dtype)
+    for shape in SHAPES:
         normalized_shape = [shape[-1]]
         x = torch.randn(*shape, dtype=dtype, device="cuda")
         w = torch.randn(*normalized_shape, dtype=dtype, device="cuda")
         b = torch.randn(*normalized_shape, dtype=dtype, device="cuda")
 
-        # Oink
         out, mean, rstd = torch.ops.aten.native_layer_norm(
             x, normalized_shape, w, b, EPS
         )
-
-        # Reference
         out_ref, mean_ref, rstd_ref = _orig_native_layer_norm(
             x, normalized_shape, w, b, EPS
         )
 
-        atol = _atol_for(dtype)
         torch.testing.assert_close(
             out, out_ref, atol=atol, rtol=0, msg=f"fwd shape={shape} dtype={dtype}"
         )
         torch.testing.assert_close(
-            mean,
-            mean_ref,
-            atol=1e-5,
-            rtol=0,
+            mean, mean_ref, atol=1e-5, rtol=0,
             msg=f"fwd mean shape={shape} dtype={dtype}",
         )
         torch.testing.assert_close(
-            rstd,
-            rstd_ref,
-            atol=1e-5,
-            rtol=0,
+            rstd, rstd_ref, atol=1e-5, rtol=0,
             msg=f"fwd rstd shape={shape} dtype={dtype}",
         )
 
-    def test_fwd_fp16(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.float16)
 
-    def test_fwd_bf16(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.bfloat16)
-
-    def test_fwd_fp32(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.float32)
-
-    def _run_bwd(self, shape, dtype):
+@requires_cuda
+@requires_sm100
+@requires_override
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_layernorm_bwd(dtype):
+    atol = 3e-1 if dtype == torch.bfloat16 else _atol_for(dtype)
+    for shape in SHAPES:
         normalized_shape = [shape[-1]]
         x = torch.randn(*shape, dtype=dtype, device="cuda")
         w = torch.randn(*normalized_shape, dtype=dtype, device="cuda")
         b = torch.randn(*normalized_shape, dtype=dtype, device="cuda")
         grad_out = torch.randn(*shape, dtype=dtype, device="cuda")
 
-        # Oink
         x1 = x.detach().requires_grad_(True)
         w1 = w.detach().requires_grad_(True)
         b1 = b.detach().requires_grad_(True)
@@ -323,47 +351,24 @@ class TestLayerNormOverride(unittest.TestCase):
         )
         out1.backward(grad_out)
 
-        # Reference
         x2 = x.detach().requires_grad_(True)
         w2 = w.detach().requires_grad_(True)
         b2 = b.detach().requires_grad_(True)
         out2, _, _ = _orig_native_layer_norm(x2, normalized_shape, w2, b2, EPS)
         out2.backward(grad_out)
 
-        atol = 3e-1 if dtype == torch.bfloat16 else _atol_for(dtype)
         torch.testing.assert_close(
-            x1.grad,
-            x2.grad,
-            atol=atol,
-            rtol=0,
+            x1.grad, x2.grad, atol=atol, rtol=0,
             msg=f"bwd x_grad shape={shape} dtype={dtype}",
         )
         torch.testing.assert_close(
-            w1.grad,
-            w2.grad,
-            atol=atol,
-            rtol=0,
+            w1.grad, w2.grad, atol=atol, rtol=0,
             msg=f"bwd w_grad shape={shape} dtype={dtype}",
         )
         torch.testing.assert_close(
-            b1.grad,
-            b2.grad,
-            atol=atol,
-            rtol=0,
+            b1.grad, b2.grad, atol=atol, rtol=0,
             msg=f"bwd b_grad shape={shape} dtype={dtype}",
         )
-
-    def test_bwd_fp16(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.float16)
-
-    def test_bwd_bf16(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.bfloat16)
-
-    def test_bwd_fp32(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.float32)
 
 
 # =========================================================================
@@ -371,72 +376,45 @@ class TestLayerNormOverride(unittest.TestCase):
 # =========================================================================
 
 
-@unittest.skipIf(not TEST_CUDA, "CUDA not available")
-@unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-@unittest.skipIf(not _OVERRIDE_APPLIED, "override not applied")
-class TestSoftmaxOverride(unittest.TestCase):
-    """Compare oink Softmax override against the captured ATen fallback."""
-
-    def _run_fwd(self, shape, dtype):
+@requires_cuda
+@requires_sm100
+@requires_override
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_softmax_fwd(dtype):
+    atol = _atol_for(dtype)
+    for shape in SHAPES:
         x = torch.randn(*shape, dtype=dtype, device="cuda")
 
-        # Oink (dim=-1, half_to_float=False)
         y = torch.ops.aten._softmax(x, -1, False)
-
-        # Reference
         y_ref = _orig_softmax(x, -1, False)
 
-        atol = _atol_for(dtype)
         torch.testing.assert_close(
             y, y_ref, atol=atol, rtol=0, msg=f"fwd shape={shape} dtype={dtype}"
         )
 
-    def test_fwd_fp16(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.float16)
 
-    def test_fwd_bf16(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.bfloat16)
-
-    def test_fwd_fp32(self):
-        for shape in SHAPES:
-            self._run_fwd(shape, torch.float32)
-
-    def _run_bwd(self, shape, dtype):
+@requires_cuda
+@requires_sm100
+@requires_override
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_softmax_bwd(dtype):
+    atol = 3e-1 if dtype == torch.bfloat16 else _atol_for(dtype)
+    for shape in SHAPES:
         x = torch.randn(*shape, dtype=dtype, device="cuda")
         grad_out = torch.randn(*shape, dtype=dtype, device="cuda")
 
-        # Oink
         x1 = x.detach().requires_grad_(True)
         y1 = torch.softmax(x1, dim=-1)
         y1.backward(grad_out)
 
-        # Reference (manual softmax + bwd to avoid the override)
         x2 = x.detach().requires_grad_(True)
         y2 = _orig_softmax(x2, -1, False)
         dx_ref = _orig_softmax_bwd(grad_out, y2, -1, dtype)
 
-        atol = 3e-1 if dtype == torch.bfloat16 else _atol_for(dtype)
         torch.testing.assert_close(
-            x1.grad,
-            dx_ref,
-            atol=atol,
-            rtol=0,
+            x1.grad, dx_ref, atol=atol, rtol=0,
             msg=f"bwd shape={shape} dtype={dtype}",
         )
-
-    def test_bwd_fp16(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.float16)
-
-    def test_bwd_bf16(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.bfloat16)
-
-    def test_bwd_fp32(self):
-        for shape in SHAPES:
-            self._run_bwd(shape, torch.float32)
 
 
 # =========================================================================
@@ -444,43 +422,47 @@ class TestSoftmaxOverride(unittest.TestCase):
 # =========================================================================
 
 
-@unittest.skipIf(not TEST_CUDA, "CUDA not available")
-@unittest.skipIf(not SM100_OR_LATER, "requires SM100+")
-@unittest.skipIf(not _OVERRIDE_APPLIED, "override not applied")
-class TestFallback(unittest.TestCase):
-    """Verify that unsupported inputs fall back to the native CUDA kernel."""
-
-    def test_float64_rmsnorm_falls_back(self):
-        """float64 is not supported by oink — should fall back gracefully."""
-        x = torch.randn(4, 32, dtype=torch.float64, device="cuda")
-        w = torch.randn(32, dtype=torch.float64, device="cuda")
-        y, rstd = torch.ops.aten._fused_rms_norm(x, [32], w, EPS)
-        self.assertEqual(y.shape, x.shape)
-        self.assertEqual(y.dtype, torch.float64)
-
-    def test_float64_layernorm_falls_back(self):
-        x = torch.randn(4, 32, dtype=torch.float64, device="cuda")
-        w = torch.randn(32, dtype=torch.float64, device="cuda")
-        b = torch.randn(32, dtype=torch.float64, device="cuda")
-        out, mean, rstd = torch.ops.aten.native_layer_norm(x, [32], w, b, EPS)
-        self.assertEqual(out.shape, x.shape)
-        self.assertEqual(out.dtype, torch.float64)
-
-    def test_float64_softmax_falls_back(self):
-        x = torch.randn(4, 32, dtype=torch.float64, device="cuda")
-        y = torch.ops.aten._softmax(x, -1, False)
-        self.assertEqual(y.shape, x.shape)
-        self.assertEqual(y.dtype, torch.float64)
-
-    def test_non_last_dim_softmax_falls_back(self):
-        """Softmax on dim=0 should fall back (oink only handles last dim)."""
-        x = torch.randn(4, 32, dtype=torch.float16, device="cuda")
-        y = torch.ops.aten._softmax(x, 0, False)
-        self.assertEqual(y.shape, x.shape)
-        # Verify correctness: softmax on dim=0
-        y_ref = _orig_softmax(x, 0, False)
-        torch.testing.assert_close(y, y_ref, atol=1e-3, rtol=0)
+@requires_cuda
+@requires_sm100
+@requires_override
+def test_float64_rmsnorm_falls_back():
+    """float64 is not supported by oink — should fall back gracefully."""
+    x = torch.randn(4, 32, dtype=torch.float64, device="cuda")
+    w = torch.randn(32, dtype=torch.float64, device="cuda")
+    y, rstd = torch.ops.aten._fused_rms_norm(x, [32], w, EPS)
+    assert y.shape == x.shape
+    assert y.dtype == torch.float64
 
 
-if __name__ == "__main__":
-    unittest.main()
+@requires_cuda
+@requires_sm100
+@requires_override
+def test_float64_layernorm_falls_back():
+    x = torch.randn(4, 32, dtype=torch.float64, device="cuda")
+    w = torch.randn(32, dtype=torch.float64, device="cuda")
+    b = torch.randn(32, dtype=torch.float64, device="cuda")
+    out, mean, rstd = torch.ops.aten.native_layer_norm(x, [32], w, b, EPS)
+    assert out.shape == x.shape
+    assert out.dtype == torch.float64
+
+
+@requires_cuda
+@requires_sm100
+@requires_override
+def test_float64_softmax_falls_back():
+    x = torch.randn(4, 32, dtype=torch.float64, device="cuda")
+    y = torch.ops.aten._softmax(x, -1, False)
+    assert y.shape == x.shape
+    assert y.dtype == torch.float64
+
+
+@requires_cuda
+@requires_sm100
+@requires_override
+def test_non_last_dim_softmax_falls_back():
+    """Softmax on dim=0 should fall back (oink only handles last dim)."""
+    x = torch.randn(4, 32, dtype=torch.float16, device="cuda")
+    y = torch.ops.aten._softmax(x, 0, False)
+    assert y.shape == x.shape
+    y_ref = _orig_softmax(x, 0, False)
+    torch.testing.assert_close(y, y_ref, atol=1e-3, rtol=0)

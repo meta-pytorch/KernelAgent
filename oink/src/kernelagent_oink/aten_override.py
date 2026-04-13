@@ -129,14 +129,67 @@ def _call_fallback(op_name: str, *args):
 
 
 # ---------------------------------------------------------------------------
-# Reshape helpers
+# Reshape / stride helpers
 # ---------------------------------------------------------------------------
+
+
+def _can_view_as_2d(x: torch.Tensor) -> bool:
+    """Return True if ``x.view(-1, x.shape[-1])`` is viewable (no copy).
+
+    For a view(-1, N) to be valid, all leading dims must be contiguous with
+    respect to each other (size-1 dims are ignored).
+    """
+    if x.dim() < 2:
+        return False
+    if x.dim() == 2:
+        return True
+    for dim in range(x.dim() - 1):
+        if x.size(dim + 1) != 1 and x.stride(dim) != x.stride(dim + 1) * x.size(
+            dim + 1
+        ):
+            return False
+    return True
+
+
+def _is_oink_stride_compatible_2d(x_2d: torch.Tensor) -> bool:
+    """Return True if *x_2d* meets Oink's pointer-path stride constraints.
+
+    Requires stride(1) == 1 (row-major last dim) and stride(0) divisible by
+    the vectorization granularity (256 bits).
+    """
+    if x_2d.dim() != 2:
+        return False
+    if x_2d.stride(1) != 1:
+        return False
+    if x_2d.dtype in (torch.float16, torch.bfloat16):
+        divby = 16  # 256 bits / 16 bits = 16 elements
+    elif x_2d.dtype == torch.float32:
+        divby = 8   # 256 bits / 32 bits = 8 elements
+    else:
+        return False
+    return (x_2d.stride(0) % divby) == 0
 
 
 def _reshape_2d(t: torch.Tensor, M: int, N: int) -> torch.Tensor:
     if t.ndim == 2 and t.shape == (M, N) and t.is_contiguous():
         return t
     return t.reshape(M, N).contiguous()
+
+
+def _reshape_2d_checked(t: torch.Tensor, M: int, N: int) -> torch.Tensor | None:
+    """Reshape to 2D and return None if the result doesn't meet Oink's stride
+    constraints.  Callers should fall back to the native kernel on None."""
+    if not _can_view_as_2d(t):
+        return None
+    x_2d = t.view(-1, N) if t.dim() > 2 else t
+    if x_2d.shape != (M, N):
+        x_2d = t.reshape(M, N)
+    if not x_2d.is_contiguous() and not _is_oink_stride_compatible_2d(x_2d):
+        # contiguous() always produces stride-compatible layout.
+        x_2d = x_2d.contiguous()
+    if not _is_oink_stride_compatible_2d(x_2d):
+        return None
+    return x_2d
 
 
 def _flatten_1d(t: torch.Tensor, M: int) -> torch.Tensor:
@@ -176,7 +229,11 @@ def _oink_fused_rms_norm(
     N = math.prod(normalized_shape)
     M = input.numel() // N
 
-    x = _reshape_2d(input, M, N)
+    x = _reshape_2d_checked(input, M, N)
+    if x is None:
+        return _call_fallback(
+            "_fused_rms_norm", input, normalized_shape, weight, eps
+        )
 
     mod = _get_mod("rmsnorm")
     y, rstd, _ = mod.rmsnorm_forward(
@@ -246,7 +303,11 @@ def _oink_native_layer_norm(
     N = math.prod(normalized_shape)
     M = input.numel() // N
 
-    x = _reshape_2d(input, M, N)
+    x = _reshape_2d_checked(input, M, N)
+    if x is None:
+        return _call_fallback(
+            "native_layer_norm", input, normalized_shape, weight, bias, eps
+        )
 
     mod = _get_mod("layernorm")
     out, rstd, mean = mod.layernorm(
@@ -324,7 +385,9 @@ def _oink_softmax(
     N = input_shape[-1]
     M = self.numel() // N
 
-    x = _reshape_2d(self, M, N)
+    x = _reshape_2d_checked(self, M, N)
+    if x is None:
+        return _call_fallback("_softmax", self, dim, half_to_float)
 
     mod = _get_mod("softmax")
     y = mod.softmax_forward(x)
