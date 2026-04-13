@@ -48,6 +48,7 @@ import functools
 import importlib
 import logging
 import math
+import os
 import threading
 from typing import List, Optional, Tuple
 
@@ -55,9 +56,6 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Lazy kernel module imports
-# ---------------------------------------------------------------------------
 
 _MOD_CACHE: dict[str, object] = {}
 _MOD_LOCK = threading.Lock()
@@ -76,10 +74,6 @@ def _get_mod(name: str):
         return _MOD_CACHE[name]
 
 
-# ---------------------------------------------------------------------------
-# Device capability helpers
-# ---------------------------------------------------------------------------
-
 
 @functools.cache
 def _get_device_sm(device: torch.device) -> int:
@@ -89,6 +83,27 @@ def _get_device_sm(device: torch.device) -> int:
 
 _SUPPORTED_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
 
+# ---------------------------------------------------------------------------
+# Optional tracing — zero overhead when disabled.
+# Enable with OINK_TRACE=1 environment variable.
+# ---------------------------------------------------------------------------
+
+_TRACE_ENABLED: bool = os.environ.get("OINK_TRACE", "0").strip() in ("1", "true")
+_call_counts: dict[str, int] = {}
+
+
+def _trace_call(op_name: str) -> None:
+    """Record and print a marker on the first invocation of each override.
+
+    Only active when ``OINK_TRACE=1`` is set in the environment.  When
+    disabled, each call site pays only a single boolean check
+    (``if _TRACE_ENABLED``) — effectively zero overhead.
+    """
+    n = _call_counts.get(op_name, 0) + 1
+    _call_counts[op_name] = n
+    if n == 1:
+        print(f"[OINK] {op_name} override called (first invocation)", flush=True)
+
 
 def _is_supported(t: torch.Tensor) -> bool:
     """True when Oink's SM100 kernel can handle this tensor."""
@@ -97,11 +112,6 @@ def _is_supported(t: torch.Tensor) -> bool:
         and t.dtype in _SUPPORTED_DTYPES
         and _get_device_sm(t.device) >= 100
     )
-
-
-# ---------------------------------------------------------------------------
-# Fallback kernel capture
-# ---------------------------------------------------------------------------
 
 _fallbacks: dict[str, object] = {}
 
@@ -126,11 +136,6 @@ def _call_fallback(op_name: str, *args):
     raise RuntimeError(
         f"Oink: no fallback captured for aten::{op_name} and input is unsupported"
     )
-
-
-# ---------------------------------------------------------------------------
-# Reshape / stride helpers
-# ---------------------------------------------------------------------------
 
 
 def _can_view_as_2d(x: torch.Tensor) -> bool:
@@ -162,9 +167,9 @@ def _is_oink_stride_compatible_2d(x_2d: torch.Tensor) -> bool:
     if x_2d.stride(1) != 1:
         return False
     if x_2d.dtype in (torch.float16, torch.bfloat16):
-        divby = 16  # 256 bits / 16 bits = 16 elements
+        divby = 16
     elif x_2d.dtype == torch.float32:
-        divby = 8   # 256 bits / 32 bits = 8 elements
+        divby = 8
     else:
         return False
     return (x_2d.stride(0) % divby) == 0
@@ -206,9 +211,6 @@ def _stat_shape(input_shape, normalized_shape_len: int) -> list[int]:
     return list(input_shape[:-normalized_shape_len]) + [1] * normalized_shape_len
 
 
-# =========================================================================
-# RMSNorm
-# =========================================================================
 
 
 def _oink_fused_rms_norm(
@@ -235,6 +237,8 @@ def _oink_fused_rms_norm(
             "_fused_rms_norm", input, normalized_shape, weight, eps
         )
 
+    if _TRACE_ENABLED:
+        _trace_call("_fused_rms_norm")
     mod = _get_mod("rmsnorm")
     y, rstd, _ = mod.rmsnorm_forward(
         x, weight=weight, bias=None, residual=None, eps=eps, store_rstd=True,
@@ -266,6 +270,8 @@ def _oink_fused_rms_norm_backward(
     dout = _reshape_2d(grad_out, M, N)
     rstd_flat = _flatten_1d(rstd, M)
 
+    if _TRACE_ENABLED:
+        _trace_call("_fused_rms_norm_backward")
     mod = _get_mod("rmsnorm")
     dx, dw, _dbias, _dres = mod.rmsnorm_backward(
         x, weight, dout, rstd_flat,
@@ -280,11 +286,6 @@ def _oink_fused_rms_norm_backward(
         dw = torch.zeros_like(weight) if weight is not None else torch.empty(0)
 
     return dx, dw
-
-
-# =========================================================================
-# LayerNorm
-# =========================================================================
 
 
 def _oink_native_layer_norm(
@@ -309,6 +310,8 @@ def _oink_native_layer_norm(
             "native_layer_norm", input, normalized_shape, weight, bias, eps
         )
 
+    if _TRACE_ENABLED:
+        _trace_call("native_layer_norm")
     mod = _get_mod("layernorm")
     out, rstd, mean = mod.layernorm(
         x, weight, bias=bias, eps=eps, return_rstd=True, return_mean=True,
@@ -346,6 +349,8 @@ def _oink_native_layer_norm_backward(
     mean_flat = _flatten_1d(mean, M)
     rstd_flat = _flatten_1d(rstd, M)
 
+    if _TRACE_ENABLED:
+        _trace_call("native_layer_norm_backward")
     mod = _get_mod("layernorm")
     dx, dw, db = mod.layernorm_backward(
         dout, x, weight, rstd_flat, mean_flat, bias=bias,
@@ -361,11 +366,6 @@ def _oink_native_layer_norm_backward(
         db = torch.zeros_like(bias) if bias is not None else torch.empty(0)
 
     return dx, dw, db
-
-
-# =========================================================================
-# Softmax
-# =========================================================================
 
 
 def _oink_softmax(
@@ -389,6 +389,8 @@ def _oink_softmax(
     if x is None:
         return _call_fallback("_softmax", self, dim, half_to_float)
 
+    if _TRACE_ENABLED:
+        _trace_call("_softmax")
     mod = _get_mod("softmax")
     y = mod.softmax_forward(x)
 
@@ -420,15 +422,14 @@ def _oink_softmax_backward(
     dy = _reshape_2d(grad_output, M, N)
     y = _reshape_2d(output, M, N)
 
+    if _TRACE_ENABLED:
+        _trace_call("_softmax_backward_data")
     mod = _get_mod("softmax")
     dx = mod.softmax_backward(dy, y)
 
     return dx.reshape(input_shape)
 
 
-# =========================================================================
-# Registration
-# =========================================================================
 
 _ATEN_LIB: torch.library.Library | None = None
 
