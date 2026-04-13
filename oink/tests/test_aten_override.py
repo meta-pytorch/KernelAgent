@@ -24,7 +24,6 @@ is applied, then compare the override's output against it.
 
 from __future__ import annotations
 
-import math
 import types
 
 import pytest

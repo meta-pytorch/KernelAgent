@@ -157,7 +157,6 @@ def register_all_kernels(*, force: bool = False) -> None:
     register(force=force)
 
     if not _OPS_REGISTERED:
-        # register() decided to bail (missing deps, no CUDA, env gate, etc.).
         return
 
     # Step 2: override aten ops on CUDA.
