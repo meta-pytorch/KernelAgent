@@ -13,52 +13,46 @@
 # limitations under the License.
 
 """
-Override ``aten::_fused_rms_norm`` with Oink's Blackwell CuTeDSL RMSNorm.
+Override Aten kernels with Oink's Blackwell CuTeDSL Kernels.
 
-Follows the quack PR pattern (``torch/_native/ops/norm/rmsnorm_impl.py``):
-registers with ``with_keyset=True`` so the impl receives a
-``DispatchKeySet`` and can call the captured fallback via ``call_boxed``.
+Currently overrides:
+- ``aten::_fused_rms_norm`` → ``rmsnorm_forward``
+- ``aten::_fused_rms_norm_backward`` → ``rmsnorm_backward``
 
-Usage::
-
-    import kernelagent_oink
-    kernelagent_oink.register_all_kernels(force=True)
-    y = torch.nn.functional.rms_norm(x, [N], weight, eps)  # uses Oink
+Follows the quack PR pattern: ``with_keyset=True``, fallback via ``call_boxed``.
+Calls ``rmsnorm_forward`` / ``rmsnorm_backward`` directly to get all kernel
+optimizations (ptr fast-launch, atomic dW, _reduce_partial_sum_fp32).
 """
 
 from __future__ import annotations
 
-import functools
+import importlib
 import logging
 import math
-import os
+from functools import cache, partial
 from typing import List, Optional, Tuple
 
 import torch
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Optional tracing — zero overhead when disabled (OINK_TRACE=1).
-# ---------------------------------------------------------------------------
-
-_TRACE_ENABLED: bool = os.environ.get("OINK_TRACE", "0").strip() in ("1", "true")
-_call_counts: dict[str, int] = {}
-
-
-def _trace_call(op_name: str) -> None:
-    n = _call_counts.get(op_name, 0) + 1
-    _call_counts[op_name] = n
-    if n == 1:
-        print(f"[OINK] {op_name} override called (first invocation)", flush=True)
-
 
 # ---------------------------------------------------------------------------
-# Device / dtype support check
+# Lazy imports (cached)
 # ---------------------------------------------------------------------------
 
 
-@functools.cache
+@cache
+def _oink_rmsnorm():
+    return importlib.import_module("kernelagent_oink.blackwell.rmsnorm")
+
+
+# ---------------------------------------------------------------------------
+# Device support (cached)
+# ---------------------------------------------------------------------------
+
+
+@cache
 def _get_device_major(device: torch.device) -> int:
     major, _ = torch.cuda.get_device_capability(device)
     return major
@@ -66,10 +60,27 @@ def _get_device_major(device: torch.device) -> int:
 
 def _is_supported(input: torch.Tensor) -> bool:
     return input.dtype in (
-        torch.float16,
-        torch.bfloat16,
-        torch.float32,
-    ) and _get_device_major(input.device) in (9, 10)
+        torch.float16, torch.bfloat16, torch.float32,
+    ) and _get_device_major(input.device) >= 10
+
+
+# ---------------------------------------------------------------------------
+# Reshape helpers (match quack's norms.py)
+# ---------------------------------------------------------------------------
+
+
+def _reshape_2d(t: torch.Tensor, M: int, N: int) -> torch.Tensor:
+    if t.ndim == 2 and t.shape[0] == M and t.shape[1] == N and t.is_contiguous():
+        return t
+    return t.reshape(M, N).contiguous()
+
+
+def _flatten_rstd(t: torch.Tensor, M: int) -> torch.Tensor:
+    if t.ndim == 1 and t.shape[0] == M:
+        return t
+    if t.is_contiguous() and t.numel() == M:
+        return t.detach().view(M)
+    return t.reshape(M).contiguous()
 
 
 # =========================================================================
@@ -90,27 +101,24 @@ def _fused_rms_norm_impl(
         return fallback_kernel.call_boxed(
             dispatch_keys, input, normalized_shape, weight, eps
         )
-
     if eps is None:
         eps = 1e-6
 
-    if _TRACE_ENABLED:
-        _trace_call("_fused_rms_norm")
-
-    orig_shape = input.shape
+    input_shape = input.shape
     N = math.prod(normalized_shape)
     M = input.numel() // N
 
     x = input.reshape(M, N)
 
-    from kernelagent_oink.blackwell.rmsnorm import rmsnorm_forward
+    if weight is not None and weight.ndim != 1:
+        weight = weight.view(N)
 
-    y, rstd, _ = rmsnorm_forward(
+    y, rstd, _ = _oink_rmsnorm().rmsnorm_forward(
         x, weight=weight, bias=None, residual=None, eps=eps, store_rstd=True,
     )
 
-    y = y.reshape(orig_shape)
-    stat_shape = list(orig_shape[: -len(normalized_shape)]) + [1] * len(
+    y = y.reshape(input_shape)
+    stat_shape = list(input_shape[: -len(normalized_shape)]) + [1] * len(
         normalized_shape
     )
     rstd = rstd.view(stat_shape)
@@ -139,87 +147,66 @@ def _fused_rms_norm_backward_impl(
             grad_out, input, normalized_shape, rstd, weight, output_mask,
         )
 
-    if _TRACE_ENABLED:
-        _trace_call("_fused_rms_norm_backward")
-
     N = math.prod(normalized_shape)
     M = input.numel() // N
 
-    x = input.reshape(M, N).contiguous()
-    dout = grad_out.reshape(M, N).contiguous()
-    rstd_flat = rstd.reshape(M).contiguous()
+    x = _reshape_2d(input, M, N)
+    dout = _reshape_2d(grad_out, M, N)
+    rstd_flat = _flatten_rstd(rstd, M)
 
-    from kernelagent_oink.blackwell.rmsnorm import rmsnorm_backward
-
-    dx, dw, _dbias, _dres = rmsnorm_backward(
-        x, weight, dout, rstd_flat,
+    w = weight if output_mask[1] else None
+    dx, dw, _db, _dres = _oink_rmsnorm().rmsnorm_backward(
+        x, w, dout, rstd_flat,
         dresidual_out=None, has_bias=False, has_residual=False,
     )
 
-    dx = dx.reshape(input.shape)
+    grad_input: torch.Tensor | None = dx.reshape(input.shape)
+    grad_weight: torch.Tensor | None = dw
 
+    # Match native _fused_rms_norm_backward: return None for masked outputs.
     if not output_mask[0]:
-        dx = torch.zeros_like(input)
-    if not output_mask[1] or dw is None:
-        dw = torch.zeros_like(weight) if weight is not None else torch.empty(0)
+        grad_input = None
+    if not output_mask[1]:
+        grad_weight = None
 
-    return dx, dw
+    return grad_input, grad_weight
 
 
 # =========================================================================
 # Registration
 # =========================================================================
 
-_ATEN_LIB: torch.library.Library | None = None
+_OVERRIDE_LIB: torch.library.Library | None = None
 
 
-def override_all_aten_kernels() -> None:
-    """Override ``aten::_fused_rms_norm`` on CUDA with oink's RMSNorm.
-
-    Uses ``with_keyset=True`` (quack PR pattern) so the override receives
-    ``DispatchKeySet`` and can call the original kernel via ``call_boxed``
-    for unsupported inputs — no Python wrapper overhead on the fallback path.
-    """
-    global _ATEN_LIB
-    if _ATEN_LIB is not None:
+def override_all_kernels() -> None:
+    """Override Aten's kernels on CUDA with Oink's kernels."""
+    global _OVERRIDE_LIB
+    if _OVERRIDE_LIB is not None:
         return
 
     fwd_fallback = torch.library.get_kernel("aten::_fused_rms_norm", "CUDA")
-    bwd_fallback = torch.library.get_kernel(
-        "aten::_fused_rms_norm_backward", "CUDA"
-    )
+    bwd_fallback = torch.library.get_kernel("aten::_fused_rms_norm_backward", "CUDA")
 
-    fwd_impl = functools.partial(
-        _fused_rms_norm_impl, fallback_kernel=fwd_fallback
-    )
-    bwd_impl = functools.partial(
-        _fused_rms_norm_backward_impl, fallback_kernel=bwd_fallback
-    )
+    fwd_impl = partial(_fused_rms_norm_impl, fallback_kernel=fwd_fallback)
+    bwd_impl = partial(_fused_rms_norm_backward_impl, fallback_kernel=bwd_fallback)
 
     lib = torch.library.Library("aten", "IMPL")
     lib.impl("_fused_rms_norm", fwd_impl, "CUDA", with_keyset=True)
     lib.impl("_fused_rms_norm_backward", bwd_impl, "CUDA", with_keyset=True)
-    _ATEN_LIB = lib
-    logger.info("Oink: overrode aten::_fused_rms_norm on CUDA (with_keyset)")
+    _OVERRIDE_LIB = lib
+    logger.info("Oink: overrode aten::_fused_rms_norm on CUDA")
 
 
-def restore_all_aten_kernels() -> None:
-    """Remove the override and restore PyTorch's native CUDA RMSNorm."""
-    global _ATEN_LIB
-    if _ATEN_LIB is None:
+def restore_all_kernels() -> None:
+    """Remove the override and restore PyTorch's native CUDA kernels."""
+    global _OVERRIDE_LIB
+    if _OVERRIDE_LIB is None:
         return
-    _ATEN_LIB = None
-    logger.info("Oink: restored aten::_fused_rms_norm to PyTorch default")
-
-
-# Backward-compatible aliases.
-override_aten_rmsnorm = override_all_aten_kernels
-restore_aten_rmsnorm = restore_all_aten_kernels
+    _OVERRIDE_LIB = None
 
 
 __all__ = [
-    "override_all_aten_kernels",
-    "restore_all_aten_kernels",
-    "override_aten_rmsnorm",
-    "restore_aten_rmsnorm",
+    "override_all_kernels",
+    "restore_all_kernels",
 ]
