@@ -59,9 +59,11 @@ def _get_device_major(device: torch.device) -> int:
 
 
 def _is_supported(input: torch.Tensor) -> bool:
-    return input.dtype in (
-        torch.float16, torch.bfloat16, torch.float32,
-    ) and _get_device_major(input.device) >= 10
+    return (
+        input.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and _get_device_major(input.device) >= 10
+        and input.shape[-1] >= 128  # oink kernels require N >= 128
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +194,8 @@ def override_all_kernels() -> None:
     bwd_impl = partial(_fused_rms_norm_backward_impl, fallback_kernel=bwd_fallback)
 
     lib = torch.library.Library("aten", "IMPL")
-    lib.impl("_fused_rms_norm", fwd_impl, "CUDA", with_keyset=True)
-    lib.impl("_fused_rms_norm_backward", bwd_impl, "CUDA", with_keyset=True)
+    lib.impl("_fused_rms_norm", fwd_impl, "CUDA", with_keyset=True, allow_override=True)
+    lib.impl("_fused_rms_norm_backward", bwd_impl, "CUDA", with_keyset=True, allow_override=True)
     _OVERRIDE_LIB = lib
     logger.info("Oink: overrode aten::_fused_rms_norm on CUDA")
 
