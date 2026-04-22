@@ -67,7 +67,7 @@ def _atol_for(dtype):
         return 1e-1  # bf16 has 8-bit mantissa, larger rounding error
     if dtype == torch.float16:
         return 1e-2  # fp16 has 11-bit mantissa
-    return 1e-4      # fp32
+    return 1e-4  # fp32
 
 
 @requires_cuda
@@ -95,7 +95,9 @@ def test_oink_availability_checks(monkeypatch: pytest.MonkeyPatch):
     from kernelagent_oink.aten_override import _get_device_major, _is_supported
 
     fake_tensor = types.SimpleNamespace(
-        is_cuda=True, dtype=torch.float16, device=torch.device("cuda:0"),
+        is_cuda=True,
+        dtype=torch.float16,
+        device=torch.device("cuda:0"),
         shape=torch.Size([32, 4096]),
     )
 
@@ -112,14 +114,18 @@ def test_oink_availability_checks(monkeypatch: pytest.MonkeyPatch):
 
     # float64 → not supported.
     fake_f64 = types.SimpleNamespace(
-        is_cuda=True, dtype=torch.float64, device=torch.device("cuda:0"),
+        is_cuda=True,
+        dtype=torch.float64,
+        device=torch.device("cuda:0"),
         shape=torch.Size([32, 4096]),
     )
     assert _is_supported(fake_f64) is False
 
     # N < 128 → not supported (kernel requires N >= 128).
     fake_small_n = types.SimpleNamespace(
-        is_cuda=True, dtype=torch.float16, device=torch.device("cuda:0"),
+        is_cuda=True,
+        dtype=torch.float16,
+        device=torch.device("cuda:0"),
         shape=torch.Size([32, 64]),
     )
     assert _is_supported(fake_small_n) is False
@@ -161,7 +167,9 @@ def test_rmsnorm_bwd(dtype):
     for shape in SHAPES:
         normalized_shape = [shape[-1]]
         x = torch.randn(*shape, dtype=dtype, device="cuda", requires_grad=True)
-        w = torch.randn(*normalized_shape, dtype=dtype, device="cuda", requires_grad=True)
+        w = torch.randn(
+            *normalized_shape, dtype=dtype, device="cuda", requires_grad=True
+        )
         grad_out = torch.randn(*shape, dtype=dtype, device="cuda")
 
         # Oink override fwd + bwd.
@@ -190,9 +198,7 @@ def test_backward_output_mask(mask):
 
     _, rstd = torch.ops.aten._fused_rms_norm(x, [128], w, EPS)
 
-    dx, dw = torch.ops.aten._fused_rms_norm_backward(
-        grad, x, [128], rstd, w, mask
-    )
+    dx, dw = torch.ops.aten._fused_rms_norm_backward(grad, x, [128], rstd, w, mask)
 
     if not mask[0]:
         assert dx is None, "dx should be None when output_mask[0]=False"

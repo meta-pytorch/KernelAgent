@@ -116,7 +116,12 @@ def _fused_rms_norm_impl(
         weight = weight.view(N)
 
     y, rstd, _ = _oink_rmsnorm().rmsnorm_forward(
-        x, weight=weight, bias=None, residual=None, eps=eps, store_rstd=True,
+        x,
+        weight=weight,
+        bias=None,
+        residual=None,
+        eps=eps,
+        store_rstd=True,
     )
 
     y = y.reshape(input_shape)
@@ -146,7 +151,12 @@ def _fused_rms_norm_backward_impl(
     if not _is_supported(input):
         return fallback_kernel.call_boxed(
             dispatch_keys,
-            grad_out, input, normalized_shape, rstd, weight, output_mask,
+            grad_out,
+            input,
+            normalized_shape,
+            rstd,
+            weight,
+            output_mask,
         )
 
     N = math.prod(normalized_shape)
@@ -158,8 +168,13 @@ def _fused_rms_norm_backward_impl(
 
     w = weight if output_mask[1] else None
     dx, dw, _db, _dres = _oink_rmsnorm().rmsnorm_backward(
-        x, w, dout, rstd_flat,
-        dresidual_out=None, has_bias=False, has_residual=False,
+        x,
+        w,
+        dout,
+        rstd_flat,
+        dresidual_out=None,
+        has_bias=False,
+        has_residual=False,
     )
 
     grad_input: torch.Tensor | None = dx.reshape(input.shape)
@@ -195,7 +210,13 @@ def override_all_kernels() -> None:
 
     lib = torch.library.Library("aten", "IMPL")
     lib.impl("_fused_rms_norm", fwd_impl, "CUDA", with_keyset=True, allow_override=True)
-    lib.impl("_fused_rms_norm_backward", bwd_impl, "CUDA", with_keyset=True, allow_override=True)
+    lib.impl(
+        "_fused_rms_norm_backward",
+        bwd_impl,
+        "CUDA",
+        with_keyset=True,
+        allow_override=True,
+    )
     _OVERRIDE_LIB = lib
     logger.info("Oink: overrode aten::_fused_rms_norm on CUDA")
 
