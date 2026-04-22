@@ -58,69 +58,123 @@ def _compute_cutedsl_arch(major: int, minor: int) -> str:
     return f"sm_{major}{minor}{suffix}"
 
 
+def _check_and_setup() -> bool:
+    """Check CUDA availability, SM >= 100, CuTeDSL deps, and set CUTE_DSL_ARCH.
+
+    Returns True if all checks pass, False otherwise. Does not raise.
+    """
+    try:
+        import torch
+    except Exception as e:
+        logger.debug("Oink plugin: torch import failed: %s", e)
+        return False
+
+    try:
+        if not torch.cuda.is_available():
+            logger.debug("Oink plugin: CUDA not available; skipping")
+            return False
+        device_index = _infer_cuda_device_index()
+        major, minor = torch.cuda.get_device_capability(device_index)
+        sm = 10 * int(major) + int(minor)
+        if sm < 100:
+            return False
+
+        try:
+            import cutlass  # noqa: F401
+            import cuda.bindings.driver as _cuda  # noqa: F401
+        except Exception as e:
+            logger.warning(
+                "Oink plugin: CuTeDSL deps missing; skipping. "
+                "Install `nvidia-cutlass-dsl` + `cuda-python`. Error: %s",
+                e,
+            )
+            return False
+
+        os.environ.setdefault(
+            "CUTE_DSL_ARCH", _compute_cutedsl_arch(int(major), int(minor))
+        )
+        return True
+    except Exception as e:
+        logger.exception("Oink plugin: setup failed: %s", e)
+        return False
+
+
 def register(*, force: bool = False) -> None:
-    """Register Oink torch custom ops.
+    """Register Oink torch custom ops (``torch.ops.oink.*``).
 
-    - vLLM plugin mode (default): no-op unless `VLLM_USE_OINK_RMSNORM` is truthy.
-    - Standalone mode: pass `force=True` to register explicitly.
+    This registers ``torch.ops.oink.rmsnorm`` and
+    ``torch.ops.oink.fused_add_rms_norm`` for use by vLLM's direct-call path.
+    It does NOT override aten ops — use :func:`register_all_kernels` for that.
 
-    This function must be safe to call multiple times and must not raise. vLLM
-    executes it in multiple processes (engine + workers).
+    - vLLM plugin mode (default): no-op unless ``VLLM_USE_OINK_RMSNORM`` is truthy.
+    - Standalone mode: pass ``force=True`` to register explicitly.
     """
     global _OPS_REGISTERED
 
     if _OPS_REGISTERED:
         return
 
-    # Gate on the vLLM integration flag so installing the package does not
-    # change behavior unless explicitly enabled. For standalone usage (outside
-    # vLLM), callers can pass force=True to register the ops explicitly.
     if not force and not _env_truthy("VLLM_USE_OINK_RMSNORM"):
         return
 
-    try:
-        import torch
-    except Exception as e:  # pragma: no cover
-        logger.debug("Oink plugin: torch import failed: %s", e)
+    if not _check_and_setup():
         return
 
     try:
-        if not torch.cuda.is_available():
-            logger.debug("Oink plugin: torch.cuda.is_available() is False; skipping")
-            return
-        device_index = _infer_cuda_device_index()
-        major, minor = torch.cuda.get_device_capability(device_index)
-        sm = 10 * int(major) + int(minor)
-        if sm < 100:
-            return
-
-        # Ensure required deps are importable before registering ops so that vLLM
-        # doesn't detect ops that would later fail at first use.
-        try:
-            import cutlass  # noqa: F401
-            import cuda.bindings.driver as _cuda  # noqa: F401
-        except Exception as e:
-            logger.warning(
-                "Oink plugin: CuTeDSL deps missing; skipping op registration. "
-                "Install `nvidia-cutlass-dsl` + `cuda-python`. Error: %s",
-                e,
-            )
-            return
-
-        # Ensure CuTeDSL sees a target arch early. If the user has already set it,
-        # respect their choice.
-        os.environ.setdefault(
-            "CUTE_DSL_ARCH", _compute_cutedsl_arch(int(major), int(minor))
-        )
-
-        # Import registers the ops via torch.library.custom_op decorators.
         from .blackwell import oink_custom_ops  # noqa: F401
-    except Exception as e:  # pragma: no cover
-        # Do not raise: vLLM plugin loader does not guard plugin execution.
-        logger.exception("Oink plugin: failed to register ops: %s", e)
+    except Exception as e:
+        logger.exception("Oink plugin: failed to register custom ops: %s", e)
         return
 
     _OPS_REGISTERED = True
 
 
-__all__ = ["register"]
+_ALL_KERNELS_REGISTERED = False
+
+
+def register_all_kernels(*, force: bool = False) -> None:
+    """Override aten ops with Oink's kernels.
+
+    Checks CUDA/SM100/deps, sets up the CuTeDSL environment, then overrides
+    ``aten::_fused_rms_norm`` and ``aten::_fused_rms_norm_backward`` on CUDA.
+
+    Does NOT register ``torch.ops.oink.*`` custom ops — use :func:`register`
+    separately if those are needed (e.g. for vLLM's direct-call path).
+
+    Args:
+        force: If *True*, bypass the ``VLLM_USE_OINK_RMSNORM`` env gate.
+    """
+    global _ALL_KERNELS_REGISTERED
+    if _ALL_KERNELS_REGISTERED:
+        return
+
+    if not force and not _env_truthy("VLLM_USE_OINK_RMSNORM"):
+        return
+
+    if not _check_and_setup():
+        return
+
+    try:
+        from .aten_override import override_all_kernels
+
+        override_all_kernels()
+    except Exception as e:
+        logger.exception("Oink: failed to override aten ops: %s", e)
+        return
+
+    _ALL_KERNELS_REGISTERED = True
+
+
+def unregister_all_kernels() -> None:
+    """Remove the aten override. Can be followed by :func:`register_all_kernels`."""
+    global _ALL_KERNELS_REGISTERED
+    try:
+        from .aten_override import restore_all_kernels
+
+        restore_all_kernels()
+    except Exception:
+        pass
+    _ALL_KERNELS_REGISTERED = False
+
+
+__all__ = ["register", "register_all_kernels", "unregister_all_kernels"]

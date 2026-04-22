@@ -32,7 +32,12 @@ def _run(cmd: List[str], *, dry_run: bool) -> None:
     print("+", " ".join(cmd), flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True)
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(
+            f"WARNING: command exited with code {result.returncode}, continuing...",
+            flush=True,
+        )
 
 
 def main() -> None:
