@@ -44,6 +44,8 @@ class TritonKernelAgent:
         target_platform: PlatformConfig | None = None,
         no_cusolver: bool = False,
         test_timeout_s: int = 30,
+        review_model: str | None = None,
+        review_rounds: int = 0,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -56,6 +58,8 @@ class TritonKernelAgent:
             high_reasoning_effort: Whether to use high reasoning effort for OpenAI models
             target_platform: Target platform PlatformConfig
             no_cusolver: If True, disables cuSolver library usage
+            review_model: Optional adversarial review model
+            review_rounds: Run review after every N failed rounds (0 disables)
         """
         # Load environment variables
         load_dotenv()
@@ -93,6 +97,8 @@ class TritonKernelAgent:
         )
         self.no_cusolver = no_cusolver
         self.test_timeout_s = test_timeout_s
+        self.review_model = review_model
+        self.review_rounds = max(0, int(review_rounds))
 
         # Setup main logger
         self._setup_logging()
@@ -111,6 +117,8 @@ class TritonKernelAgent:
             target_platform=self._platform_config.name,
             no_cusolver=self.no_cusolver,
             test_timeout_s=self.test_timeout_s,
+            review_model=self.review_model,
+            review_rounds=self.review_rounds,
         )
 
     def _setup_logging(self):

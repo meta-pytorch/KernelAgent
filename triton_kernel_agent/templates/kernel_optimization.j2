@@ -102,6 +102,14 @@ Guidance for this round:
 {{ error_feedback }}
 {% endif %}
 
+{% if review_feedback %}
+## ADVERSARIAL REVIEW FEEDBACK
+Treat this as an external hostile review of the current best kernel. Address high-severity issues first and incorporate the prompt addendum into this round's optimization.
+```text
+{{ review_feedback }}
+```
+{% endif %}
+
 ## PERFORMANCE TARGET
 {% if pytorch_baseline_ms %}
 - PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms

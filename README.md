@@ -98,6 +98,8 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
   python -m Fuser.auto_agent \
     --problem /abs/path/to/KernelBench/level1/19_ReLU.py \
     --no-router-cache \     # avoid caching or using cached results
+    --review-model claude-sonnet-4-20250514 \
+    --review-rounds 2 \
     --verify                # ensure final composition test runs
   ```
   `--no-router-cache` can be enabled to avoid utilizing any cached router results and prevent writing to the cache.
@@ -133,7 +135,13 @@ More knobs live in `triton_kernel_agent/agent.py` and `Fuser/config.py`.
   ```python
   from triton_kernel_agent import TritonKernelAgent
 
-  agent = TritonKernelAgent(num_workers=4, max_rounds=8, model_name="gpt-5")
+  agent = TritonKernelAgent(
+      num_workers=4,
+      max_rounds=8,
+      model_name="gpt-5",
+      review_model="claude-sonnet-4-20250514",
+      review_rounds=2,
+  )
   result = agent.generate_kernel(
       problem_description="Implement ReLU over a contiguous 1D tensor of length 1024"
   )

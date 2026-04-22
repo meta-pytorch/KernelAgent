@@ -38,7 +38,12 @@ class PromptManager:
     """
 
     # Templates that can be overridden via config
-    _OVERRIDABLE = {"kernel_optimization", "reflexion_prompt", "triton_guidelines"}
+    _OVERRIDABLE = {
+        "kernel_optimization",
+        "reflexion_prompt",
+        "triton_guidelines",
+        "adversarial_review",
+    }
 
     def __init__(
         self,
@@ -106,6 +111,7 @@ class PromptManager:
             "kernel_refinement": "kernel_refinement.j2",
             "kernel_optimization": "kernel_optimization.j2",
             "triton_guidelines": "triton_guidelines.j2",
+            "adversarial_review": "adversarial_review.j2",
         }
 
         # Optional templates (loaded if present)
@@ -203,6 +209,7 @@ class PromptManager:
         kernel_code: str,
         error_info: dict[str, str],
         history_context: str | None = None,
+        review_feedback: str | None = None,
         triton_guidelines: str | None = None,
         no_cusolver: bool = False,
     ) -> str:
@@ -215,6 +222,7 @@ class PromptManager:
             kernel_code: Current kernel implementation
             error_info: Dictionary with error information (stdout, stderr)
             history_context: Optional context from previous attempts
+            review_feedback: Optional structured feedback from adversarial reviewer
             triton_guidelines: Optional guidelines (if None, loads from template)
             no_cusolver: If True, disables cuSolver library usage
 
@@ -233,9 +241,45 @@ class PromptManager:
             kernel_code=kernel_code,
             error_info=error_info,
             history_context=history_context,
+            review_feedback=review_feedback,
             triton_guidelines=triton_guidelines,
             kernel_guidance=self.target_platform.kernel_guidance,
             no_cusolver=no_cusolver,
+        )
+
+    def render_adversarial_review_prompt(
+        self,
+        problem_description: str,
+        test_code: str,
+        kernel_code: str,
+        evaluation_results: dict[str, str],
+        history_context: str | None = None,
+        prior_reviews: str | None = None,
+    ) -> str:
+        """
+        Render the adversarial review prompt.
+
+        Args:
+            problem_description: Description of the problem
+            test_code: Test code that the kernel must satisfy
+            kernel_code: Current best kernel implementation
+            evaluation_results: Current evaluation results and failure details
+            history_context: Optional context from previous attempts
+            prior_reviews: Optional prior reviewer feedback for continuity
+
+        Returns:
+            Rendered prompt string
+        """
+        template = self.templates["adversarial_review"]
+        return template.render(
+            problem_description=problem_description,
+            test_code=test_code,
+            kernel_code=kernel_code,
+            evaluation_results=evaluation_results,
+            history_context=history_context,
+            prior_reviews=prior_reviews,
+            triton_guidelines=self.render_triton_guidelines(),
+            kernel_guidance=self.target_platform.kernel_guidance,
         )
 
     def render_kernel_optimization_prompt(
@@ -252,6 +296,7 @@ class PromptManager:
         pytorch_baseline_ms: float | None = None,
         current_best_ms: float | None = None,
         error_feedback: str | None = None,
+        review_feedback: str | None = None,
         recent_attempts: list | None = None,
         reflexions: list | None = None,
         rag_context: str | None = None,
@@ -274,6 +319,7 @@ class PromptManager:
             pytorch_baseline_ms: PyTorch Eager baseline time in ms
             current_best_ms: Current best kernel time in ms (for iterative opt)
             error_feedback: Error message from previous failed attempt
+            review_feedback: Optional structured feedback from adversarial reviewer
             recent_attempts: List of recent OptimizationAttempt objects for history
             reflexions: List of Reflexion objects for self-reflection analysis
             rag_context: Optional RAG-retrieved context with optimization patterns and code examples
@@ -300,6 +346,7 @@ class PromptManager:
             pytorch_baseline_ms=pytorch_baseline_ms,
             current_best_ms=current_best_ms,
             error_feedback=error_feedback,
+            review_feedback=review_feedback,
             recent_attempts=recent_attempts,
             reflexions=reflexions,
             rag_context=rag_context,

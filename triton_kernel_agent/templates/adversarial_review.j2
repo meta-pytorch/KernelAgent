@@ -1,0 +1,79 @@
+{#
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+#}
+
+{{ triton_guidelines }}
+
+TASK: Review the following Triton kernel adversarially before the next optimization/refinement round.
+
+You are not writing replacement code. You are acting as a hostile reviewer trying to find correctness bugs,
+performance traps, unsafe assumptions, and places where the next generation round should focus.
+
+PROBLEM DESCRIPTION:
+```text
+{{ problem_description }}
+```
+
+TEST CODE:
+```python
+{{ test_code }}
+```
+
+CURRENT BEST KERNEL:
+```python
+{{ kernel_code }}
+```
+
+CURRENT EVALUATION RESULTS:
+```json
+{{ evaluation_results | tojson(indent=2) }}
+```
+
+{% if history_context -%}
+PREVIOUS ATTEMPTS AND RESULTS:
+{{ history_context }}
+{% endif %}
+
+{% if prior_reviews -%}
+PREVIOUS REVIEW FEEDBACK:
+{{ prior_reviews }}
+{% endif %}
+
+REVIEW CRITERIA:
+- Correctness risks: indexing, masking, reductions, dtype conversions, boundary conditions, race conditions
+- Performance risks: extra passes, poor occupancy, bad memory access patterns, unnecessary synchronization, unfused stages
+- API / wrapper risks: incorrect shape assumptions, device/dtype mismatches, illegal PyTorch compute in wrapper
+- Robustness risks: non-contiguous inputs, dynamic shapes, launch config assumptions, test overfitting
+
+OUTPUT FORMAT:
+- Return exactly one JSON object.
+- Do not include markdown fences.
+- Keep findings concise and actionable.
+
+Required JSON schema:
+{
+  "verdict": "pass_with_concerns" | "needs_changes",
+  "summary": "short overall assessment",
+  "high_severity_findings": [
+    "finding 1"
+  ],
+  "medium_severity_findings": [
+    "finding 1"
+  ],
+  "recommended_actions": [
+    "specific next action 1"
+  ],
+  "prompt_addendum": "A short instruction block that should be appended to the next generation/refinement prompt."
+}

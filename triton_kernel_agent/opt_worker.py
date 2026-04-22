@@ -74,6 +74,8 @@ class OptimizationWorker:
         max_rounds: int = 10,
         openai_model: str = "gpt-5",
         high_reasoning_effort: bool = True,
+        review_model: str | None = None,
+        review_rounds: int = 0,
         gpu_name: str | None = None,
         ncu_bin_path: str | None = None,
         benchmark_warmup: int = 25,
@@ -109,6 +111,8 @@ class OptimizationWorker:
             max_rounds: Maximum optimization rounds
             openai_model: Model name for optimization
             high_reasoning_effort: Whether to use high reasoning effort
+            review_model: Optional adversarial review model
+            review_rounds: Run adversarial review after every N rounds (0 disables)
             gpu_name: GPU name (auto-detect if None)
             ncu_bin_path: Path to NCU binary (auto-detect if None)
             benchmark_warmup: Number of warmup iterations for benchmarking
@@ -135,6 +139,8 @@ class OptimizationWorker:
         self.max_rounds = max_rounds
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        self.review_model = review_model.strip() if review_model else None
+        self.review_rounds = max(0, int(review_rounds))
         self.pytorch_baseline_time = pytorch_baseline_time
         self.divergence_threshold = divergence_threshold
         self.sol_improvement_threshold = sol_improvement_threshold
@@ -207,6 +213,13 @@ class OptimizationWorker:
 
         # Initialize LLM provider (like worker.py)
         self.provider = get_model_provider(self.openai_model)
+        self.review_provider = None
+        if self.review_model:
+            self.review_provider = (
+                self.provider
+                if self.review_model == self.openai_model
+                else get_model_provider(self.review_model)
+            )
 
         # Initialize components
         self._init_components()
@@ -320,6 +333,8 @@ class OptimizationWorker:
             openai_model=self.openai_model,
             high_reasoning_effort=self.high_reasoning_effort,
             target_platform=self.target_platform,
+            review_model=self.review_model,
+            review_rounds=self.review_rounds,
         )
 
         # Roofline analyzer
@@ -398,6 +413,9 @@ class OptimizationWorker:
             provider=self.provider,
             model=self.openai_model,
             high_reasoning_effort=self.high_reasoning_effort,
+            review_provider=self.review_provider,
+            review_model=self.review_model,
+            review_rounds=self.review_rounds,
             # File configuration
             kernel_file=self.kernel_file,
             # Configuration

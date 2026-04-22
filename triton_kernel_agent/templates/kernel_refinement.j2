@@ -37,6 +37,14 @@ Standard output: {{ error_info.stdout or 'None' }}
 {{ history_context }}
 {%- endif %}
 
+{% if review_feedback -%}
+ADVERSARIAL REVIEW FEEDBACK:
+Use this second-opinion review to guide the next fix. Address high-severity findings first, then medium-severity findings where practical.
+```text
+{{ review_feedback }}
+```
+{% endif %}
+
 FUSION PRIORITY:
 - Audit the existing implementation and the failing behavior to see where additional operations can be fused into the same pass.
 - Aim to return a single fused kernel that performs every dependent operation when feasible; do not regress to multiple kernels just because one passes the tests.

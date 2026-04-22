@@ -214,6 +214,9 @@ class OptimizationOrchestrator:
         provider: BaseProvider,
         model: str,
         high_reasoning_effort: bool,
+        review_provider: BaseProvider | None,
+        review_model: str | None,
+        review_rounds: int,
         kernel_file: Path,
         gpu_specs: dict[str, Any] | None,
         pytorch_baseline_time: float | None,
@@ -242,6 +245,9 @@ class OptimizationOrchestrator:
             provider: LLM provider instance
             model: Model name for LLM calls
             high_reasoning_effort: Whether to use high reasoning effort
+            review_provider: Optional provider for adversarial review calls
+            review_model: Optional adversarial review model
+            review_rounds: Run adversarial review after every N rounds (0 disables)
             kernel_file: Path to kernel file for writing
             gpu_specs: GPU specifications for optimization prompt
             pytorch_baseline_time: Pre-computed PyTorch baseline
@@ -266,6 +272,9 @@ class OptimizationOrchestrator:
         self.provider = provider
         self.model = model
         self.high_reasoning_effort = high_reasoning_effort
+        self.review_provider = review_provider
+        self.review_model = review_model
+        self.review_rounds = max(0, int(review_rounds))
 
         # File configuration
         self.kernel_file = kernel_file
@@ -299,6 +308,8 @@ class OptimizationOrchestrator:
         self.attempt_history: deque[OptimizationAttempt] = deque(maxlen=10)
         self.reflexions: list[Reflexion] = []
         self.history_size: int = 5
+        self.latest_review_feedback: str = ""
+        self.review_history: list[str] = []
 
         # Initialize from prior history if provided (shared from beam search manager)
         if prior_history:
@@ -307,6 +318,90 @@ class OptimizationOrchestrator:
         if prior_reflexions:
             for reflexion_dict in prior_reflexions:
                 self.reflexions.append(Reflexion.from_dict(reflexion_dict))
+
+    def _call_review_llm(self, messages: list[dict[str, str]], **kwargs) -> str:
+        """Call the configured review model and return response text."""
+        if not self.review_provider or not self.review_model:
+            raise RuntimeError("No review provider configured")
+        if self.high_reasoning_effort:
+            kwargs["high_reasoning_effort"] = True
+        response = self.review_provider.get_response(
+            self.review_model,
+            messages,
+            **kwargs,
+        )
+        return response.content
+
+    def _format_review_feedback(self, response_text: str) -> str:
+        """Normalize structured reviewer feedback into a stable text block."""
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError:
+            self.logger.warning(
+                "Optimization review model did not return valid JSON; using raw text"
+            )
+            return response_text.strip()
+        return json.dumps(payload, indent=2, sort_keys=True)
+
+    def _build_review_history_context(self) -> str:
+        """Build review context from recent attempts and reflexions."""
+        parts: list[str] = []
+        if self.attempt_history:
+            parts.append("RECENT ATTEMPTS:")
+            for attempt in list(self.attempt_history)[-self.history_size :]:
+                parts.append(attempt.format_for_prompt())
+        if self.reflexions:
+            parts.append("RECENT REFLEXIONS:")
+            for reflexion in self.reflexions[-self.history_size :]:
+                parts.append(reflexion.format_for_prompt())
+        return "\n\n".join(parts)
+
+    def _maybe_request_review(
+        self,
+        completed_round_num: int,
+        current_best_kernel: str,
+        problem_description: str,
+        test_code: list[str],
+        evaluation_results: dict[str, Any],
+    ) -> str:
+        """Request adversarial review on the configured cadence."""
+        if (
+            not self.review_provider
+            or not self.review_model
+            or self.review_rounds <= 0
+            or completed_round_num <= 0
+            or completed_round_num % self.review_rounds != 0
+        ):
+            return self.latest_review_feedback
+
+        self.logger.info(
+            "[review] Running adversarial review with %s after round %s",
+            self.review_model,
+            completed_round_num,
+        )
+        try:
+            prompt = self.prompt_manager.render_adversarial_review_prompt(
+                problem_description=problem_description,
+                test_code="\n\n".join(test_code),
+                kernel_code=current_best_kernel,
+                evaluation_results=evaluation_results,
+                history_context=self._build_review_history_context(),
+                prior_reviews="\n\n".join(self.review_history[-2:])
+                if self.review_history
+                else None,
+            )
+            response_text = self._call_review_llm(
+                [{"role": "user", "content": prompt}],
+                max_tokens=6000,
+            )
+            review_feedback = self._format_review_feedback(response_text)
+            review_file = self.artifact_dir / f"round{completed_round_num:03d}_review.txt"
+            review_file.write_text(review_feedback)
+            self.review_history.append(review_feedback)
+            self.latest_review_feedback = review_feedback
+        except Exception as exc:
+            self.logger.warning("[review] Adversarial review failed: %s", exc)
+        return self.latest_review_feedback
 
     def optimize_kernel(
         self,
@@ -373,6 +468,24 @@ class OptimizationOrchestrator:
             self.logger.info("=" * 80)
             self.logger.info(f"ROUND {round_num}/{max_opt_rounds}")
             self.logger.info("=" * 80)
+
+            if round_num > 1:
+                last_attempt = (
+                    asdict(self.attempt_history[-1]) if self.attempt_history else None
+                )
+                self._maybe_request_review(
+                    completed_round_num=round_num - 1,
+                    current_best_kernel=best_runtime_kernel,
+                    problem_description=problem_description,
+                    test_code=test_code,
+                    evaluation_results={
+                        "last_attempt": last_attempt,
+                        "best_runtime_time_ms": best_runtime_time,
+                        "best_runtime_sol_pct": best_runtime_sol,
+                        "best_sol_time_ms": best_sol_time,
+                        "best_sol_sol_pct": best_sol_sol,
+                    },
+                )
 
             # Profile and analyze bottleneck
             bottleneck_results, roofline_result, ncu_metrics = (
@@ -459,6 +572,7 @@ class OptimizationOrchestrator:
                 pytorch_baseline_ms=pytorch_baseline_time,
                 current_best_ms=best_runtime_time,
                 error_feedback=error_feedback if error_feedback else None,
+                review_feedback=self.latest_review_feedback or None,
                 recent_attempts=recent_attempts if recent_attempts else None,
                 reflexions=self.reflexions[-self.history_size :]
                 if self.reflexions

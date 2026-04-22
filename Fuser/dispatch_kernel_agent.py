@@ -335,6 +335,8 @@ def run(
     max_iters: int = 10,
     no_cusolver: bool = False,
     test_timeout_s: int = 30,
+    review_model: str | None = None,
+    review_rounds: int = 0,
 ) -> Path:
     """Dispatch subgraphs to KernelAgent with optional parallelism.
 
@@ -373,6 +375,8 @@ def run(
             target_platform=platform,
             no_cusolver=no_cusolver,
             test_timeout_s=test_timeout_s,
+            review_model=review_model,
+            review_rounds=review_rounds,
         )
         try:
             result = local_agent.generate_kernel(
@@ -450,6 +454,17 @@ def main(argv: list[str] | None = None) -> int:
         "--agent-model", default=None, help="Override KernelAgent model name (optional)"
     )
     p.add_argument(
+        "--review-model",
+        default=None,
+        help="Optional adversarial review model for KernelAgent refinement",
+    )
+    p.add_argument(
+        "--review-rounds",
+        type=int,
+        default=0,
+        help="Run adversarial review after every N failed rounds (0 disables)",
+    )
+    p.add_argument(
         "--jobs",
         type=str,
         default="2",
@@ -502,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
         target_platform=args.target_platform,
         no_cusolver=args.no_cusolver,
         test_timeout_s=args.test_timeout_s,
+        review_model=args.review_model,
+        review_rounds=args.review_rounds,
     )
     print(str(summary_path))
     return 0

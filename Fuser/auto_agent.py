@@ -143,6 +143,10 @@ def _validate_cfg_models(cfg) -> None:
     """Given a router config, remove all unavailable model choices."""
     if (ka_model := cfg.get("ka_model")) and not is_model_available(ka_model):
         del cfg["ka_model"]
+    if (ka_review_model := cfg.get("ka_review_model")) and not is_model_available(
+        ka_review_model
+    ):
+        del cfg["ka_review_model"]
 
     if models := cfg.get("llm_models"):
         remove = [k for k, v in models.items() if not is_model_available(v)]
@@ -326,6 +330,8 @@ class AutoKernelRouter:
     def __init__(
         self,
         ka_model: str | None = None,
+        ka_review_model: str | None = None,
+        ka_review_rounds: int = 0,
         ka_num_workers: int = 4,
         ka_max_rounds: int = 10,
         ka_high_reasoning: bool = True,
@@ -353,6 +359,8 @@ class AutoKernelRouter:
         test_code: str | None = None,
     ) -> None:
         self.ka_model = ka_model
+        self.ka_review_model = ka_review_model
+        self.ka_review_rounds = ka_review_rounds
         self.ka_num_workers = ka_num_workers
         self.ka_max_rounds = ka_max_rounds
         self.ka_high_reasoning = ka_high_reasoning
@@ -386,6 +394,8 @@ class AutoKernelRouter:
             num_workers=self.ka_num_workers,
             max_rounds=self.ka_max_rounds,
             model_name=self.ka_model,
+            review_model=self.ka_review_model,
+            review_rounds=self.ka_review_rounds,
             high_reasoning_effort=self.ka_high_reasoning,
             target_platform=self.platform_config,
             no_cusolver=self.no_cusolver,
@@ -551,6 +561,12 @@ class AutoKernelRouter:
             )
             if route_cfg.get("ka_model"):
                 self.ka_model = str(route_cfg.get("ka_model"))
+            if route_cfg.get("ka_review_model"):
+                self.ka_review_model = str(route_cfg.get("ka_review_model"))
+            if route_cfg.get("ka_review_rounds") is not None:
+                self.ka_review_rounds = int(
+                    route_cfg.get("ka_review_rounds", self.ka_review_rounds)
+                )
             # Fuser tuning
             dj = route_cfg.get("fuser_dispatch_jobs")
             if dj is not None:
@@ -735,6 +751,17 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Model for KernelAgent (optional; uses env default if omitted)",
     )
+    p.add_argument(
+        "--review-model",
+        default=None,
+        help="Optional adversarial review model for KernelAgent refinement",
+    )
+    p.add_argument(
+        "--review-rounds",
+        type=int,
+        default=0,
+        help="Run adversarial review after every N failed rounds (0 disables)",
+    )
     p.add_argument("--ka-workers", type=int, default=4)
     p.add_argument("--ka-rounds", type=int, default=10)
     p.add_argument("--no-ka-high-reasoning", action="store_true")
@@ -803,6 +830,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         router = AutoKernelRouter(
             ka_model=args.ka_model,
+            ka_review_model=args.review_model,
+            ka_review_rounds=args.review_rounds,
             ka_num_workers=args.ka_workers,
             ka_max_rounds=args.ka_rounds,
             ka_high_reasoning=(not args.no_ka_high_reasoning),

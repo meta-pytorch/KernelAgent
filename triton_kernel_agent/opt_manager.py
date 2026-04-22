@@ -86,6 +86,8 @@ class OptimizationManager:
         strategy_config: dict[str, Any] | None = None,
         openai_model: str = "claude-opus-4.5",
         high_reasoning_effort: bool = True,
+        review_model: str | None = None,
+        review_rounds: int = 0,
         bottleneck_override: str | None = None,
         platform: dict[str, str] | str | None = None,
         **worker_kwargs: Any,
@@ -101,6 +103,8 @@ class OptimizationManager:
             strategy_config: Strategy-specific configuration
             openai_model: Model name for LLM optimization
             high_reasoning_effort: Whether to use high reasoning effort
+            review_model: Optional adversarial review model
+            review_rounds: Run adversarial review after every N rounds (0 disables)
             bottleneck_override: Pre-computed bottleneck category to skip LLM analysis
             platform: Platform component config.  Can be:
                 - ``None`` — use ``"nvidia"`` for all components (default)
@@ -116,8 +120,12 @@ class OptimizationManager:
 
         self.openai_model = openai_model
         self.high_reasoning_effort = high_reasoning_effort
+        self.review_model = review_model
+        self.review_rounds = max(0, int(review_rounds))
         self.bottleneck_override = bottleneck_override
         self.worker_kwargs = worker_kwargs
+        self.worker_kwargs.setdefault("review_model", self.review_model)
+        self.worker_kwargs.setdefault("review_rounds", self.review_rounds)
 
         # Store template overrides (also stays in worker_kwargs for forwarding)
         self.templates_config = worker_kwargs.get("templates")

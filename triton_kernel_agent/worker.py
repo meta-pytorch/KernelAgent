@@ -136,6 +136,8 @@ class VerificationWorker:
         target_platform: str = "cuda",
         no_cusolver: bool = False,
         test_timeout_s: int = 30,
+        review_model: str | None = None,
+        review_rounds: int = 0,
     ):
         """
         Initialize a verification worker.
@@ -152,6 +154,8 @@ class VerificationWorker:
             target_platform: Target platform default: cuda
             no_cusolver: If True, disables cuSolver library usage
             test_timeout_s: Timeout in seconds for test execution
+            review_model: Optional adversarial review model
+            review_rounds: Run review after every N failed rounds (0 disables)
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -163,6 +167,12 @@ class VerificationWorker:
         self._platform_config = get_platform(target_platform)
         self.no_cusolver = no_cusolver
         self.test_timeout_s = test_timeout_s
+        self.review_model = review_model.strip() if review_model else None
+        self.review_rounds = max(0, int(review_rounds))
+        self.latest_review_feedback = ""
+        self.review_history: list[str] = []
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"
@@ -179,11 +189,24 @@ class VerificationWorker:
 
         # Initialize provider (may be unavailable in offline/test environments)
         self.provider = None
+        self.review_provider = None
         try:
             self.provider = get_model_provider(self.openai_model)
         except ValueError as e:
             # Provider not available, will use mock mode
             self.logger.warning(f"Provider not available: {e}")
+
+        if self.review_model:
+            try:
+                self.review_provider = (
+                    self.provider
+                    if self.review_model == self.openai_model
+                    else get_model_provider(self.review_model)
+                )
+            except ValueError as e:
+                self.logger.warning(f"Review provider not available: {e}")
+                self.review_model = None
+                self.review_rounds = 0
 
     def _setup_logging(self):
         """Setup worker-specific logging."""
@@ -364,12 +387,101 @@ class VerificationWorker:
         response = self.provider.get_response(self.openai_model, messages, **kwargs)
         return response.content
 
+    def _call_review_llm(self, messages: list[dict[str, str]], **kwargs) -> str:
+        """Call the configured review model and return response text."""
+        if not self.review_model or not self.review_provider:
+            raise RuntimeError("No review model/provider configured")
+
+        if self.high_reasoning_effort:
+            kwargs["high_reasoning_effort"] = True
+
+        response = self.review_provider.get_response(
+            self.review_model, messages, **kwargs
+        )
+        return response.content
+
+    def _build_history_context(self) -> str:
+        """Build prompt context from prior attempts."""
+        if not self.history:
+            return ""
+
+        history_context = "\n\nPREVIOUS ATTEMPTS:\n"
+        for i, round_data in enumerate(self.history):
+            history_context += f"\nAttempt {i + 1}:\n"
+            history_context += (
+                "Kernel code:\n```python\n"
+                f"{round_data['kernel_code'][:500]}...\n```\n"
+            )
+            if round_data.get("stderr"):
+                history_context += f"Error: {round_data['stderr'][:2000]}\n"
+            if round_data.get("stdout"):
+                history_context += f"Output: {round_data['stdout'][:1000]}\n"
+        return history_context
+
+    def _format_review_feedback(self, response_text: str) -> str:
+        """Normalize structured reviewer feedback into a stable text block."""
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError:
+            self.logger.warning("Review model did not return valid JSON; using raw text")
+            return response_text.strip()
+
+        return json.dumps(payload, indent=2, sort_keys=True)
+
+    def _maybe_request_review(
+        self,
+        completed_round_num: int,
+        current_kernel: str,
+        problem_description: str,
+        test_code: str,
+        error_info: dict[str, Any],
+    ) -> str:
+        """Request adversarial review on the configured cadence."""
+        if (
+            not self.review_model
+            or not self.review_provider
+            or self.review_rounds <= 0
+            or completed_round_num <= 0
+            or completed_round_num % self.review_rounds != 0
+        ):
+            return self.latest_review_feedback
+
+        self.logger.info(
+            "Running adversarial review with %s after round %s",
+            self.review_model,
+            completed_round_num,
+        )
+        try:
+            prompt = self.prompt_manager.render_adversarial_review_prompt(
+                problem_description=problem_description,
+                test_code=test_code,
+                kernel_code=current_kernel,
+                evaluation_results=error_info,
+                history_context=self._build_history_context(),
+                prior_reviews="\n\n".join(self.review_history[-2:])
+                if self.review_history
+                else None,
+            )
+            response_text = self._call_review_llm(
+                [{"role": "user", "content": prompt}],
+                max_tokens=6000,
+            )
+            review_feedback = self._format_review_feedback(response_text)
+            review_file = self.log_dir / f"review_round_{completed_round_num}.txt"
+            review_file.write_text(review_feedback)
+            self.review_history.append(review_feedback)
+            self.latest_review_feedback = review_feedback
+        except Exception as exc:
+            self.logger.warning("Adversarial review failed: %s", exc)
+        return self.latest_review_feedback
+
     def _refine_kernel(
         self,
         kernel_code: str,
         error_info: dict[str, str],
         problem_description: str,
         test_code: str,
+        review_feedback: str | None = None,
     ) -> str:
         """
         Refine kernel based on error information using OpenAI API.
@@ -380,27 +492,14 @@ class VerificationWorker:
             try:
                 self.logger.info(f"Refining kernel using {self.openai_model}")
 
-                # Build context from history
-                history_context = ""
-                if self.history:
-                    history_context = "\n\nPREVIOUS ATTEMPTS:\n"
-                    for i, round_data in enumerate(self.history):
-                        history_context += f"\nAttempt {i + 1}:\n"
-                        history_context += f"Kernel code:\n```python\n{round_data['kernel_code'][:500]}...\n```\n"
-                        if round_data.get("stderr"):
-                            history_context += f"Error: {round_data['stderr'][:2000]}\n"
-                        if round_data.get("stdout"):
-                            history_context += (
-                                f"Output: {round_data['stdout'][:1000]}\n"
-                            )
-
                 # Create refinement prompt using template
                 prompt = self.prompt_manager.render_kernel_refinement_prompt(
                     problem_description=problem_description,
                     test_code=test_code,
                     kernel_code=kernel_code,
                     error_info=error_info,
-                    history_context=history_context,
+                    history_context=self._build_history_context(),
+                    review_feedback=review_feedback,
                     no_cusolver=self.no_cusolver,
                 )
 
@@ -521,6 +620,13 @@ class VerificationWorker:
                     error_info,
                     problem_description,
                     format_test_code_for_llm(test_code),
+                    review_feedback=self._maybe_request_review(
+                        round_num + 1,
+                        current_kernel,
+                        problem_description,
+                        format_test_code_for_llm(test_code),
+                        error_info,
+                    ),
                 )
                 continue
 
@@ -551,6 +657,13 @@ class VerificationWorker:
                 error_info,
                 problem_description,
                 format_test_code_for_llm(test_code),
+                review_feedback=self._maybe_request_review(
+                    round_num + 1,
+                    current_kernel,
+                    problem_description,
+                    format_test_code_for_llm(test_code),
+                    error_info,
+                ),
             )
 
         # Max rounds reached without success
@@ -636,6 +749,15 @@ class VerificationWorker:
             self.logger.info("✅ Verification passed on first attempt")
             return True, current_kernel, ""
 
+        self._log_round(1, False, current_kernel, stdout, stderr)
+        self._maybe_request_review(
+            1,
+            current_kernel,
+            problem_description,
+            format_test_code_for_llm(test_code),
+            {"stdout": stdout, "stderr": stderr, "error_type": "runtime"},
+        )
+
         # Refinement loop
         for attempt in range(1, max_refine_attempts + 1):
             error_output = stderr if stderr.strip() else stdout
@@ -658,6 +780,13 @@ class VerificationWorker:
                 error_info,
                 problem_description,
                 format_test_code_for_llm(test_code),
+                review_feedback=self._maybe_request_review(
+                    attempt + 1,
+                    current_kernel,
+                    problem_description,
+                    format_test_code_for_llm(test_code),
+                    error_info,
+                ),
             )
 
             # Write and test refined kernel

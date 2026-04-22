@@ -40,6 +40,8 @@ class WorkerManager:
         target_platform: str = "cuda",
         no_cusolver: bool = False,
         test_timeout_s: int = 30,
+        review_model: str | None = None,
+        review_rounds: int = 0,
     ):
         """
         Initialize the worker manager.
@@ -55,6 +57,8 @@ class WorkerManager:
             target_platform: Target platform ('cuda' or 'xpu')
             no_cusolver: If True, disables cuSolver library usage
             test_timeout_s: Timeout in seconds for test execution
+            review_model: Optional adversarial review model
+            review_rounds: Run review after every N failed rounds (0 disables)
         """
         self.num_workers = num_workers
         self.max_rounds = max_rounds
@@ -65,6 +69,8 @@ class WorkerManager:
         self.target_platform = target_platform
         self.no_cusolver = no_cusolver
         self.test_timeout_s = test_timeout_s
+        self.review_model = review_model
+        self.review_rounds = review_rounds
 
         # Setup logging
         if log_dir is None:
@@ -172,6 +178,8 @@ class WorkerManager:
                     self.target_platform,
                     self.no_cusolver,
                     self.test_timeout_s,
+                    self.review_model,
+                    self.review_rounds,
                 )
 
                 process = mp.Process(target=worker_process, args=args)
@@ -238,6 +246,8 @@ def worker_process(
     target_platform: str,
     no_cusolver: bool = False,
     test_timeout_s: int = 30,
+    review_model: str | None = None,
+    review_rounds: int = 0,
 ):
     """
     Worker process for kernel verification and refinement.
@@ -259,6 +269,8 @@ def worker_process(
         target_platform=target_platform,
         no_cusolver=no_cusolver,
         test_timeout_s=test_timeout_s,
+        review_model=review_model,
+        review_rounds=review_rounds,
     )
 
     result = worker.run(

@@ -52,6 +52,8 @@ def _run_strategy(
     test_code: str,
     log_dir: Path,
     max_rounds: int | None = None,
+    review_model: str | None = None,
+    review_rounds: int = 0,
 ) -> dict:
     """Run a single strategy using its config file."""
     config_path = _CONFIGS_DIR / f"{strategy}.yaml"
@@ -68,6 +70,8 @@ def _run_strategy(
         config=str(config_path),
         log_dir=log_dir / strategy,
         database_path=log_dir / strategy / "program_db.json",
+        review_model=review_model,
+        review_rounds=review_rounds,
     )
 
     return manager.run_optimization(
@@ -130,6 +134,17 @@ def main():
         required=True,
         help="Directory containing kernel.py, problem.py, and test.py",
     )
+    parser.add_argument(
+        "--review-model",
+        default=None,
+        help="Optional adversarial review model for optimization rounds",
+    )
+    parser.add_argument(
+        "--review-rounds",
+        type=int,
+        default=0,
+        help="Run adversarial review after every N optimization rounds (0 disables)",
+    )
 
     args = parser.parse_args()
 
@@ -173,6 +188,8 @@ def main():
                 test_code,
                 log_dir,
                 max_rounds=args.max_rounds,
+                review_model=args.review_model,
+                review_rounds=args.review_rounds,
             )
             print_result(results[strategy], strategy.upper(), kernel_dir)
 
@@ -192,6 +209,8 @@ def main():
             test_code,
             log_dir,
             max_rounds=args.max_rounds,
+            review_model=args.review_model,
+            review_rounds=args.review_rounds,
         )
         print_result(result, args.strategy.upper(), kernel_dir)
 
