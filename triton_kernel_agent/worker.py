@@ -244,6 +244,12 @@ class VerificationWorker:
         if not response_text:
             return None
 
+        def _strip_fences(text: str) -> str:
+            stripped = text.strip()
+            stripped = re.sub(rf"^```(?:{language})?\s*\n", "", stripped)
+            stripped = re.sub(r"\n```$", "", stripped)
+            return stripped.strip()
+
         # First, try to find code blocks with language markers
         # Pattern matches ```python or ```language_name
         pattern = rf"```{language}\s*\n(.*?)```"
@@ -260,15 +266,16 @@ class VerificationWorker:
                 # wrapper code.  Prefer the block defining kernel_function.
                 for block in matches:
                     if re.search(r"\bdef\s+kernel_function\b", block):
-                        return block.strip()
+                        return _strip_fences(block)
                 # Fallback: return the longest block
-                return max(matches, key=len).strip()
+                return _strip_fences(max(matches, key=len))
             # Default: return the first match
-            return matches[0].strip()
+            return _strip_fences(matches[0])
 
         # If no code blocks found, check if the entire response looks like code
         # This is a fallback for cases where LLM doesn't use code blocks
-        lines = response_text.strip().split("\n")
+        sanitized_response = _strip_fences(response_text)
+        lines = sanitized_response.split("\n")
 
         # Simple heuristic: if response contains import statements or function definitions
         code_indicators = ["import ", "from ", "def ", "class ", "@", '"""', "'''"]
@@ -278,7 +285,7 @@ class VerificationWorker:
             for indicator in code_indicators
         ):
             # Likely the entire response is code
-            return response_text.strip()
+            return sanitized_response
 
         # No code found
         self.logger.warning("No code block found in LLM response")

@@ -153,6 +153,7 @@ def profile_triton_kernel(
             "LD_LIBRARY_PATH",
             "CUDA_VISIBLE_DEVICES",
             "PYTHONPATH",
+            "TMPDIR",
             "TRITON_CACHE_DIR",
             "TORCH_EXTENSIONS_DIR",
             "CONDA_PREFIX",
@@ -361,7 +362,12 @@ def load_ncu_metrics(
 
     # Drop the units row (first row often contains units like "%", "inst", etc.)
     if len(sub) > 0:
-        first_row_str = sub.iloc[0].astype(str).str.lower()
+        # Some NCU CSV columns may be empty in the units row, which pandas can
+        # surface as NaN/float values. Normalize everything to lowercase strings
+        # before searching for unit tokens.
+        first_row_str = sub.iloc[0].map(
+            lambda x: "" if pd.isna(x) else str(x).lower()
+        )
         unit_tokens = ("%", "inst", "cycle", "block", "register", "register/thread")
         if first_row_str.apply(lambda x: any(tok in x for tok in unit_tokens)).any():
             sub = sub.iloc[1:].reset_index(drop=True)

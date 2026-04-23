@@ -20,6 +20,7 @@ utilities, L2 cache clearing, and comprehensive statistics.
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import traceback
@@ -50,18 +51,30 @@ class BenchmarkLockManager:
         self.lock = lock
         self.worker_id = worker_id
         self.logger = logger
+        self.timeout_s = float(os.environ.get("BENCHMARK_LOCK_TIMEOUT_S", 180))
+        self._acquired = False
 
     def __enter__(self):
         """Acquire the benchmarking lock."""
         self.logger.info(f"⏳ Waiting for benchmark lock (worker {self.worker_id})...")
-        self.lock.acquire()
+        self._acquired = self.lock.acquire(timeout=self.timeout_s)
+        if not self._acquired:
+            msg = (
+                f"Benchmark lock timeout after {self.timeout_s:.0f}s "
+                f"(worker {self.worker_id})"
+            )
+            self.logger.error(msg)
+            raise TimeoutError(msg)
         self.logger.info(f"🔓 Acquired benchmark lock (worker {self.worker_id})")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Release the benchmarking lock."""
+        if not self._acquired:
+            return False
         try:
             self.lock.release()
+            self._acquired = False
             self.logger.info(f"🔒 Released benchmark lock (worker {self.worker_id})")
         except Exception as e:
             self.logger.warning(f"Failed to release benchmark lock: {e}")

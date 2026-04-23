@@ -16,6 +16,8 @@
 
 import logging
 import os
+import time
+from urllib.parse import urlparse
 
 import requests
 
@@ -36,12 +38,17 @@ class RelayProvider(BaseProvider):
     def __init__(self):
         self.server_url = os.environ.get("LLM_RELAY_URL", "http://127.0.0.1:11434")
         self.is_available_flag = False
+        self._session = requests.Session()
+        # Local relay traffic should never be sent through environment proxies.
+        hostname = (urlparse(self.server_url).hostname or "").lower()
+        if hostname in {"127.0.0.1", "localhost", "::1"}:
+            self._session.trust_env = False
         super().__init__()
 
     def _initialize_client(self) -> None:
         # Test connection to the server
         try:
-            requests.get(f"{self.server_url}/", timeout=5)
+            self._session.get(f"{self.server_url}/", timeout=5)
             self.is_available_flag = True
         except Exception:
             self.is_available_flag = False
@@ -89,17 +96,54 @@ class RelayProvider(BaseProvider):
         logging.debug(request_data)
         logging.debug("=== END PROMPT ===\n")
 
-        response = requests.post(
-            self.server_url,
-            json=request_data,
-            headers={"Content-Type": "application/json"},
-            timeout=int(os.environ.get("LLM_RELAY_TIMEOUT_S", 600)),
-        )
+        timeout_s = int(os.environ.get("LLM_RELAY_TIMEOUT_S", 600))
+        max_retries = int(os.environ.get("LLM_RELAY_MAX_RETRIES", 6))
+        retry_backoff_s = float(os.environ.get("LLM_RELAY_RETRY_BACKOFF_S", 2.0))
+        response = None
+        last_error = None
 
-        if response.status_code != 200:
+        for attempt in range(max_retries):
+            try:
+                response = self._session.post(
+                    self.server_url,
+                    json=request_data,
+                    headers={"Content-Type": "application/json"},
+                    timeout=timeout_s,
+                )
+            except requests.RequestException as e:
+                last_error = e
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"Relay request failed: {e}") from e
+                logging.warning(
+                    "Relay request failed (%s/%s): %s; retrying in %.1fs",
+                    attempt + 1,
+                    max_retries,
+                    e,
+                    retry_backoff_s * (attempt + 1),
+                )
+                time.sleep(retry_backoff_s * (attempt + 1))
+                continue
+
+            if response.status_code == 200:
+                break
+
+            if response.status_code >= 500 and attempt < max_retries - 1:
+                logging.warning(
+                    "Relay returned %s (%s/%s); retrying in %.1fs",
+                    response.status_code,
+                    attempt + 1,
+                    max_retries,
+                    retry_backoff_s * (attempt + 1),
+                )
+                time.sleep(retry_backoff_s * (attempt + 1))
+                continue
+
             raise RuntimeError(
                 f"Server returned status {response.status_code}: {response.text}"
             )
+
+        if response is None:
+            raise RuntimeError(f"Relay request failed: {last_error}")
 
         response_data = response.json()
         logging.debug("\n=== DEBUG: RAW LLM RELAY RESPONSE ===")
