@@ -1,0 +1,35 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Smoke-test variant of beam_search_diverse.yaml.
+#
+# Per-round fanout: 1 parent × 3 bottlenecks × 3 models × 1 sample = 9 workers.
+# Exercises the bottleneck-plumbing fix — each (model, bottleneck_id) trio
+# should produce 3 distinct optimization directions, not 3 copies of the
+# top-ranked bottleneck.
+
+strategy: beam_search
+num_workers: 9
+strategy_config:
+  num_top_kernels: 4
+  num_expanding_parents: 1
+  num_bottlenecks: 3            # ← drives BottleneckAnalyzer to request 3 ranked options
+  samples_per_prompt: 1
+  models:
+    - claude-opus-4.6
+    - gpt-5-4
+    - gemini-2-5-pro
+
+openai_model: claude-opus-4.6
+high_reasoning_effort: true
+
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"

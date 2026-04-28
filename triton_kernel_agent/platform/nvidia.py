@@ -192,6 +192,8 @@ class NvidiaWorkerRunner(WorkerRunner):
         high_reasoning_effort: bool,
         bottleneck_override: str | None,
         worker_kwargs: dict[str, Any],
+        gpu_ids: list[int] | None = None,
+        gpu_locks: dict[int, Any] | None = None,
     ) -> None:
         self.log_dir = log_dir
         self.logger = logger
@@ -201,6 +203,13 @@ class NvidiaWorkerRunner(WorkerRunner):
         self.high_reasoning_effort = high_reasoning_effort
         self.bottleneck_override = bottleneck_override
         self.worker_kwargs = worker_kwargs
+        # Multi-GPU pool: workers round-robin across these GPUs and each
+        # uses its assigned GPU's lock for both benchmark and NCU.  Falls
+        # back to legacy single-GPU behavior on GPU 0 when not provided.
+        self.gpu_ids: list[int] = list(gpu_ids) if gpu_ids else [0]
+        self.gpu_locks: dict[int, Any] = (
+            dict(gpu_locks) if gpu_locks else {0: benchmark_lock}
+        )
 
     def run_workers(
         self,
@@ -219,6 +228,16 @@ class NvidiaWorkerRunner(WorkerRunner):
             workdir = self.log_dir / "workers" / f"w{i}" / f"r{round_num}"
             workdir.mkdir(parents=True, exist_ok=True)
 
+            worker_model = candidate.get("openai_model") or self.openai_model
+            baseline_metrics = candidate.get("baseline_metrics")
+
+            # Round-robin GPU assignment.  The same per-GPU lock is passed
+            # as both ``benchmark_lock`` and ``profiling_semaphore`` to the
+            # worker — collapsing the two GPU-serialization knobs into a
+            # single per-GPU mutex (one operation per GPU at a time).
+            gpu_id = self.gpu_ids[i % len(self.gpu_ids)]
+            gpu_lock = self.gpu_locks[gpu_id]
+
             args = (
                 i,  # worker_id
                 candidate["parent"].kernel_code,
@@ -229,47 +248,79 @@ class NvidiaWorkerRunner(WorkerRunner):
                 workdir,
                 workdir / "logs",
                 result_queue,
-                self.benchmark_lock,
-                self.profiling_semaphore,
+                gpu_lock,   # benchmark_lock
+                gpu_lock,   # profiling_semaphore (same object, per-GPU mutex)
                 pytorch_baseline,
                 candidate["bottleneck_id"],
-                self.openai_model,
+                worker_model,
                 self.high_reasoning_effort,
                 self.bottleneck_override,
                 self.worker_kwargs,
                 shared_history,
                 shared_reflexions,
+                baseline_metrics,
+                gpu_id,
             )
 
             p = mp.Process(target=_nvidia_worker_process, args=args)
             p.start()
             workers.append(p)
 
-        # Wait for completion with timeout
+        # Wait for completion with timeout, draining the result queue as we
+        # go.  We must not let the queue's pipe buffer fill up: a worker's
+        # ``mp.Queue.put`` enqueues data and a feeder thread serializes it
+        # over a pipe; if we don't read, the pipe fills, the feeder blocks,
+        # and the worker can't exit — which deadlocks ``join`` indefinitely.
+        # Polling the queue while polling joins keeps the pipe drained.
+        import queue as _queue_mod
+
         worker_timeout = 1800  # 30 minutes
         deadline = time.time() + worker_timeout
-        for w in workers:
-            remaining = max(0, deadline - time.time())
-            w.join(timeout=remaining)
-            if w.is_alive():
-                self.logger.warning(f"Worker {w.pid} timed out, terminating")
-                w.terminate()
-                w.join(timeout=5)
+        results: list[dict[str, Any]] = []
+        remaining_workers = list(workers)
+
+        while remaining_workers and time.time() < deadline:
+            # Drain anything currently in the queue (non-blocking).
+            while True:
+                try:
+                    results.append(result_queue.get_nowait())
+                except _queue_mod.Empty:
+                    break
+                except Exception:
+                    break
+            # Reap any workers that have exited.  Short timeout so we cycle
+            # back to draining the queue quickly.
+            still_alive = []
+            for w in remaining_workers:
+                w.join(timeout=0.5)
                 if w.is_alive():
-                    self.logger.warning(f"Worker {w.pid} still alive, killing")
-                    w.kill()
-                    w.join(timeout=2)
+                    still_alive.append(w)
+                else:
+                    w.close()
+            remaining_workers = still_alive
+
+        # Anything still alive past the deadline is hung — terminate it.
+        for w in remaining_workers:
+            self.logger.warning(f"Worker {w.pid} timed out, terminating")
+            w.terminate()
+            w.join(timeout=5)
+            if w.is_alive():
+                self.logger.warning(f"Worker {w.pid} still alive, killing")
+                w.kill()
+                w.join(timeout=2)
             w.close()
 
-        # Collect results
-        results: list[dict[str, Any]] = []
-        while not result_queue.empty():
+        # Final drain after every worker is gone, in case anything was
+        # placed on the queue between our last poll and the worker exit.
+        while True:
             try:
                 results.append(result_queue.get_nowait())
+            except _queue_mod.Empty:
+                break
             except Exception:
                 break
 
-        # Clean up queue resources to prevent thread hangs during GC
+        # Clean up queue resources to prevent thread hangs during GC.
         result_queue.close()
         result_queue.join_thread()
 
@@ -307,12 +358,27 @@ def _nvidia_worker_process(
     worker_kwargs: dict,
     prior_history: list[dict],
     prior_reflexions: list[dict],
+    baseline_metrics: dict[str, Any] | None,
+    gpu_id: int,
 ) -> None:
     """Worker process function for NVIDIA GPUs.
 
     Runs in a separate process to optimise a single kernel variant using
     NCU profiling and CUDA benchmarking.
     """
+    import os
+
+    # Pin this worker process to a single GPU before any torch import or
+    # GPU-touching subprocess.  Both the benchmark subprocess and NCU
+    # subprocess inherit the env, so they automatically run on this GPU.
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # Print to harness log immediately so multi-GPU pinning is verifiable.
+    print(
+        f"[worker {worker_id}] pinned to GPU {gpu_id} "
+        f"(CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})",
+        flush=True,
+    )
+
     import sys
 
     kernel_agent_path = Path(__file__).parent.parent.parent
@@ -349,6 +415,7 @@ def _nvidia_worker_process(
             test_code=test_code,
             known_kernel_time=known_time,
             max_opt_rounds=1,
+            baseline_metrics=baseline_metrics,
         )
 
         attempt_data = metrics.get("last_attempt")
@@ -361,6 +428,8 @@ def _nvidia_worker_process(
                 "kernel_code": best_kernel,
                 "time_ms": metrics.get("best_time_ms", float("inf")),
                 "parent_id": parent_id,
+                "openai_model": openai_model,
+                "ptx_hash": metrics.get("best_ptx_hash"),
                 "attempt": attempt_data,
                 "reflexion": reflexion_data,
             }
@@ -371,6 +440,7 @@ def _nvidia_worker_process(
             {
                 "success": False,
                 "worker_id": worker_id,
+                "openai_model": openai_model,
                 "error": str(e),
                 "traceback": traceback.format_exc(),
             }
@@ -501,11 +571,13 @@ class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
         openai_model: str = "gpt-5",
         gpu_name: str | None = None,
         roofline_config: Any | None = None,
+        num_bottlenecks: int = 1,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
         self._log_dir = Path(log_dir) if log_dir else None
         self._openai_model = openai_model
         self._gpu_name = gpu_name
+        self._num_bottlenecks = max(1, int(num_bottlenecks))
         self._delegate: Any | None = None
         # Orchestrator accesses ``bottleneck_analyzer.roofline`` directly.
         self.roofline = NvidiaRooflineAnalyzer(
@@ -533,6 +605,7 @@ class NvidiaBottleneckAnalyzer(BottleneckAnalyzerBase):
                 gpu_specs=gpu_specs,
                 logs_dir=self._log_dir,
                 logger=self._logger,
+                num_bottlenecks=self._num_bottlenecks,
             )
         return self._delegate
 

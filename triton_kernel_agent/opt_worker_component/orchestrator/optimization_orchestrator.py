@@ -315,6 +315,7 @@ class OptimizationOrchestrator:
         test_code: list[str],
         known_kernel_time: float | None = None,
         max_opt_rounds: int = 5,
+        baseline_metrics: dict[str, Any] | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         """
         Main optimization loop.
@@ -325,6 +326,13 @@ class OptimizationOrchestrator:
             test_code: List of test code strings (primary + additional tests)
             known_kernel_time: Known performance of kernel_code in ms
             max_opt_rounds: Maximum optimization rounds
+            baseline_metrics: Optional pre-computed NCU profile + roofline result
+                for ``kernel_code``. When supplied, the orchestrator skips its
+                own NCU runs on the baseline (used when the manager shares a
+                single profile across sibling workers in the same round).
+                Expected keys: ``efficiency_pct``, ``compute_sol_pct``,
+                ``memory_sol_pct``, ``bottleneck``, ``roofline_result``,
+                ``ncu_metrics``.
 
         Returns:
             Tuple of (success, best_kernel_code, performance_metrics)
@@ -342,6 +350,10 @@ class OptimizationOrchestrator:
         early_stop_reason = ""
         any_verified = False
 
+        # Cached baseline NCU — consumed at most once by _profile_and_analyze
+        # when it runs on the identical baseline kernel (round 1 only).
+        self._pending_baseline_metrics: dict[str, Any] | None = baseline_metrics
+
         # Reset roofline history for new optimization run
         self.roofline_analyzer.reset_history()
 
@@ -354,7 +366,9 @@ class OptimizationOrchestrator:
 
         # Benchmark baseline and PyTorch (now includes baseline SOL profiling)
         best_time, baseline_results, pytorch_baseline_time, baseline_sol = (
-            self._benchmark_baseline(kernel_code, problem_file, known_kernel_time)
+            self._benchmark_baseline(
+                kernel_code, problem_file, known_kernel_time, baseline_metrics
+            )
         )
 
         # Two-kernel tracking: track best-by-runtime and best-by-SOL independently
@@ -362,6 +376,7 @@ class OptimizationOrchestrator:
         best_runtime_kernel = kernel_code
         best_runtime_time = best_time
         best_runtime_sol = baseline_sol
+        best_runtime_ptx_hash: str | None = None
 
         best_sol_kernel = kernel_code
         best_sol_time = best_time
@@ -504,6 +519,7 @@ class OptimizationOrchestrator:
                 kernel_file_round, problem_file
             )
             new_time = bench_results["time_ms"]
+            new_ptx_hash = bench_results.get("ptx_hash")
 
             # Profile the NEW kernel to get its SOL metrics
             new_kernel_metrics = self._profile_kernel_for_sol(
@@ -578,12 +594,19 @@ class OptimizationOrchestrator:
                 round_num,
             )
 
-            # Track metadata when new best runtime is found
-            if new_time < best_runtime_time or new_sol > best_sol_sol:
+            # Track metadata when new best runtime is found.  Note:
+            # ``best_runtime_time`` has just been updated by
+            # ``_update_kernels``, so we compare via the post-update
+            # ``best_runtime_kernel`` identity instead of revisiting
+            # ``new_time < best_runtime_time`` (which would always be false
+            # at this point).
+            if best_runtime_kernel == optimized_kernel or new_sol > best_sol_sol:
                 best_round_num = round_num
                 best_bottleneck_category = primary.category
                 if new_kernel_metrics:
                     best_ncu_metrics = new_kernel_metrics.get("ncu_metrics")
+            if best_runtime_kernel == optimized_kernel:
+                best_runtime_ptx_hash = new_ptx_hash
 
             # Roofline check for early termination
             # Use best_runtime kernel's SOL for early termination check
@@ -653,12 +676,22 @@ class OptimizationOrchestrator:
             best_round_num,
             early_stop_reason,
             any_verified,
+            best_runtime_ptx_hash=best_runtime_ptx_hash,
         )
 
     def _benchmark_baseline(
-        self, kernel_code: str, problem_file: Path, known_kernel_time: float | None
+        self,
+        kernel_code: str,
+        problem_file: Path,
+        known_kernel_time: float | None,
+        cached_baseline_metrics: dict[str, Any] | None = None,
     ) -> tuple[float, dict[str, float], float | None, float]:
         """Benchmark baseline kernel and PyTorch, and profile baseline SOL.
+
+        When ``cached_baseline_metrics`` is supplied, the NCU/roofline step
+        is skipped and the cached values are reused — this lets the manager
+        share a single baseline profile across sibling workers operating on
+        the same parent kernel.
 
         Returns:
             Tuple of (best_time, baseline_results, pytorch_baseline_time, baseline_sol)
@@ -683,8 +716,14 @@ class OptimizationOrchestrator:
             best_time = baseline_results["time_ms"]
             self.logger.info(f"📊 Baseline time: {best_time:.4f} ms")
 
-        # Profile baseline kernel for SOL metrics
-        baseline_metrics = self._profile_kernel_for_sol(kernel_code, problem_file, 0)
+        # Profile baseline kernel for SOL metrics (skip if cached)
+        if cached_baseline_metrics is not None:
+            baseline_metrics = cached_baseline_metrics
+            self.logger.info("📊 Baseline SOL: (using cached profile from manager)")
+        else:
+            baseline_metrics = self._profile_kernel_for_sol(
+                kernel_code, problem_file, 0
+            )
         if baseline_metrics:
             baseline_sol = baseline_metrics.get("efficiency_pct", 0.0)
             bottleneck = baseline_metrics.get("bottleneck", "unknown")
@@ -726,22 +765,35 @@ class OptimizationOrchestrator:
             Tuple of (bottleneck_results, roofline_result, ncu_metrics).
             All can be None if profiling fails.
         """
-        self.logger.info(f"[{round_num}] Profiling current kernel with NCU...")
-        kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
-        kernel_file_round.write_text(current_kernel)
+        # If the manager pre-profiled the baseline for us, consume it in round 1
+        # (when current_kernel is still the baseline) and skip the NCU run.
+        cached = self._pending_baseline_metrics
+        if cached is not None and round_num == 1 and cached.get("ncu_metrics"):
+            self.logger.info(
+                f"[{round_num}] Using cached baseline NCU profile (skipping NCU)"
+            )
+            # Still write the kernel file so downstream artifact paths are stable.
+            kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
+            kernel_file_round.write_text(current_kernel)
+            ncu_metrics = cached["ncu_metrics"]
+            self._pending_baseline_metrics = None  # consume once
+        else:
+            self.logger.info(f"[{round_num}] Profiling current kernel with NCU...")
+            kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
+            kernel_file_round.write_text(current_kernel)
 
-        profiler_results = self.profiler.profile_kernel(
-            kernel_file_round, problem_file, round_num
-        )
+            profiler_results = self.profiler.profile_kernel(
+                kernel_file_round, problem_file, round_num
+            )
 
-        if profiler_results is None:
-            self.logger.warning(f"[{round_num}] Profiling failed")
-            return None, None, None
+            if profiler_results is None:
+                self.logger.warning(f"[{round_num}] Profiling failed")
+                return None, None, None
 
-        ncu_metrics = profiler_results.metrics
+            ncu_metrics = profiler_results.metrics
 
-        if not ncu_metrics:
-            return None, None, ncu_metrics
+            if not ncu_metrics:
+                return None, None, ncu_metrics
 
         # Run roofline analysis
         flat_metrics = next(iter(ncu_metrics.values()), {}) if ncu_metrics else {}
@@ -1138,6 +1190,7 @@ class OptimizationOrchestrator:
         best_round: int = 0,
         early_stop_reason: str = "",
         any_verified: bool = False,
+        best_runtime_ptx_hash: str | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Finalize and log optimization results.
 
@@ -1187,6 +1240,7 @@ class OptimizationOrchestrator:
             "baseline_time_ms": baseline_results["time_ms"],
             "best_time_ms": best_runtime_time,
             "best_runtime_sol_pct": best_runtime_sol,
+            "best_ptx_hash": best_runtime_ptx_hash,
             "speedup": baseline_speedup,
             "rounds": rounds,
         }

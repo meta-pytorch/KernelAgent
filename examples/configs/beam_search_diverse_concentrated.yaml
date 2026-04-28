@@ -1,0 +1,64 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# CONCENTRATED variant — push the leaders harder.
+#
+# Layout per round:
+#   2 expanding parents (top of beam)
+#     × 3 bottlenecks
+#     × 3 LLMs (Claude / GPT / Gemini)
+#     × 5 samples per prompt
+#   = 90 worker processes, each producing one candidate kernel.
+#
+# Same 90-worker budget as beam_search_diverse.yaml (the spread variant)
+# but reallocated toward more LLM draws per (parent, bottleneck, model)
+# triple instead of more parents.  Use this when you trust the leader-
+# kernel pair and want to squeeze them rather than explore broadly.
+#
+# Motivation: in our smoke A/B, Design A (P=1, C=10) outperformed
+# Design B (P=2, C=1) on the same problem and budget.  This config is
+# the production-scale version of that observation: keep enough beam-
+# diversity to dedup against (P=2, beam=10) but spend most of the budget
+# concentrating attempts on the current leaders.
+#
+# After workers return:
+#   1. Candidates (and the existing 10-kernel beam) are deduplicated by
+#      normalized-PTX fingerprint — kernels that compile to identical PTX
+#      collapse to the fastest representative.
+#   2. The surviving pool is sorted by runtime.
+#   3. The top 10 become the next round's beam.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --strategy beam_search_diverse_concentrated
+
+strategy: beam_search
+num_workers: 90
+strategy_config:
+  num_top_kernels: 10            # beam width (candidate pool size)
+  num_expanding_parents: 2       # concentrate on top-2 leaders
+  num_bottlenecks: 3             # 3 ranked bottlenecks per parent
+  samples_per_prompt: 5          # five LLM draws per (parent, bottleneck, model)
+  models:
+    # Three models routed via the Relay provider.
+    - claude-opus-4.6
+    - gpt-5-4
+    - gemini-2-5-pro
+
+# Default LLM (used when no per-candidate override is set; here it's
+# overridden per-candidate via the `models` list above).
+openai_model: claude-opus-4.6
+high_reasoning_effort: true
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"

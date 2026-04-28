@@ -139,6 +139,7 @@ class JSONProgramDatabase(ProgramDatabase):
             "problem_id": entry.problem_id,
             "parent_id": entry.parent_id,
             "generation": entry.generation,
+            "ptx_hash": entry.ptx_hash,
             "created_at": entry.created_at.isoformat(),
         }
 
@@ -162,5 +163,6 @@ class JSONProgramDatabase(ProgramDatabase):
             problem_id=d["problem_id"],
             parent_id=d.get("parent_id"),
             generation=d.get("generation", 0),
+            ptx_hash=d.get("ptx_hash"),
             created_at=created_at,
         )

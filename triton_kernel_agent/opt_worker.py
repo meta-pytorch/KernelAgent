@@ -88,6 +88,12 @@ class OptimizationWorker:
         # BeamSearch parameters (passed by opt_manager)
         bottleneck_id: int | None = None,
         bottleneck_override: str | None = None,
+        # How many bottlenecks the analyzer should request from the LLM.
+        # Strategies that fan out across multiple bottleneck ranks (e.g. beam
+        # search with num_bottlenecks > 1) need the analyzer to actually
+        # produce that many ranked options — otherwise sibling workers all
+        # silently fall back to the first bottleneck.
+        num_bottlenecks_to_request: int = 1,
         # Shared history from beam search manager
         prior_history: list[dict] | None = None,
         prior_reflexions: list[dict] | None = None,
@@ -156,6 +162,7 @@ class OptimizationWorker:
         # BeamSearch parameters
         self.bottleneck_id = bottleneck_id
         self.bottleneck_override = bottleneck_override
+        self.num_bottlenecks_to_request = max(1, int(num_bottlenecks_to_request))
 
         # Shared history from beam search manager
         self.prior_history = prior_history or []
@@ -246,6 +253,7 @@ class OptimizationWorker:
             openai_model=self.openai_model,
             gpu_name=self.gpu_name,
             roofline_config=self.roofline_config,
+            num_bottlenecks=self.num_bottlenecks_to_request,
         )
         for k, v in resolved.items():
             if k not in self._platform:
@@ -308,6 +316,7 @@ class OptimizationWorker:
                 gpu_specs=self.gpu_specs,
                 logs_dir=self.log_dir,
                 logger=self.logger,
+                num_bottlenecks=self.num_bottlenecks_to_request,
             )
 
         # Verification worker (for correctness checks)
@@ -361,6 +370,7 @@ class OptimizationWorker:
         test_code: str | list[str],
         known_kernel_time: float | None = None,
         max_opt_rounds: int | None = None,
+        baseline_metrics: dict[str, Any] | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         """
         Run hardware-guided optimization on a kernel.
@@ -373,6 +383,9 @@ class OptimizationWorker:
                 are additional tests.
             known_kernel_time: Known baseline time in ms (skip initial benchmark)
             max_opt_rounds: Maximum optimization rounds (defaults to self.max_rounds)
+            baseline_metrics: Optional pre-computed NCU profile + roofline for
+                ``kernel_code``.  Forwarded to the orchestrator so it can skip
+                its own NCU run on the baseline.
 
         Returns:
             Tuple of (success, best_kernel_code, performance_metrics)
@@ -424,4 +437,5 @@ class OptimizationWorker:
             test_code=test_code,
             known_kernel_time=known_kernel_time,
             max_opt_rounds=max_opt_rounds,
+            baseline_metrics=baseline_metrics,
         )

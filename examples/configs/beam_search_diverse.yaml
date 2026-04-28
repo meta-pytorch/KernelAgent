@@ -1,0 +1,68 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Diverse beam search — multi-LLM, multi-sample expansion with PTX dedup.
+#
+# SPREAD variant — broad beam expansion.
+#
+# Layout per round:
+#   5 expanding parents (top half of beam)
+#     × 3 bottlenecks
+#     × 3 LLMs (Claude / GPT / Gemini)
+#     × 2 samples per prompt
+#   = 90 worker processes, each producing one candidate kernel.
+#
+# Pairs with examples/configs/beam_search_diverse_concentrated.yaml
+# (top-2 parents × 5 samples each, same 90-worker budget) for A/B
+# comparison of "spread vs. concentrated" expansion strategies.
+#
+# After workers return:
+#   1. Candidates (and the existing 10-kernel beam) are deduplicated by
+#      normalized-PTX fingerprint — kernels that compile to identical PTX
+#      collapse to the fastest representative.
+#   2. The surviving pool is sorted by runtime.
+#   3. The top 10 become the next round's beam.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --config examples/configs/beam_search_diverse.yaml
+
+strategy: beam_search
+num_workers: 90
+strategy_config:
+  num_top_kernels: 10            # beam width (candidate pool size)
+  num_expanding_parents: 5       # spread expansion across top-5
+  num_bottlenecks: 3             # 3 ranked bottlenecks per parent (post-plumbing-fix)
+  samples_per_prompt: 2          # two LLM draws per (parent, bottleneck, model)
+  # Three models routed via the Relay provider.  Names not present in
+  # utils/providers/available_models.py are auto-routed to Relay by
+  # get_model_provider (see models.py:70–79), so the plugboard server
+  # resolves them.
+  models:
+    - claude-opus-4.6
+    - gpt-5-4
+    - gemini-2-5-pro
+
+# Default LLM (used when no per-candidate override is set; here it's
+# overridden per-candidate via the `models` list above).
+openai_model: claude-opus-4.6
+high_reasoning_effort: true
+
+# Worker configuration
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"
