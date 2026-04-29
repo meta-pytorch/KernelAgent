@@ -8,7 +8,6 @@ not listed fall back to the generic RMSNorm pointer path.
 """
 # ruff: noqa: E402  # CuTeDSL cache setup must run before importing cutlass.
 
-
 from dataclasses import dataclass
 
 import cuda.bindings.driver as cuda
@@ -233,7 +232,6 @@ class _SimpleWeightOnlyRMSNorm:
         tXrO.store(y.to(cfg.dtype))
         if row_in_bounds:
             cute.copy(copy_atom_store, tXrO, tXgO)
-
 
 
 def _get_simple_weightonly_config(
