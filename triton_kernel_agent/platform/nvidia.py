@@ -293,6 +293,9 @@ class NvidiaWorkerRunner(WorkerRunner):
             workdir.mkdir(parents=True, exist_ok=True)
             worker_model = candidate.get("openai_model") or self.openai_model
             baseline_metrics = candidate.get("baseline_metrics")
+            precomputed_bottleneck_results = candidate.get(
+                "precomputed_bottleneck_results"
+            )
             gpu_lock = self.gpu_locks[gpu_id]
             args = (
                 worker_id,
@@ -315,6 +318,7 @@ class NvidiaWorkerRunner(WorkerRunner):
                 shared_history,
                 shared_reflexions,
                 baseline_metrics,
+                precomputed_bottleneck_results,
                 gpu_id,
             )
             p = mp.Process(target=_nvidia_worker_process, args=args)
@@ -408,6 +412,7 @@ def _nvidia_worker_process(
     prior_history: list[dict],
     prior_reflexions: list[dict],
     baseline_metrics: dict[str, Any] | None,
+    precomputed_bottleneck_results: list[dict[str, Any]] | None,
     gpu_id: int,
 ) -> None:
     """Worker process function for NVIDIA GPUs.
@@ -465,6 +470,7 @@ def _nvidia_worker_process(
             known_kernel_time=known_time,
             max_opt_rounds=1,
             baseline_metrics=baseline_metrics,
+            precomputed_bottleneck_results=precomputed_bottleneck_results,
         )
 
         attempt_data = metrics.get("last_attempt")

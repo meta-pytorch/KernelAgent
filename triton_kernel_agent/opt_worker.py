@@ -371,6 +371,7 @@ class OptimizationWorker:
         known_kernel_time: float | None = None,
         max_opt_rounds: int | None = None,
         baseline_metrics: dict[str, Any] | None = None,
+        precomputed_bottleneck_results: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         """
         Run hardware-guided optimization on a kernel.
@@ -386,6 +387,9 @@ class OptimizationWorker:
             baseline_metrics: Optional pre-computed NCU profile + roofline for
                 ``kernel_code``.  Forwarded to the orchestrator so it can skip
                 its own NCU run on the baseline.
+            precomputed_bottleneck_results: Optional manager-computed bottleneck
+                analysis for the parent kernel. When supplied, workers reuse
+                it instead of issuing their own bottleneck-analysis LLM call.
 
         Returns:
             Tuple of (success, best_kernel_code, performance_metrics)
@@ -438,4 +442,5 @@ class OptimizationWorker:
             known_kernel_time=known_kernel_time,
             max_opt_rounds=max_opt_rounds,
             baseline_metrics=baseline_metrics,
+            precomputed_bottleneck_results=precomputed_bottleneck_results,
         )

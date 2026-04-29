@@ -39,6 +39,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from kernel_perf_agent.kernel_opt.diagnose_prompt.judger_prompt import BottleneckResult
 from triton_kernel_agent.opt_worker_component.searching.history.json_db import (
     JSONProgramDatabase,
 )
@@ -243,6 +244,10 @@ class OptimizationManager:
         # Populated in _run_workers; shared across all sibling workers of the
         # same round (and surviving across rounds for beam members that stick).
         self._baseline_profile_cache: dict[str, dict[str, Any] | None] = {}
+        # Per-parent bottleneck-analysis cache, keyed by program_id.
+        # Populated alongside the baseline profile so sibling workers reuse the
+        # same LLM bottleneck analysis instead of each issuing their own call.
+        self._bottleneck_analysis_cache: dict[str, list[dict[str, Any]] | None] = {}
 
         # ── Platform components (resolved from registry) ─────────
         self._resolve_platform(platform)
@@ -312,9 +317,11 @@ class OptimizationManager:
         # instances (workers still build their own from ``worker_config``).
         self._mgr_profiler: Any | None = None
         self._mgr_roofline: Any | None = None
+        self._mgr_bottleneck_analyzer: Any | None = None
         for key, setter_attr in (
             ("profiler", "_mgr_profiler"),
             ("roofline_analyzer", "_mgr_roofline"),
+            ("bottleneck_analyzer", "_mgr_bottleneck_analyzer"),
         ):
             impl_name = config.get(key)
             if impl_name and registry.has(key, impl_name):
@@ -329,13 +336,14 @@ class OptimizationManager:
                             log_dir=self.log_dir,
                             artifacts_dir=self.log_dir / "baseline_profiles",
                             profiling_semaphore=self.profiling_semaphore,
+                            openai_model=self.openai_model,
+                            gpu_name=self.worker_kwargs.get("gpu_name"),
                         ),
                     )
                 except Exception as e:
                     self.logger.warning(
                         f"Failed to create manager-level {key}: {e}. "
-                        f"Baseline NCU caching disabled; workers will profile "
-                        f"their baselines individually."
+                        f"Manager-side caching for {key} disabled."
                     )
 
         # Propagate worker-level config (string names) to worker
@@ -647,9 +655,13 @@ class OptimizationManager:
         # result across sibling workers.  This avoids repeating an expensive,
         # semaphore-serialized NCU run for every (bottleneck, model) fanout.
         self._populate_baseline_cache(candidates, problem_file, round_num)
+        self._populate_bottleneck_cache(candidates, round_num)
         for cand in candidates:
             parent_id = cand["parent"].program_id
             cand["baseline_metrics"] = self._baseline_profile_cache.get(parent_id)
+            cand["precomputed_bottleneck_results"] = (
+                self._bottleneck_analysis_cache.get(parent_id)
+            )
 
         results = self.worker_runner.run_workers(
             candidates=candidates,
@@ -758,4 +770,85 @@ class OptimizationManager:
                 self.logger.warning(
                     f"Baseline profile errored for parent {pid}: {e}; "
                     f"workers will profile their own baselines."
+                )
+
+    def _populate_bottleneck_cache(
+        self,
+        candidates: list[dict[str, Any]],
+        round_num: int,
+    ) -> None:
+        """Analyze each distinct parent kernel once and cache the LLM result."""
+        if self._mgr_bottleneck_analyzer is None:
+            return
+
+        unseen: dict[str, ProgramEntry] = {}
+        for cand in candidates:
+            parent = cand["parent"]
+            pid = parent.program_id
+            if pid not in self._bottleneck_analysis_cache and pid not in unseen:
+                unseen[pid] = parent
+
+        for pid, parent in unseen.items():
+            baseline_metrics = self._baseline_profile_cache.get(pid)
+            if not baseline_metrics or not baseline_metrics.get("ncu_metrics"):
+                self._bottleneck_analysis_cache[pid] = None
+                continue
+
+            try:
+                ncu_metrics = baseline_metrics["ncu_metrics"]
+                roofline_result = baseline_metrics.get("roofline_result")
+                llm_results = self._mgr_bottleneck_analyzer.analyze(
+                    parent.kernel_code,
+                    ncu_metrics,
+                    round_num,
+                    roofline_result,
+                )
+
+                if self.bottleneck_override:
+                    if llm_results:
+                        cached = [
+                            BottleneckResult(
+                                category=self.bottleneck_override,
+                                summary=(
+                                    f"Pre-computed: {self.bottleneck_override}-bound kernel"
+                                ),
+                                reasoning=result.reasoning,
+                                root_causes=result.root_causes,
+                                recommended_fixes=result.recommended_fixes,
+                            ).to_dict()
+                            for result in llm_results
+                        ]
+                    else:
+                        cached = [
+                            BottleneckResult(
+                                category=self.bottleneck_override,
+                                summary=(
+                                    f"Pre-computed: {self.bottleneck_override}-bound kernel"
+                                ),
+                                reasoning=(
+                                    "Classification based on operation arithmetic intensity"
+                                ),
+                                root_causes=[],
+                                recommended_fixes=[],
+                            ).to_dict()
+                        ]
+                else:
+                    cached = [result.to_dict() for result in llm_results] if llm_results else None
+
+                self._bottleneck_analysis_cache[pid] = cached
+                if cached:
+                    categories = ", ".join(item["category"] for item in cached)
+                    self.logger.info(
+                        f"Baseline bottlenecks cached for parent {pid}: {categories}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Baseline bottleneck analysis failed for parent {pid}; "
+                        f"workers will analyze independently."
+                    )
+            except Exception as e:
+                self._bottleneck_analysis_cache[pid] = None
+                self.logger.warning(
+                    f"Baseline bottleneck analysis errored for parent {pid}: {e}; "
+                    f"workers will analyze independently."
                 )
