@@ -58,6 +58,7 @@ from bench_utils import (  # noqa: E402
     collect_device_meta,
     detect_hbm_peak_gbps,
     do_bench_triton,
+    dsv4_hidden_norm_configs,
     ensure_blackwell_arch_env,
     error_stats_to_row,
     ensure_oink_src_on_path,
@@ -310,6 +311,11 @@ def main() -> None:
         action="store_true",
         help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}",
     )
+    p.add_argument(
+        "--dsv4",
+        action="store_true",
+        help="Run DSv4 hidden-state fused-add RMSNorm set: M in {4096,16384,65536}, N=7168",
+    )
     p.add_argument("--warmup-ms", type=int, default=25)
     p.add_argument(
         "--iters", type=int, default=200, help="rep_ms for do_bench (default: 200)"
@@ -333,7 +339,12 @@ def main() -> None:
     dtype = parse_dtype(args.dtype)
     meta = collect_device_meta(torch.device("cuda"))
 
-    cfgs = dsv3_configs() if bool(args.dsv3) else [(int(args.M), int(args.N))]
+    if bool(args.dsv3):
+        cfgs = dsv3_configs()
+    elif bool(args.dsv4):
+        cfgs = dsv4_hidden_norm_configs()
+    else:
+        cfgs = [(int(args.M), int(args.N))]
     rows: List[Dict[str, Any]] = []
     for M, N in cfgs:
         print(

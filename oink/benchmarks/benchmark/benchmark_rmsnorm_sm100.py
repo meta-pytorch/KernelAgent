@@ -28,6 +28,7 @@ from bench_utils import (  # noqa: E402
     collect_device_meta,
     detect_hbm_peak_gbps,
     do_bench_triton,
+    dsv4_norm_configs,
     ensure_blackwell_arch_env,
     error_stats_to_row,
     ensure_oink_src_on_path,
@@ -286,6 +287,11 @@ def main() -> None:
         help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}",
     )
     p.add_argument(
+        "--dsv4",
+        action="store_true",
+        help="Run DSv4 norm set: M in {4096,16384,65536}, N in {7168,1536,512}",
+    )
+    p.add_argument(
         "--skip-verify",
         action="store_true",
         help="Skip correctness checks (Oink/Quack vs a pure-PyTorch reference)",
@@ -303,6 +309,8 @@ def main() -> None:
         cfgs = [(bs * sl, hidden) for (bs, sl, hidden) in quack_suite_configs()]
     elif args.dsv3:
         cfgs = dsv3_configs()
+    elif args.dsv4:
+        cfgs = dsv4_norm_configs()
     else:
         cfgs = parse_configs(args.configs)
 

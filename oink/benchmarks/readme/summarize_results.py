@@ -232,7 +232,7 @@ def main() -> None:
         raise SystemExit(f"No .json files found under: {in_dir}")
 
     out_parts: List[str] = []
-    out_parts.append("# KernelAgent-Oink SM100 Benchmark Summary")
+    out_parts.append("# KernelAgent-Oink SM10x Benchmark Summary")
     out_parts.append("")
     out_parts.append(f"Input directory: `{in_dir}`")
     out_parts.append("")
