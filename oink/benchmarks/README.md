@@ -153,19 +153,57 @@ python benchmarks/benchmark/benchmark_rmsnorm_sm100.py --dtype bf16 --weight-dty
 ### Fused Add + RMSNorm (vLLM-style, in-place)
 
 This is a good roofline case study kernel (heavy read/write traffic, very little
-extra math):
+extra math). Oink exposes an **in-place** fused op that updates `x` and
+`residual`. Quack's fused kernel writes separate `out` and `residual_out`
+buffers, so the default benchmark baseline (`--quack-baseline kernel_inplace`)
+times Quack plus the copies needed to match Oink's in-place semantics. Use
+`--quack-baseline kernel` to time only the Quack kernel with preallocated
+outputs.
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python benchmarks/benchmark/benchmark_fused_add_rmsnorm_sm100.py --dtype bf16 --M 65536 --N 4096 \
-  --json /tmp/fused_add_rmsnorm_sm100_bf16.json
+# DeepSeek-V3 hidden-size sweep
+PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+  python benchmarks/benchmark/benchmark_fused_add_rmsnorm_sm100.py \
+    --dtype bf16 --dsv3 --iters 80 --warmup-ms 15 \
+    --quack-baseline kernel_inplace \
+    --json /tmp/oink_sm103_fused_add_rmsnorm_dsv3_bf16.json
+
+# DeepSeek-V4-Flash hidden-state sweep (N=7168)
+PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+  python benchmarks/benchmark/benchmark_fused_add_rmsnorm_sm100.py \
+    --dtype bf16 --dsv4 --iters 80 --warmup-ms 15 \
+    --quack-baseline kernel_inplace \
+    --json /tmp/oink_sm103_fused_add_rmsnorm_dsv4_bf16.json
 ```
 
-Note on the Quack baseline: Oink exposes an **in-place** fused op (updates `x`
-and `residual`). Quack’s fused kernel produces `out` and `residual_out`
-out-of-place, so by default the benchmark times `quack::_rmsnorm_fwd` **plus**
-two explicit copies (`x.copy_(out)`, `residual.copy_(residual_out)`) to match the
-in-place semantics. Use `--quack-baseline kernel` to time only the Quack fused
-kernel with preallocated outputs.
+Current GB300 / SM103 BF16 results from correctness-gated runs:
+
+| suite | rows | speedup vs Quack (min / geomean / max) |
+|---|---:|---:|
+| DSv3 fused-add RMSNorm | 9 | 2.022x / 2.045x / 2.089x |
+| DSv4 fused-add RMSNorm | 3 | 2.030x / 2.192x / 2.521x |
+
+DSv3 per-shape results:
+
+| M | N | Oink ms | Quack ms | speedup | Oink TB/s |
+|---:|---:|---:|---:|---:|---:|
+| 4096 | 6144 | 0.0360 | 0.0727 | 2.022x | 5.598 |
+| 4096 | 7168 | 0.0396 | 0.0828 | 2.089x | 5.926 |
+| 4096 | 8192 | 0.0479 | 0.0993 | 2.076x | 5.610 |
+| 16384 | 6144 | 0.1206 | 0.2463 | 2.043x | 6.678 |
+| 16384 | 7168 | 0.1393 | 0.2830 | 2.031x | 6.742 |
+| 16384 | 8192 | 0.1574 | 0.3212 | 2.040x | 6.821 |
+| 65536 | 6144 | 0.4575 | 0.9285 | 2.030x | 7.041 |
+| 65536 | 7168 | 0.5329 | 1.0785 | 2.024x | 7.052 |
+| 65536 | 8192 | 0.6077 | 1.2466 | 2.052x | 7.068 |
+
+DSv4 per-shape results:
+
+| M | N | Oink ms | Quack ms | speedup | Oink TB/s |
+|---:|---:|---:|---:|---:|---:|
+| 4096 | 7168 | 0.0415 | 0.1047 | 2.521x | 5.655 |
+| 16384 | 7168 | 0.1388 | 0.2855 | 2.057x | 6.769 |
+| 65536 | 7168 | 0.5314 | 1.0785 | 2.030x | 7.072 |
 
 ### RMSNorm backward
 
