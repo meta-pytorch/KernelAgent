@@ -6,6 +6,8 @@ bf16 1D weight and no residual/bias/rstd outputs.  The math is
 bf16 output.  The shape table below is deliberately measured and narrow; shapes
 not listed fall back to the generic RMSNorm pointer path.
 """
+# ruff: noqa: E402  # CuTeDSL cache setup must run before importing cutlass.
+
 
 from dataclasses import dataclass
 

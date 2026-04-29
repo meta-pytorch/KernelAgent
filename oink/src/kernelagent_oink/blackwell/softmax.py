@@ -1,3 +1,4 @@
+# ruff: noqa: E402  # CuTeDSL cache setup must run before importing cutlass.
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

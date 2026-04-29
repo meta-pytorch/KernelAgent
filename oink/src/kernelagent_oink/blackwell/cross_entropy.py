@@ -1,3 +1,4 @@
+# ruff: noqa: E402  # CuTeDSL cache setup must run before importing cutlass.
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,7 +41,6 @@ The kernels are self-contained and use only local helpers in
 from __future__ import annotations
 
 import math
-import os
 from typing import Literal, Optional, Type
 
 import torch
