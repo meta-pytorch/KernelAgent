@@ -39,10 +39,8 @@ The kernels are self-contained and use only local helpers in
 
 from __future__ import annotations
 
-import importlib.metadata
 import math
 import os
-import re
 from typing import Literal, Optional, Type
 
 import torch
@@ -50,21 +48,9 @@ from torch import Tensor
 
 import cuda.bindings.driver as cuda  # provided by NVIDIA cuda-python
 
-# CuTeDSL caches generated MLIR into a tempdir under a global default
-# (`/tmp/$USER/cutlass_python_cache`). The cache bytecode format can differ across
-# `nvidia-cutlass-dsl` versions, and cross-version cache sharing causes noisy
-# warnings (and disables cache reuse).
-if "CUTE_DSL_CACHE_DIR" not in os.environ:
-    try:
-        _dsl_ver = importlib.metadata.version("nvidia-cutlass-dsl")
-    except Exception:
-        _dsl_ver = "unknown"
-    _dsl_ver = re.sub(r"[^0-9A-Za-z]+", "_", _dsl_ver)
-    _user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
-    _tmp = os.environ.get("TMPDIR") or "/tmp"
-    os.environ["CUTE_DSL_CACHE_DIR"] = os.path.join(
-        _tmp, _user, f"cutlass_python_cache_{_dsl_ver}"
-    )
+from kernelagent_oink.blackwell._cutedsl_cache import ensure_versioned_cutedsl_cache_dir
+
+ensure_versioned_cutedsl_cache_dir()
 
 try:
     import cutlass  # type: ignore  # noqa: F401

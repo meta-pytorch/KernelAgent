@@ -16,7 +16,7 @@
 Torch custom ops wrapping Oink's Blackwell RMSNorm kernels.
 
 These ops are designed to be:
-- Architecture-aware (use CuTeDSL SM100 kernels when available, fall back
+- Architecture-aware (use CuTeDSL Blackwell SM10x kernels when available, fall back
   to a safe reference elsewhere).
 - Layout-preserving for 2D row-major inputs, including padded MLA-style
   layouts where stride(0) > N and stride(1) == 1.
@@ -69,7 +69,7 @@ def _get_rmsnorm_mod():
 
 
 def _get_sm(device: torch.device | None = None) -> int:
-    """Return SM version as an int (e.g., 100 for SM100 / Blackwell)."""
+    """Return SM version as an int (e.g., 103 for SM103 / Blackwell)."""
     if device is None:
         device = torch.device("cuda")
     major, minor = torch.cuda.get_device_capability(device)
@@ -95,7 +95,7 @@ def oink_rmsnorm(
     dimension stride(0) may be larger than N (padded-row layouts), and
     will be preserved on the fast CuTeDSL path.
 
-    On SM100 (and newer), this dispatches to the tuned CuTeDSL Blackwell
+    On Blackwell SM10x (SM100 and newer), this dispatches to the tuned CuTeDSL Blackwell
     RMSNorm kernel in rmsnorm.rmsnorm_forward, which in turn selects the
     best internal schedule (including DSv3-specific stage-2 kernels where
     applicable) and preserves the input's 2D stride when using the
@@ -111,7 +111,7 @@ def oink_rmsnorm(
     sm = _get_sm(x.device)
     _rms = _get_rmsnorm_mod()
     if sm >= 100:
-        # Use the tuned CuTeDSL SM100 kernel. The public API already
+        # Use the tuned CuTeDSL Blackwell kernel. The public API already
         # contains all necessary gating and layout checks internally.
         y, _rstd, _res = _rms.rmsnorm_forward(
             x,
@@ -186,13 +186,13 @@ def oink_fused_add_rms_norm(
     _rms = _get_rmsnorm_mod()
 
     if sm < 100:
-        # Non-SM100 fallback: keep semantics in-place (correctness-first).
+        # Non-SM10x fallback: keep semantics in-place (correctness-first).
         residual.add_(x)
         y = _rms.rmsnorm_ref(residual, w=weight, b=None, residual=None, eps=eps)
         x.copy_(y)
         return None
 
-    # SM100+: prefer the lowest-overhead in-place entrypoint (returns None).
+    # SM10x+: prefer the lowest-overhead in-place entrypoint (returns None).
     if hasattr(_rms, "fused_add_rmsnorm_inplace_"):
         _rms.fused_add_rmsnorm_inplace_(  # type: ignore[misc]
             x,

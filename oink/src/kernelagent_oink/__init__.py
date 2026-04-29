@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-KernelAgent-Oink: SM100 CuTeDSL kernels + optional vLLM plugin.
+KernelAgent-Oink: Blackwell SM10x CuTeDSL kernels + optional vLLM plugin.
 
 This package can be loaded as a vLLM "general plugin" (entrypoint group
 `vllm.general_plugins`). In that mode it registers Oink custom ops only when
@@ -135,7 +135,7 @@ _ALL_KERNELS_REGISTERED = False
 def register_all_kernels(*, force: bool = False) -> None:
     """Override aten ops with Oink's kernels.
 
-    Checks CUDA/SM100/deps, sets up the CuTeDSL environment, then overrides
+    Checks CUDA/Blackwell SM10x/deps, sets up the CuTeDSL environment, then overrides
     ``aten::_fused_rms_norm`` and ``aten::_fused_rms_norm_backward`` on CUDA.
 
     Does NOT register ``torch.ops.oink.*`` custom ops — use :func:`register`

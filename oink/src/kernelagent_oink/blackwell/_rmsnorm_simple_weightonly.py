@@ -1,7 +1,21 @@
+"""Measured same-dtype bf16 RMSNorm forward specializations.
+
+This module implements a narrow fast path for row-major bf16 tensors with a
+bf16 1D weight and no residual/bias/rstd outputs.  The math is
+``y = x * rsqrt(mean(x * x) + eps) * weight`` with fp32 reduction/multiply and
+bf16 output.  The shape table below is deliberately measured and narrow; shapes
+not listed fall back to the generic RMSNorm pointer path.
+"""
+
+from dataclasses import dataclass
+
 import cuda.bindings.driver as cuda
 import torch
-from dataclasses import dataclass
 from torch import Tensor
+
+from kernelagent_oink.blackwell._cutedsl_cache import ensure_versioned_cutedsl_cache_dir
+
+ensure_versioned_cutedsl_cache_dir()
 
 import cutlass
 import cutlass.cute as cute
@@ -19,6 +33,10 @@ from kernelagent_oink.blackwell.lite_quack import row_reduce_add
 _COMPILED_CACHE: dict[tuple[object, int, int, int], object] = {}
 
 _SIMPLE_WEIGHTONLY_SHAPES: dict[tuple[int, int], tuple[int, int]] = {
+    # DeepSeek-V4-Flash q_lora same-dtype RMSNorm shape.  Larger M and the
+    # kv/per-head N=512 cases are faster through the generic pointer path on SM103.
+    (4096, 1536): (96, 96),
+    # DeepSeek-V3 hidden-state same-dtype RMSNorm shapes.
     (4096, 6144): (192, 192),
     (4096, 7168): (224, 224),
     (4096, 8192): (256, 256),
@@ -66,7 +84,12 @@ class _SimpleWeightOnlyConfig:
         )
 
     @staticmethod
-    def make_tv_layout(threads_per_row, rows_per_block, vec_size, num_vec_blocks):
+    def make_tv_layout(
+        threads_per_row: int,
+        rows_per_block: int,
+        vec_size: int,
+        num_vec_blocks: int,
+    ):
         shape = ((threads_per_row, rows_per_block), (vec_size, num_vec_blocks))
         stride = (
             (vec_size * rows_per_block, 1),
@@ -74,7 +97,7 @@ class _SimpleWeightOnlyConfig:
         )
         return shape, stride
 
-    def smem_bytes(self):
+    def smem_bytes(self) -> int:
         return (
             self.rows_per_block * self.cols_per_tile * (self.dtype.width // 8)
             + self.rows_per_block * self.warps_per_row * 4
@@ -209,9 +232,6 @@ class _SimpleWeightOnlyRMSNorm:
         if row_in_bounds:
             cute.copy(copy_atom_store, tXrO, tXgO)
 
-
-def _can_use_simple_weightonly(x: Tensor, weight: Tensor, out: Tensor) -> bool:
-    return _get_simple_weightonly_config(x, weight, out) is not None
 
 
 def _get_simple_weightonly_config(

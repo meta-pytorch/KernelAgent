@@ -16,25 +16,14 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import os
-import re
 from dataclasses import dataclass, replace
 
 # Vendored/adapted from Quack's SM100 RMSNorm with Oink-specific B200 tuning.
 
-# CuTeDSL cache bytecode is version-sensitive, so isolate the default cache.
-if "CUTE_DSL_CACHE_DIR" not in os.environ:
-    try:
-        _dsl_ver = importlib.metadata.version("nvidia-cutlass-dsl")
-    except Exception:
-        _dsl_ver = "unknown"
-    _dsl_ver = re.sub(r"[^0-9A-Za-z]+", "_", _dsl_ver)
-    _user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
-    _tmp = os.environ.get("TMPDIR") or "/tmp"
-    os.environ["CUTE_DSL_CACHE_DIR"] = os.path.join(
-        _tmp, _user, f"cutlass_python_cache_{_dsl_ver}"
-    )
+from kernelagent_oink.blackwell._cutedsl_cache import ensure_versioned_cutedsl_cache_dir
+
+ensure_versioned_cutedsl_cache_dir()
 
 try:
     import cutlass  # type: ignore  # noqa: F401
@@ -182,7 +171,16 @@ def _resolve_forward_launch_config(
     weight_dtype: type[cutlass.Numeric] | None,
     aligned_tensors: tuple[Tensor | None, ...],
 ) -> _ForwardLaunchConfig:
-    direct_gmem_default = bool(dtype.width == 16 and N in {128, 4096, 6144, 7168, 8192})
+    direct_gmem_default = bool(
+        dtype.width == 16 and N in {128, 512, 4096, 6144, 7168, 8192}
+    )
+    if (
+        dtype.width == 16
+        and N == 1536
+        and weight_dtype is not None
+        and weight_dtype.width == 16
+    ):
+        direct_gmem_default = True
     if weight_dtype is not None and weight_dtype.width == 32 and N == 7168:
         direct_gmem_default = False
     direct_gmem = _direct_gmem_from_policy(default=direct_gmem_default)
@@ -197,7 +195,7 @@ def _resolve_forward_launch_config(
     default_copy_bits = 256 if can_use_256 else 128
     if dtype.width == 16 and N == 128:
         default_copy_bits = 128
-    if dtype.width == 16 and N == 4096:
+    if dtype.width == 16 and N in {512, 1536, 4096}:
         default_copy_bits = 128
     if dtype.width == 16 and weight_dtype is not None and weight_dtype.width == 32:
         default_copy_bits = 128 if N == 4096 else 64
@@ -205,6 +203,12 @@ def _resolve_forward_launch_config(
     copy_bits = _copy_bits_from_policy(
         default=default_copy_bits, can_use_256=can_use_256
     )
+    # cp.async supports at most 128 bits per instruction.  The copy atom clamps
+    # async copies to 128b, so keep the TV layout's vector width in sync with the
+    # emitted copy width; otherwise shapes such as DSv4 N=1536 can leave half of
+    # each logical vector tile uninitialized.
+    if use_async and copy_bits > 128:
+        copy_bits = 128
     if use_async and copy_bits < 128:
         use_async = False
 
@@ -284,6 +288,16 @@ def _forward_launch_overrides(
     nt_default: int | None = None
     cluster_n_default: int | None = None
 
+    if (
+        dtype.width == 16
+        and weight_dtype is not None
+        and weight_dtype.width == 16
+        and N == 1536
+        and direct_gmem
+        and M >= 4096
+    ):
+        tpr_default = 32
+        nt_default = 32
     if (
         dtype.width == 16
         and weight_dtype is not None

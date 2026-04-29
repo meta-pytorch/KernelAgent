@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """
-Generate Quack-style SVG performance plots (Oink vs Quack) from the SM100 suite
-JSON artifacts under `/tmp/kernelagent_oink_sm100_suite_{bf16,fp16}`.
+Generate Quack-style SVG performance plots (Oink vs Quack) from SM10x suite
+JSON artifacts under a suite output directory.
 
 The intent is to match Quack's README visual style:
   - 3 horizontal panels (suite-dependent):
@@ -240,12 +240,13 @@ def _plot(
             label="Quack",
         )
         if roofline_gbps is not None:
+            roof_label = f"HBM peak (measured {roofline_gbps / 1000.0:.3f} TB/s)"
             ax.axhline(
                 roofline_gbps,
                 color=COLOR_ROOF,
                 linewidth=3,
                 linestyle=(0, (4, 6)),
-                label="HBM peak (measured)" if ax is axes[0] else None,
+                label=roof_label if ax is axes[0] else None,
             )
             max_y = max(max_y, float(roofline_gbps))
 
@@ -389,7 +390,19 @@ def main() -> None:
         "--roofline-json",
         type=str,
         default=None,
-        help="Optional /tmp/hbm_roofline_sm100_*.json path",
+        help="Optional measured roofline JSON path from benchmark_hbm_roofline_sm100.py",
+    )
+    p.add_argument(
+        "--roofline-gbps",
+        type=float,
+        default=None,
+        help="Optional measured roofline in GB/s (mutually exclusive with --roofline-json).",
+    )
+    p.add_argument(
+        "--arch-label",
+        type=str,
+        default="SM100",
+        help="Architecture label used in auto-generated titles, e.g. 'SM103 / GB300'.",
     )
     p.add_argument("--out", type=str, required=True, help="Output SVG path")
     p.add_argument(
@@ -401,8 +414,12 @@ def main() -> None:
     if not os.path.isdir(in_dir):
         raise SystemExit(f"--in-dir is not a directory: {in_dir}")
 
+    if args.roofline_json is not None and args.roofline_gbps is not None:
+        raise SystemExit("Use only one of --roofline-json or --roofline-gbps.")
     roofline_gbps = (
-        _read_roofline_gbps(args.roofline_json) if args.roofline_json else None
+        float(args.roofline_gbps)
+        if args.roofline_gbps is not None
+        else (_read_roofline_gbps(args.roofline_json) if args.roofline_json else None)
     )
 
     panel_files = list(_panel_files_for_suite(str(args.suite)))
@@ -451,10 +468,11 @@ def main() -> None:
             if (args.suite == "quack_suite" and args.include_layernorm)
             else ""
         )
+        arch_label = str(args.arch_label)
         if args.suite == "dsv3_cross_entropy":
-            title = f"SM100 {dtype.upper()} — {suite_name}{suffix}"
+            title = f"{arch_label} {dtype.upper()} — {suite_name}{suffix}"
         else:
-            title = f"SM100 {dtype.upper()} Kernel Benchmarks (Oink vs Quack) — {suite_name}{suffix}"
+            title = f"{arch_label} {dtype.upper()} Kernel Benchmarks (Oink vs Quack) — {suite_name}{suffix}"
 
     _plot(
         panels=panels,

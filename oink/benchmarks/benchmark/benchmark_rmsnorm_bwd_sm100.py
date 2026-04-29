@@ -18,7 +18,7 @@ import argparse
 import csv
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import torch
 from triton.testing import do_bench as triton_do_bench
@@ -29,6 +29,8 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 from bench_utils import (  # noqa: E402
     ErrorStatsAccumulator,
     collect_device_meta,
+    detect_hbm_peak_gbps,
+    dsv4_norm_configs,
     ensure_blackwell_arch_env,
     ensure_oink_src_on_path,
     error_stats_to_row,
@@ -53,17 +55,6 @@ _VERIFY_TOL_DX = {
     torch.float16: dict(atol=1e-2, rtol=1e-3),
     torch.bfloat16: dict(atol=1e-1, rtol=1e-2),
 }
-
-
-def detect_hbm_peak_gbps(device: Optional[torch.device] = None) -> float:
-    """Approximate HBM peak bandwidth in GB/s for roofline fractions."""
-    if device is None:
-        device = torch.device("cuda")
-    props = torch.cuda.get_device_properties(device)
-    sm = props.major * 10 + props.minor
-    if sm >= 100:
-        return 8000.0
-    return 2000.0
 
 
 @dataclass
@@ -361,6 +352,11 @@ def main() -> None:
         help="Run DSv3 set: M in {4096,16384,65536}, N in {6144,7168,8192}",
     )
     p.add_argument(
+        "--dsv4",
+        action="store_true",
+        help="Run DSv4 norm set: M in {4096,16384,65536}, N in {7168,1536,512}",
+    )
+    p.add_argument(
         "--skip-verify",
         action="store_true",
         help="Skip correctness checks (Oink/Quack vs a pure-PyTorch RMSNorm backward reference)",
@@ -378,6 +374,8 @@ def main() -> None:
         cfgs = [(bs * sl, hidden) for (bs, sl, hidden) in quack_suite_configs()]
     elif args.dsv3:
         cfgs = dsv3_configs()
+    elif args.dsv4:
+        cfgs = dsv4_norm_configs()
     else:
         cfgs = parse_configs(args.configs)
 
