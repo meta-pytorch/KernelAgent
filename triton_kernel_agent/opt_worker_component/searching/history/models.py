@@ -47,6 +47,11 @@ class ProgramEntry:
     # singletons (never merged with anything else) by the dedup step.
     ptx_hash: str | None = None
 
+    # Optional technique-vector classification (binary vector, one bit
+    # per entry of the configured technique taxonomy).  ``None`` when
+    # clustering is disabled or classification failed.
+    technique_vector: tuple[int, ...] | None = None
+
     # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
 

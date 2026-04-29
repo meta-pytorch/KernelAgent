@@ -1,0 +1,143 @@
+# Default kernel-optimization technique taxonomy used by the
+# technique-vector clustering layer in BeamSearchStrategy.
+#
+# Each entry defines one bit of the binary technique vector emitted per
+# kernel.  Ordering of this list is the bit ordering of the vector — do
+# not reorder existing entries unless you intend to invalidate persisted
+# vectors.  Append-only is safe (old vectors get padded / re-classified
+# on length mismatch).
+#
+# To add a new technique: append a new entry below.  The strategy reads
+# this YAML at run start and the vector dimension follows automatically.
+
+techniques:
+  - name: split_k_reduce
+    description: Split-K with separate reduce kernel
+    llm_hint: |
+      The kernel module defines two @triton.jit functions: one that
+      computes partial dot products over K-slices and writes them to a
+      scratch buffer, and a separate reduce kernel that sums the
+      partials into the final output.
+
+  - name: tensor_cores
+    description: Tensor-core MMA usage
+    llm_hint: |
+      The kernel uses tl.dot, WMMA, or WGMMA on bf16 / fp16 / fp8
+      operands. Bare scalar accumulation in a Python loop does not
+      count even if the dtypes are bf16.
+
+  - name: software_pipelining
+    description: Software pipelining via num_stages
+    llm_hint: |
+      The kernel launches with num_stages >= 2, or uses
+      tl.range(..., num_stages=...) inside the loop, intentionally
+      requesting compile-time pipelining of loads and compute.
+
+  - name: swizzled_load
+    description: Swizzled / blocked load pattern for bank-conflict avoidance
+    llm_hint: |
+      The kernel applies a swizzling pattern (XOR, blocked stride
+      manipulation, or explicit shared-memory layout reshuffle) when
+      loading data, beyond the default Triton compiler-managed layout.
+
+  - name: persistent_kernel
+    description: Persistent grid (one-block-per-SM with internal work loop)
+    llm_hint: |
+      The kernel launches a fixed grid sized to the GPU's SM count and
+      each block iterates internally over multiple work tiles, rather
+      than launching one block per output tile.
+
+  - name: vectorized_load
+    description: Vectorized memory load / store
+    llm_hint: |
+      Loads or stores fetch multiple elements per instruction
+      (e.g. tl.load casting to vector types, explicit float4-shaped
+      pointers, LDS.128 patterns). Default scalar tl.load(pointer)
+      does not count.
+
+  - name: shared_memory_tiling
+    description: Explicit shared-memory tiling
+    llm_hint: |
+      The kernel stages global-memory tiles into shared memory and
+      reuses them across multiple threads in a block, beyond what
+      Triton implicitly does.
+
+  - name: register_tiling
+    description: Register-tile shape (large K-tile, small M/N-tile)
+    llm_hint: |
+      Launch shape is dominated by accumulator-fits-in-registers
+      sizing — small BLOCK_M / BLOCK_N (≤32) with large BLOCK_K
+      (≥1024).
+
+  - name: autotuned_config
+    description: Triton autotune
+    llm_hint: |
+      The kernel uses @triton.autotune with multiple Config entries.
+
+  - name: masked_access
+    description: Masked / boundary-safe accesses
+    llm_hint: |
+      tl.load / tl.store calls explicitly pass mask=... to handle
+      boundary conditions instead of padding inputs.
+
+  - name: atomic_reduction
+    description: Atomic-based cross-block reduction
+    llm_hint: |
+      The kernel uses tl.atomic_add (or similar) to accumulate
+      contributions from multiple blocks into the same output
+      location, instead of a separate reduce kernel.
+
+  - name: precision_split
+    description: Mixed-precision compute (fp32 accumulator, lower-precision operands)
+    llm_hint: |
+      Inputs are bf16 / fp16 / fp8 but the accumulator is initialized
+      with dtype=tl.float32 (or wider than the input dtype) and the
+      final result is cast back down before store.
+
+  - name: warp_specialization
+    description: Producer / consumer warp specialization
+    llm_hint: |
+      Within one kernel, distinct subsets of warps take different
+      roles — typically one warpgroup loads data while another
+      performs the MMA. Detected by tid-conditional branches that
+      split the thread block into role-specific code paths.
+
+  - name: thread_block_clusters
+    description: Hopper thread-block clusters / DSMEM
+    llm_hint: |
+      The kernel uses cluster launch attributes or distributed shared
+      memory APIs that allow blocks within the same cluster to share
+      shared-memory directly.
+
+  - name: grid_swizzling
+    description: Custom grid rasterization order for L2 reuse
+    llm_hint: |
+      The kernel computes its (pid_m, pid_n) tile coordinates from
+      tl.program_id(0) using a custom traversal (snake / blocked /
+      swizzled) rather than the default row-major mapping, intended
+      to maximize L2 cache hit rate across blocks.
+
+  - name: epilogue_fusion
+    description: Epilogue fusion (bias / activation / scale / cast)
+    llm_hint: |
+      The kernel performs additional element-wise operations
+      (bias add, ReLU/SiLU/GELU, scale, dtype cast, quantize) on
+      the accumulator inside the kernel before writing the final
+      result, instead of producing an intermediate tensor.
+
+  - name: loop_unrolling
+    description: Explicit loop unrolling
+    llm_hint: |
+      The Python loop or `tl.range(...)` call carries an explicit
+      unroll directive (`tl.range(..., num_stages=...)` already
+      counts under software_pipelining; this bit is reserved for
+      explicit `# pragma unroll`-style hints, manual fully-unrolled
+      loops, or `tl.range(loop_unroll_factor=...)`).
+
+  - name: async_copy_tma
+    description: Asynchronous copy / TMA-based load
+    llm_hint: |
+      The kernel uses cp.async or TMA-style asynchronous loads that
+      overlap with compute, rather than synchronous tl.load. In
+      Triton this is most often expressed via tl.experimental APIs
+      or TensorMemoryAccessor patterns.

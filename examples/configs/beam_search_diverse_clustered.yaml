@@ -1,0 +1,57 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Concentrated beam search + technique-vector clustering.
+#
+# Layered diversity:
+#   1. Same per-round expansion as beam_search_diverse_concentrated.yaml
+#      (P=2, M=3, K=3, C=5 = 90 workers per round).
+#   2. PTX-hash dedup runs first (collapses byte-identical kernels).
+#   3. NEW: technique-vector classification on the survivors via LLM —
+#      diversity-aware truncation keeps the fastest representative of
+#      each distinct technique vector.  The technique taxonomy lives in
+#      examples/configs/techniques_default.yaml and is expandable.
+#
+# Pairs with beam_search_diverse_concentrated.yaml for A/B comparison
+# of "PTX dedup only" vs. "PTX dedup + technique clustering" beams.
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir examples/optimize_01_matvec \
+#       --strategy beam_search_diverse_clustered
+
+strategy: beam_search
+num_workers: 90
+strategy_config:
+  num_top_kernels: 10            # beam width (candidate pool size)
+  num_expanding_parents: 2       # concentrated — top-2 expand
+  num_bottlenecks: 3             # 3 ranked bottlenecks per parent
+  samples_per_prompt: 5          # 5 LLM draws per (parent, bottleneck, model)
+  models:
+    - claude-opus-4.6
+    - gpt-5-4
+    - gemini-2-5-pro
+  technique_clustering:
+    enabled: true
+    # Path is resolved relative to the current working directory at
+    # run launch time.  The default file ships with this repo.
+    techniques_yaml: examples/configs/techniques_default.yaml
+    # Use ONE classifier model for stable / comparable vectors across
+    # candidates regardless of which model produced the candidate.
+    classifier_model: claude-opus-4.6
+    # Thread-pool concurrency for manager-side LLM classification.
+    max_concurrency: 4
+
+openai_model: claude-opus-4.6
+high_reasoning_effort: true
+
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"

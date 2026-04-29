@@ -21,10 +21,15 @@ members expanded each round (defaults to all of them).
 """
 
 import logging
-from typing import Any
+from typing import Any, Sequence
 
 from ..history.models import ProgramEntry, ProgramMetrics
 from ..history.store import ProgramDatabase
+from ..technique_vector import (
+    TechniqueDefinition,
+    classify_many,
+    select_diverse_top_k,
+)
 from .strategy import SearchStrategy
 
 
@@ -61,6 +66,10 @@ class BeamSearchStrategy(SearchStrategy):
         models: list[str] | None = None,
         samples_per_prompt: int = 1,
         num_expanding_parents: int | None = None,
+        techniques: Sequence[TechniqueDefinition] | None = None,
+        technique_classifier_provider: Any | None = None,
+        technique_classifier_model: str | None = None,
+        technique_classifier_concurrency: int = 4,
     ):
         """Initialize beam search strategy.
 
@@ -91,6 +100,25 @@ class BeamSearchStrategy(SearchStrategy):
         self.num_expanding_parents = num_expanding_parents
         # Internal iteration list: [None] means "use runner default".
         self._expansion_models: list[str | None] = list(models) if models else [None]
+
+        # Technique-vector clustering (opt-in): only active when both
+        # ``techniques`` and a classifier provider/model are supplied.
+        # When inactive, the strategy falls back to the previous
+        # PTX-dedup-then-sort-and-truncate behavior.
+        self._techniques: tuple[TechniqueDefinition, ...] = (
+            tuple(techniques) if techniques else ()
+        )
+        self._classifier_provider = technique_classifier_provider
+        self._classifier_model = technique_classifier_model
+        self._classifier_concurrency = max(1, int(technique_classifier_concurrency))
+
+    @property
+    def technique_clustering_enabled(self) -> bool:
+        return bool(
+            self._techniques
+            and self._classifier_provider is not None
+            and self._classifier_model
+        )
 
     @property
     def _effective_num_parents(self) -> int:
@@ -216,9 +244,25 @@ class BeamSearchStrategy(SearchStrategy):
         pooled = self._dedup_by_ptx(all_candidates)
         dedup_after = len(pooled)
 
-        # Sort surviving representatives by runtime and truncate to beam width.
-        pooled.sort(key=lambda x: x.metrics.time_ms)
-        self.top_kernels = pooled[: self.num_top_kernels]
+        # Optional technique-vector clustering: classify newly-arrived
+        # survivors via LLM, then pick top-N with diversity preserved
+        # across distinct vectors.  When disabled, fall back to the
+        # plain sort+truncate path.
+        cluster_log = ""
+        if self.technique_clustering_enabled:
+            self._classify_pooled(pooled)
+            self.top_kernels = select_diverse_top_k(pooled, self.num_top_kernels)
+            distinct_clusters = len(
+                {
+                    tuple(e.technique_vector) if e.technique_vector is not None
+                    else ("__none__", e.program_id)
+                    for e in pooled
+                }
+            )
+            cluster_log = f", clusters={distinct_clusters}"
+        else:
+            pooled.sort(key=lambda x: x.metrics.time_ms)
+            self.top_kernels = pooled[: self.num_top_kernels]
 
         if self.database:
             self.database.save()
@@ -230,9 +274,55 @@ class BeamSearchStrategy(SearchStrategy):
             model_tag = f" [{best_new_model}]" if best_new_model else ""
             self.logger.info(
                 f"Round {round_num}: {len(new_entries)} successful, "
-                f"PTX dedup {dedup_before}→{dedup_after}, "
+                f"PTX dedup {dedup_before}→{dedup_after}{cluster_log}, "
                 f"best new: {best_new_entry.metrics.time_ms:.4f}ms{model_tag}"
             )
+
+    def _classify_pooled(self, pooled: list[ProgramEntry]) -> None:
+        """Fill in missing / stale ``technique_vector`` on each entry.
+
+        Entries whose vector is already present and matches the current
+        taxonomy length are left alone (cached from prior rounds or
+        prior runs via the JSON database).  Everything else gets a
+        fresh LLM classification, fanned out via a thread pool.
+        """
+        if not self.technique_clustering_enabled:
+            return
+        expected_dim = len(self._techniques)
+        # Identify entries that need (re)classification.
+        to_classify: list[tuple[str, str]] = []  # (program_id, kernel_code)
+        index: dict[str, ProgramEntry] = {}
+        for entry in pooled:
+            v = entry.technique_vector
+            if v is None or len(v) != expected_dim:
+                # Stale-length vectors (taxonomy changed) get reclassified.
+                if v is not None and len(v) != expected_dim:
+                    entry.technique_vector = None
+                to_classify.append((entry.program_id, entry.kernel_code))
+                index[entry.program_id] = entry
+        if not to_classify:
+            return
+
+        self.logger.info(
+            f"Technique clustering: classifying {len(to_classify)} kernel(s) "
+            f"with {self._classifier_model} (taxonomy dim={expected_dim})"
+        )
+        results = classify_many(
+            to_classify,
+            self._techniques,
+            self._classifier_provider,
+            self._classifier_model,
+            logger=self.logger,
+            max_concurrency=self._classifier_concurrency,
+        )
+        for pid, vec in results.items():
+            entry = index.get(pid)
+            if entry is None:
+                continue
+            entry.technique_vector = vec  # may be None if classification failed
+            if self.database:
+                # Re-add to persist the updated vector.
+                self.database.add_program(entry)
 
     @staticmethod
     def _dedup_by_ptx(entries: list[ProgramEntry]) -> list[ProgramEntry]:

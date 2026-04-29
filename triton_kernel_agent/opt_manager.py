@@ -355,6 +355,61 @@ class OptimizationManager:
 
         return logger
 
+    def _build_technique_clustering_kwargs(
+        self, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve the ``technique_clustering`` block from strategy_config.
+
+        Returns the kwargs to splat into ``BeamSearchStrategy.__init__``
+        (empty dict when clustering is disabled or misconfigured —
+        callers fall back to the plain PTX-dedup behavior).
+        """
+        cfg = config.get("technique_clustering")
+        if not cfg or not cfg.get("enabled", False):
+            return {}
+
+        from triton_kernel_agent.opt_worker_component.searching.technique_vector import (
+            load_techniques,
+        )
+        from utils.providers import get_model_provider
+
+        yaml_path = cfg.get("techniques_yaml")
+        if not yaml_path:
+            self.logger.warning(
+                "technique_clustering.enabled=True but techniques_yaml missing; "
+                "clustering disabled."
+            )
+            return {}
+        try:
+            techniques = load_techniques(yaml_path)
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to load techniques from {yaml_path}: {e}. "
+                "Technique clustering disabled."
+            )
+            return {}
+
+        classifier_model = cfg.get("classifier_model") or self.openai_model
+        try:
+            provider = get_model_provider(classifier_model)
+        except Exception as e:
+            self.logger.warning(
+                f"Cannot obtain provider for technique classifier "
+                f"{classifier_model!r}: {e}. Clustering disabled."
+            )
+            return {}
+
+        self.logger.info(
+            f"Technique clustering enabled: {len(techniques)} techniques, "
+            f"classifier={classifier_model}"
+        )
+        return {
+            "techniques": techniques,
+            "technique_classifier_provider": provider,
+            "technique_classifier_model": classifier_model,
+            "technique_classifier_concurrency": int(cfg.get("max_concurrency", 4)),
+        }
+
     def _create_strategy(
         self, name: str, config: dict[str, Any], num_workers: int
     ) -> SearchStrategy:
@@ -372,6 +427,7 @@ class OptimizationManager:
             ValueError: If strategy name is unknown
         """
         if name == "beam_search":
+            cluster_kwargs = self._build_technique_clustering_kwargs(config)
             return BeamSearchStrategy(
                 num_top_kernels=config.get("num_top_kernels", 2),
                 num_bottlenecks=config.get("num_bottlenecks", 2),
@@ -380,6 +436,7 @@ class OptimizationManager:
                 models=config.get("models"),
                 samples_per_prompt=config.get("samples_per_prompt", 1),
                 num_expanding_parents=config.get("num_expanding_parents"),
+                **cluster_kwargs,
             )
         elif name == "greedy":
             return GreedyStrategy(
