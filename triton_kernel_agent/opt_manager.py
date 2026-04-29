@@ -221,13 +221,16 @@ class OptimizationManager:
         self.workers_per_gpu: int = max(1, int(workers_per_gpu))
 
         # Manager-level GPU work (initial-kernel verify, PyTorch baselines,
-        # baseline NCU cache) runs in this process — it pins to the first
-        # GPU and uses that GPU's lock as both benchmark_lock and
-        # profiling_semaphore for back-compat with components that take
-        # those names.
+        # baseline NCU cache) uses *separate* locks from workers'.  All
+        # manager GPU operations happen between rounds when no workers
+        # are running, so they don't actually need to coordinate with
+        # workers — and giving them dedicated locks means a worker that
+        # dies holding ``gpu_locks[g]`` can't strand the manager forever
+        # (mp.Lock has no stale-holder recovery).
         _first_gpu = self.gpu_ids[0]
-        self.benchmark_lock = self.gpu_locks[_first_gpu]
-        self.profiling_semaphore = self.gpu_locks[_first_gpu]
+        self._mgr_gpu_locks: dict[int, Any] = {g: mp.Lock() for g in self.gpu_ids}
+        self.benchmark_lock = self._mgr_gpu_locks[_first_gpu]
+        self.profiling_semaphore = self._mgr_gpu_locks[_first_gpu]
 
         # Shared history across beam search iterations
         self.shared_history: list[

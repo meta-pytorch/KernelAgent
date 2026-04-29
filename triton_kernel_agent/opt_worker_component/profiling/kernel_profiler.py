@@ -37,9 +37,13 @@ from triton_kernel_agent.opt_worker_component.profiling.ncu_wrapper_factory impo
 # Default timeout for NCU profiling in seconds
 DEFAULT_NCU_TIMEOUT_SECONDS = 300
 
-# Default timeout for waiting on profiling semaphore (15 minutes)
-# If exceeded, profiling is skipped for this round to prevent deadlocks
-DEFAULT_SEMAPHORE_TIMEOUT_SECONDS = 900
+# Default timeout for waiting on profiling semaphore (60 seconds).
+# If exceeded, profiling is skipped for this round and the caller falls
+# back to per-worker NCU.  The lower bound matters because mp.Lock can
+# leak when a holder process dies with the lock held — a stuck lock
+# would otherwise hang every subsequent acquire for 15 min each before
+# this code unblocks.
+DEFAULT_SEMAPHORE_TIMEOUT_SECONDS = 60
 
 
 @dataclass
