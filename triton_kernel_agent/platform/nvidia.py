@@ -194,6 +194,7 @@ class NvidiaWorkerRunner(WorkerRunner):
         worker_kwargs: dict[str, Any],
         gpu_ids: list[int] | None = None,
         gpu_locks: dict[int, Any] | None = None,
+        workers_per_gpu: int = 2,
     ) -> None:
         self.log_dir = log_dir
         self.logger = logger
@@ -210,6 +211,15 @@ class NvidiaWorkerRunner(WorkerRunner):
         self.gpu_locks: dict[int, Any] = (
             dict(gpu_locks) if gpu_locks else {0: benchmark_lock}
         )
+        # Dynamic scheduler bound: at most ``workers_per_gpu`` worker
+        # processes pinned to any single GPU at one moment.  The total
+        # active pool is ``workers_per_gpu * len(gpu_ids)``.  When a
+        # worker exits its GPU slot is freed and the next pending
+        # candidate is spawned with that GPU id — so workers that
+        # finish their LLM phase quickly free up GPU capacity for
+        # workers still pending, and slow LLM calls don't block
+        # otherwise-idle GPUs.
+        self.workers_per_gpu: int = max(1, int(workers_per_gpu))
 
     def run_workers(
         self,
@@ -221,25 +231,71 @@ class NvidiaWorkerRunner(WorkerRunner):
         shared_history: list[dict],
         shared_reflexions: list[dict],
     ) -> list[dict[str, Any]]:
+        """Dynamic spawn-on-free-GPU-slot scheduler.
+
+        Up to ``workers_per_gpu`` workers run concurrently per GPU, for a
+        total active pool of ``workers_per_gpu * len(gpu_ids)``.  When a
+        worker exits, its GPU slot frees and the next pending candidate
+        is spawned pinned to that same GPU.  This keeps GPUs saturated
+        even when individual workers spend most of their time in LLM
+        calls — quick-finishing GPUs immediately get new work, instead
+        of sitting idle while their statically-assigned share of
+        candidates trickles through the LLM phase.
+        """
+        import queue as _queue_mod
+
         result_queue = mp.Queue()
-        workers = []
 
-        for i, candidate in enumerate(candidates):
-            workdir = self.log_dir / "workers" / f"w{i}" / f"r{round_num}"
+        # Per-GPU free-slot counter.  Spawn-when-positive, decrement on
+        # spawn, increment on worker exit.
+        free_slots: dict[int, int] = {g: self.workers_per_gpu for g in self.gpu_ids}
+        pool_capacity = self.workers_per_gpu * len(self.gpu_ids)
+
+        # Pending queue (FIFO by candidate index — preserves the
+        # strategy's intended ordering of fanout).
+        pending: list[tuple[int, dict[str, Any]]] = list(enumerate(candidates))
+        pending_idx = 0  # next index to spawn
+
+        # Currently-running: (Process, gpu_id, worker_id).
+        running: list[tuple[mp.Process, int, int]] = []
+
+        worker_timeout = 1800  # 30 minutes wall-clock cap
+        deadline = time.time() + worker_timeout
+        results: list[dict[str, Any]] = []
+
+        self.logger.info(
+            f"Round {round_num}: scheduling {len(candidates)} candidates "
+            f"across {len(self.gpu_ids)} GPU(s) × {self.workers_per_gpu} "
+            f"slots/GPU = pool capacity {pool_capacity}"
+        )
+
+        def _pick_free_gpu() -> int | None:
+            """Return GPU with the most free slots, or None if pool full."""
+            best: int | None = None
+            best_free = 0
+            for g in self.gpu_ids:
+                f = free_slots[g]
+                if f > best_free:
+                    best, best_free = g, f
+            return best
+
+        def _drain_queue() -> None:
+            while True:
+                try:
+                    results.append(result_queue.get_nowait())
+                except _queue_mod.Empty:
+                    break
+                except Exception:
+                    break
+
+        def _spawn(worker_id: int, candidate: dict[str, Any], gpu_id: int) -> mp.Process:
+            workdir = self.log_dir / "workers" / f"w{worker_id}" / f"r{round_num}"
             workdir.mkdir(parents=True, exist_ok=True)
-
             worker_model = candidate.get("openai_model") or self.openai_model
             baseline_metrics = candidate.get("baseline_metrics")
-
-            # Round-robin GPU assignment.  The same per-GPU lock is passed
-            # as both ``benchmark_lock`` and ``profiling_semaphore`` to the
-            # worker — collapsing the two GPU-serialization knobs into a
-            # single per-GPU mutex (one operation per GPU at a time).
-            gpu_id = self.gpu_ids[i % len(self.gpu_ids)]
             gpu_lock = self.gpu_locks[gpu_id]
-
             args = (
-                i,  # worker_id
+                worker_id,
                 candidate["parent"].kernel_code,
                 candidate["parent"].metrics.time_ms,
                 candidate["parent"].program_id,
@@ -248,8 +304,8 @@ class NvidiaWorkerRunner(WorkerRunner):
                 workdir,
                 workdir / "logs",
                 result_queue,
-                gpu_lock,   # benchmark_lock
-                gpu_lock,   # profiling_semaphore (same object, per-GPU mutex)
+                gpu_lock,
+                gpu_lock,
                 pytorch_baseline,
                 candidate["bottleneck_id"],
                 worker_model,
@@ -261,57 +317,51 @@ class NvidiaWorkerRunner(WorkerRunner):
                 baseline_metrics,
                 gpu_id,
             )
-
             p = mp.Process(target=_nvidia_worker_process, args=args)
             p.start()
-            workers.append(p)
+            return p
 
-        # Wait for completion with timeout, draining the result queue as we
-        # go.  We must not let the queue's pipe buffer fill up: a worker's
-        # ``mp.Queue.put`` enqueues data and a feeder thread serializes it
-        # over a pipe; if we don't read, the pipe fills, the feeder blocks,
-        # and the worker can't exit — which deadlocks ``join`` indefinitely.
-        # Polling the queue while polling joins keeps the pipe drained.
-        import queue as _queue_mod
-
-        worker_timeout = 1800  # 30 minutes
-        deadline = time.time() + worker_timeout
-        results: list[dict[str, Any]] = []
-        remaining_workers = list(workers)
-
-        while remaining_workers and time.time() < deadline:
-            # Drain anything currently in the queue (non-blocking).
-            while True:
-                try:
-                    results.append(result_queue.get_nowait())
-                except _queue_mod.Empty:
+        # Main scheduling loop.
+        while (pending_idx < len(pending) or running) and time.time() < deadline:
+            # 1. Top up pool: spawn pending candidates onto free GPU slots.
+            while pending_idx < len(pending):
+                gpu_id = _pick_free_gpu()
+                if gpu_id is None:
                     break
-                except Exception:
-                    break
-            # Reap any workers that have exited.  Short timeout so we cycle
-            # back to draining the queue quickly.
-            still_alive = []
-            for w in remaining_workers:
+                worker_id, candidate = pending[pending_idx]
+                p = _spawn(worker_id, candidate, gpu_id)
+                free_slots[gpu_id] -= 1
+                running.append((p, gpu_id, worker_id))
+                pending_idx += 1
+
+            # 2. Drain the result queue (prevents pipe-buffer deadlock).
+            _drain_queue()
+
+            # 3. Reap finished workers; free their GPU slots.
+            still_running: list[tuple[mp.Process, int, int]] = []
+            for w, gpu_id, wid in running:
                 w.join(timeout=0.5)
                 if w.is_alive():
-                    still_alive.append(w)
+                    still_running.append((w, gpu_id, wid))
                 else:
+                    free_slots[gpu_id] += 1
                     w.close()
-            remaining_workers = still_alive
+            running = still_running
 
-        # Anything still alive past the deadline is hung — terminate it.
-        for w in remaining_workers:
-            self.logger.warning(f"Worker {w.pid} timed out, terminating")
+        # Past deadline: terminate any stragglers.
+        for w, gpu_id, wid in running:
+            self.logger.warning(
+                f"Worker {wid} (pid {w.pid}, gpu {gpu_id}) timed out, terminating"
+            )
             w.terminate()
             w.join(timeout=5)
             if w.is_alive():
-                self.logger.warning(f"Worker {w.pid} still alive, killing")
+                self.logger.warning(f"Worker {wid} still alive, killing")
                 w.kill()
                 w.join(timeout=2)
             w.close()
 
-        # Final drain after every worker is gone, in case anything was
-        # placed on the queue between our last poll and the worker exit.
+        # Final drain after every worker is gone.
         while True:
             try:
                 results.append(result_queue.get_nowait())
@@ -320,7 +370,6 @@ class NvidiaWorkerRunner(WorkerRunner):
             except Exception:
                 break
 
-        # Clean up queue resources to prevent thread hangs during GC.
         result_queue.close()
         result_queue.join_thread()
 

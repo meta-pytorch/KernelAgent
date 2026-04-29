@@ -131,6 +131,7 @@ class OptimizationManager:
         bottleneck_override: str | None = None,
         platform: dict[str, str] | str | None = None,
         gpu_ids: list[int] | None = None,
+        workers_per_gpu: int = 2,
         **worker_kwargs: Any,
     ):
         """Initialize the optimization manager.
@@ -212,6 +213,12 @@ class OptimizationManager:
         # acts as both ``benchmark_lock`` and ``profiling_semaphore``.
         self.gpu_ids: list[int] = list(gpu_ids) if gpu_ids else _detect_gpus()
         self.gpu_locks: dict[int, Any] = {g: mp.Lock() for g in self.gpu_ids}
+        # Bound on how many worker processes can be pinned to a single GPU
+        # at once.  The runner uses this as a dynamic pool: a freed slot
+        # pulls the next pending candidate (with the freed GPU's id) so
+        # GPUs that finish quickly don't sit idle while their statically-
+        # assigned share of candidates trickles through LLM phase.
+        self.workers_per_gpu: int = max(1, int(workers_per_gpu))
 
         # Manager-level GPU work (initial-kernel verify, PyTorch baselines,
         # baseline NCU cache) runs in this process — it pins to the first
@@ -239,7 +246,9 @@ class OptimizationManager:
 
         self.logger.info(
             f"OptimizationManager initialized: strategy={strategy}, "
-            f"workers={num_workers}, gpus={self.gpu_ids}"
+            f"workers={num_workers}, gpus={self.gpu_ids}, "
+            f"workers_per_gpu={self.workers_per_gpu} "
+            f"(pool capacity {self.workers_per_gpu * len(self.gpu_ids)})"
         )
 
     # ------------------------------------------------------------------
@@ -289,6 +298,7 @@ class OptimizationManager:
             worker_kwargs=self.worker_kwargs,
             gpu_ids=self.gpu_ids,
             gpu_locks=self.gpu_locks,
+            workers_per_gpu=self.workers_per_gpu,
         )
         self.verifier = components["verifier"]
         self.benchmarker = components["benchmarker"]

@@ -36,6 +36,13 @@
 
 strategy: beam_search
 num_workers: 225
+# Dynamic spawn-on-free-GPU-slot scheduler: at most 4 worker processes
+# pinned to a single GPU at one moment.  Pool capacity is
+# workers_per_gpu × len(gpu_ids) = 4 × 8 = 32.  When a worker exits its
+# slot frees and the next pending candidate is spawned with that GPU id
+# — keeps GPUs saturated even when individual workers spend most of
+# their time in LLM calls.
+workers_per_gpu: 4
 strategy_config:
   num_top_kernels: 10            # beam (candidate-pool) width
   num_expanding_parents: 5       # 5 most-diverse parents expanded
