@@ -259,45 +259,55 @@ def select_diverse_top_k(
 ) -> list[ProgramEntry]:
     """Pick top-k from ``entries`` while preserving cluster diversity.
 
-    Walks the input sorted by ``time_ms`` ascending; first occurrence
-    of each technique-vector cluster is accepted into the result.
-    Once every distinct cluster has a representative or the result has
-    ``k`` members, remaining slots are backfilled from the fastest
-    unaccepted entries.
+    Round-robin by depth across clusters: pass 0 takes the fastest
+    member of every cluster (ordered by time across clusters); if that
+    still hasn't filled the beam, pass 1 takes the second-fastest of
+    every cluster (again ordered by time across clusters); and so on
+    until ``k`` members are accumulated or the pool is exhausted.
+
+    The output is *not* sorted by time — it is ordered by selection
+    order — so that consumers slicing ``top_kernels[:N]`` (e.g.
+    ``num_expanding_parents``) get the *most diverse* prefix rather
+    than the fastest-by-time prefix from one big cluster.
 
     Entries with ``technique_vector is None`` are treated as their own
-    singleton cluster (never merged with anything else).
+    singleton clusters (never merged with anything else).
     """
     if k <= 0 or not entries:
         return []
-    ordered = sorted(entries, key=lambda e: e.metrics.time_ms)
-    accepted: list[ProgramEntry] = []
-    accepted_ids: set[str] = set()
-    seen_clusters: set[Any] = set()
-    none_count = 0
 
-    def _cluster_key(e: ProgramEntry) -> Any:
+    # Group by cluster and sort each cluster ascending by time.
+    clusters: dict[Any, list[ProgramEntry]] = {}
+    none_seq = 0
+    for e in entries:
         v = e.technique_vector
         if v is None:
-            nonlocal none_count
-            none_count += 1
-            return ("__none__", none_count)  # singleton: each None is unique
-        return tuple(v)
+            none_seq += 1
+            cid: Any = ("__none__", none_seq)
+        else:
+            cid = tuple(v)
+        clusters.setdefault(cid, []).append(e)
+    for members in clusters.values():
+        members.sort(key=lambda e: e.metrics.time_ms)
 
-    # First pass: one per cluster.
-    for entry in ordered:
+    if not clusters:
+        return []
+
+    # Walk depth-by-depth: at each depth, pull every cluster's depth-th
+    # member, sort across clusters by time, accept until we hit k.
+    accepted: list[ProgramEntry] = []
+    accepted_ids: set[str] = set()
+    max_depth = max(len(m) for m in clusters.values())
+    for depth in range(max_depth):
         if len(accepted) >= k:
             break
-        cid = _cluster_key(entry)
-        if cid in seen_clusters:
-            continue
-        accepted.append(entry)
-        accepted_ids.add(entry.program_id)
-        seen_clusters.add(cid)
-
-    # Backfill remaining slots from the fastest unaccepted.
-    if len(accepted) < k:
-        for entry in ordered:
+        slate = [
+            members[depth]
+            for members in clusters.values()
+            if depth < len(members)
+        ]
+        slate.sort(key=lambda e: e.metrics.time_ms)
+        for entry in slate:
             if len(accepted) >= k:
                 break
             if entry.program_id in accepted_ids:

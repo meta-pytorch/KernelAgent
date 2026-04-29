@@ -1,0 +1,61 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+# Technique-clustered beam search at the wider 225-worker fanout.
+#
+# Layout per round:
+#   5 expanding parents
+#     × 3 bottlenecks
+#     × 3 LLMs (Claude / GPT / Gemini)
+#     × 5 samples per prompt
+#   = 225 worker processes, each producing one candidate kernel.
+#
+# After workers return, the beam update runs:
+#   1. PTX-hash dedup (collapses byte-identical kernels).
+#   2. LLM-based technique-vector classification on the survivors.
+#   3. Round-robin diversity-aware truncation: pass 0 takes the
+#      fastest of every cluster, pass 1 takes the second-fastest of
+#      every cluster, etc., until 10 beam slots are filled.  Output is
+#      ordered by selection (most-diverse-first), so when the next
+#      round picks `num_expanding_parents=5` parents, those are 5
+#      different technique clusters.
+#
+# Pairs with beam_search_diverse_concentrated.yaml for an A/B
+# comparison of "concentrated, no clustering" vs. "wider fanout +
+# diversity-preserving clustering".
+#
+# Usage:
+#   python examples/run_opt_manager.py \
+#       --kernel-dir <kernel-dir> \
+#       --strategy beam_search_diverse_clustered_xl
+
+strategy: beam_search
+num_workers: 225
+strategy_config:
+  num_top_kernels: 10            # beam (candidate-pool) width
+  num_expanding_parents: 5       # 5 most-diverse parents expanded
+  num_bottlenecks: 3             # 3 ranked bottlenecks per parent
+  samples_per_prompt: 5          # 5 LLM draws per (parent, bottleneck, model)
+  models:
+    - claude-opus-4.6
+    - gpt-5-4
+    - gemini-2-5-pro
+  technique_clustering:
+    enabled: true
+    techniques_yaml: examples/configs/techniques_default.yaml
+    classifier_model: claude-opus-4.6
+    max_concurrency: 4
+
+openai_model: claude-opus-4.6
+high_reasoning_effort: true
+
+benchmark_warmup: 25
+benchmark_repeat: 100
+divergence_threshold: 50.0
+target_platform: cuda
+gpu_name: "NVIDIA H100 NVL 94GB"
