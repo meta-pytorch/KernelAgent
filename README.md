@@ -56,7 +56,7 @@ For optimization, use the bundled config as a quickstart:
 ```bash
 python examples/run_opt_manager.py \
   --kernel-dir examples/optimize_01_matvec/ \
-  --config examples/configs/amd.yaml
+  --strategy amd
 ```
 
 Verify your ROCm installation:
