@@ -21,6 +21,7 @@
 # Usage:
 #   python examples/run_opt_manager.py \
 #       --kernel-dir examples/optimize_01_matvec \
+#       --strategy nvidia
 #       --config examples/configs/nvidia.yaml
 
 strategy: beam_search

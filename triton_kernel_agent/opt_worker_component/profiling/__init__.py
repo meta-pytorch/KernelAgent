@@ -12,9 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Profiling infrastructure for NCU-based kernel analysis."""
+"""Profiling infrastructure for hardware-specific kernel analysis."""
 
 from .kernel_profiler import KernelProfiler
 from .ncu_wrapper_factory import NCUWrapperFactory
+from .rocm_kernel_profiler import ROCmKernelProfiler
+from .rocprof_wrapper_factory import ROCmWrapperFactory
 
-__all__ = ["NCUWrapperFactory", "KernelProfiler"]
+__all__ = [
+    "NCUWrapperFactory",
+    "KernelProfiler",
+    "ROCmWrapperFactory",
+    "ROCmKernelProfiler",
+]

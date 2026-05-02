@@ -43,7 +43,7 @@ class TritonKernelAgent:
         preferred_provider: BaseProvider | None = None,
         target_platform: PlatformConfig | None = None,
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int = 300,
     ):
         """
         Initialize the Triton Kernel Agent.

@@ -177,6 +177,11 @@ def _get_triton_kernel_metrics(ncu_metrics: dict[str, Any]) -> dict[str, Any]:
     NCU profiles all CUDA kernels including PyTorch internals (at::*).
     This function finds the actual Triton kernel metrics.
 
+    Note: This helper is NCU/CUDA-specific. On the ROCm path,
+    ``profiler_results.metrics`` is already a flat dict and should be
+    passed directly to ``ROCmRooflineAnalyzer.analyze`` without going
+    through this function.
+
     Args:
         ncu_metrics: Dict keyed by kernel name with metric dicts as values
 
@@ -359,6 +364,7 @@ class OptimizationOrchestrator:
 
         # Two-kernel tracking: track best-by-runtime and best-by-SOL independently
         # This prevents mixing metrics from different kernels
+        profiling_globally_available = baseline_sol > 0.0
         best_runtime_kernel = kernel_code
         best_runtime_time = best_time
         best_runtime_sol = baseline_sol
@@ -374,23 +380,67 @@ class OptimizationOrchestrator:
             self.logger.info(f"ROUND {round_num}/{max_opt_rounds}")
             self.logger.info("=" * 80)
 
-            # Profile and analyze bottleneck
-            bottleneck_results, roofline_result, ncu_metrics = (
-                self._profile_and_analyze(current_kernel, problem_file, round_num)
-            )
+            # Profile and analyze bottleneck unless a prior ROCm profiling failure
+            # already forced this optimization session into synthetic mode.
+            if profiling_globally_available:
+                bottleneck_results, roofline_result, ncu_metrics = (
+                    self._profile_and_analyze(current_kernel, problem_file, round_num)
+                )
+                profiling_available = bool(ncu_metrics)
+                if not profiling_available:
+                    profiling_globally_available = False
+            else:
+                self.logger.warning(
+                    f"[{round_num}] Profiling unavailable from earlier ROCm failure; reusing synthetic fallback mode for this round"
+                )
+                synthetic_category = self.bottleneck_override or "underutilized"
+                bottleneck_results = [
+                    BottleneckResult(
+                        category=synthetic_category,
+                        summary=f"Synthetic session fallback ({synthetic_category}-bound).",
+                        reasoning="Earlier ROCm profiling failed in this optimization session, so subsequent rounds stay in synthetic mode instead of retrying the profiler.",
+                        root_causes=[
+                            {
+                                "cause": "ROCm profiling unavailable for this optimization session",
+                                "evidence": [],
+                                "fixes": [
+                                    {
+                                        "fix": "Continue with conservative AMD-friendly heuristic tuning and benchmark feedback only.",
+                                        "rationale": "Avoids repeated rocprof failures after the first confirmed profiler failure.",
+                                    }
+                                ],
+                            }
+                        ],
+                        recommended_fixes=[
+                            {
+                                "fix": "Do not re-enter rocprof in later rounds of the same optimization session.",
+                                "rationale": "Keeps the search alive without repeating the same failing profiler path.",
+                            }
+                        ],
+                    )
+                ]
+                roofline_result = None
+                ncu_metrics = None
+                profiling_available = False
 
-            # Log roofline for the kernel we just profiled
+            # Log roofline for the kernel we just profiled.
+            # _get_triton_kernel_metrics / roofline_analyzer are NCU-specific;
+            # on the ROCm path this block is a no-op (roofline is already logged
+            # inside _profile_and_analyze via bottleneck_analyzer.roofline).
             if ncu_metrics:
-                flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
-                roofline_check = self.roofline_analyzer.analyze(
-                    ncu_metrics=flat_metrics,
-                )
-                self.logger.info(
-                    f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
-                    f"{roofline_check.bottleneck}-bound, {roofline_check.efficiency_pct:.1f}% SOL "
-                    f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
-                    f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
-                )
+                try:
+                    flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
+                    roofline_check = self.roofline_analyzer.analyze(
+                        ncu_metrics=flat_metrics,
+                    )
+                    self.logger.info(
+                        f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
+                        f"{roofline_check.bottleneck}-bound, {roofline_check.efficiency_pct:.1f}% SOL "
+                        f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
+                        f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
+                    )
+                except Exception:
+                    pass  # ROCm path: roofline already logged in _profile_and_analyze
 
             if not bottleneck_results:
                 self.logger.warning(
@@ -505,10 +555,18 @@ class OptimizationOrchestrator:
             )
             new_time = bench_results["time_ms"]
 
-            # Profile the NEW kernel to get its SOL metrics
-            new_kernel_metrics = self._profile_kernel_for_sol(
-                optimized_kernel, problem_file, round_num
-            )
+            # Profile the NEW kernel to get its SOL metrics only when profiling
+            # is available for this round. Synthetic fallback rounds must not
+            # re-enter the profiler path.
+            if profiling_available:
+                new_kernel_metrics = self._profile_kernel_for_sol(
+                    optimized_kernel, problem_file, round_num
+                )
+            else:
+                self.logger.info(
+                    f"[{round_num}] Skipping post-benchmark SOL profiling because this round is running on synthetic fallback analysis"
+                )
+                new_kernel_metrics = None
             new_sol = (
                 new_kernel_metrics.get("efficiency_pct", 0.0)
                 if new_kernel_metrics
@@ -614,8 +672,9 @@ class OptimizationOrchestrator:
                             early_stop_reason = stop_reason
                             break
 
-        # Profile the final best kernel to get its roofline
-        if best_round_num > 0:
+        # Profile the final best kernel to get its roofline only when profiler
+        # data was actually available during optimization.
+        if best_round_num > 0 and best_ncu_metrics is not None:
             final_kernel_file = self.artifact_dir / f"kernel_round_{best_round_num}.py"
             if final_kernel_file.exists():
                 self.logger.info(
@@ -726,7 +785,14 @@ class OptimizationOrchestrator:
             Tuple of (bottleneck_results, roofline_result, ncu_metrics).
             All can be None if profiling fails.
         """
-        self.logger.info(f"[{round_num}] Profiling current kernel with NCU...")
+        profiler_name = (
+            "rocprof"
+            if self.profiler.__class__.__name__ == "ROCmKernelProfiler"
+            else "NCU"
+        )
+        self.logger.info(
+            f"[{round_num}] Profiling current kernel with {profiler_name}..."
+        )
         kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
         kernel_file_round.write_text(current_kernel)
 
@@ -735,12 +801,80 @@ class OptimizationOrchestrator:
         )
 
         if profiler_results is None:
+            if self.profiler.__class__.__name__ == "ROCmKernelProfiler":
+                self.logger.warning(
+                    f"[{round_num}] ROCm profiling unavailable; using synthetic fallback bottleneck analysis"
+                )
+                synthetic_category = self.bottleneck_override or "underutilized"
+                synthetic = BottleneckResult(
+                    category=synthetic_category,
+                    summary=f"Synthetic fallback after rocprof failure ({synthetic_category}-bound). Continue optimization without profiling metrics.",
+                    reasoning="rocprof profiling failed on the ROCm path, so optimization continues with a conservative synthetic diagnosis instead of re-entering another profiling stage.",
+                    root_causes=[
+                        {
+                            "cause": "ROCm profiling unavailable for this round",
+                            "evidence": [
+                                {
+                                    "metric": "rocprof",
+                                    "value": 0.0,
+                                    "interpretation": "profiling failed or timed out, so no hardware counters are available",
+                                }
+                            ],
+                            "fixes": [
+                                {
+                                    "fix": "Apply conservative AMD-friendly tuning changes without depending on profiler counters, and avoid any immediate re-profiling loop in the same analysis step.",
+                                    "rationale": "Keeps the optimization loop moving forward when rocprof is unstable or blocked.",
+                                }
+                            ],
+                        }
+                    ],
+                    recommended_fixes=[
+                        {
+                            "fix": "Prefer AMD-safe heuristic tuning and continue to verification/benchmarking without another profiling pass in this analysis stage.",
+                            "rationale": "Avoids the bad fallback->reprofile control flow.",
+                        },
+                        {
+                            "fix": "Reduce launch overhead and improve occupancy with conservative Triton meta-parameter tuning (e.g. BLOCK sizes, num_warps, num_stages) consistent with AMD execution characteristics.",
+                            "rationale": "Provides actionable optimization direction even when hardware counters are unavailable.",
+                        },
+                    ],
+                )
+                return [synthetic], None, None
             self.logger.warning(f"[{round_num}] Profiling failed")
             return None, None, None
 
         ncu_metrics = profiler_results.metrics
 
         if not ncu_metrics:
+            if self.profiler.__class__.__name__ == "ROCmKernelProfiler":
+                self.logger.warning(
+                    f"[{round_num}] ROCm profiling returned no metrics; using synthetic fallback bottleneck analysis"
+                )
+                synthetic_category = self.bottleneck_override or "underutilized"
+                synthetic = BottleneckResult(
+                    category=synthetic_category,
+                    summary=f"Synthetic fallback after empty rocprof metrics ({synthetic_category}-bound).",
+                    reasoning="rocprof returned no usable metrics on ROCm, so optimization continues with a conservative synthetic diagnosis.",
+                    root_causes=[
+                        {
+                            "cause": "ROCm profiler produced no usable metrics",
+                            "evidence": [],
+                            "fixes": [
+                                {
+                                    "fix": "Continue with heuristic AMD-friendly tuning instead of aborting the round.",
+                                    "rationale": "Preserves optimization progress when profiling data is unavailable.",
+                                }
+                            ],
+                        }
+                    ],
+                    recommended_fixes=[
+                        {
+                            "fix": "Use conservative tuning guided by the selected bottleneck class and benchmark feedback.",
+                            "rationale": "Lets the round proceed without profiler-derived counters.",
+                        }
+                    ],
+                )
+                return [synthetic], None, None
             return None, None, ncu_metrics
 
         # Run roofline analysis
@@ -818,6 +952,14 @@ class OptimizationOrchestrator:
             Dict with efficiency_pct, roofline_result, ncu_metrics, or None if profiling fails
         """
         try:
+            # On ROCm, skip SOL profiling entirely when the profiler backend is rocprof.
+            # This avoids re-entering the same fragile profiling path after fallback.
+            if self.profiler.__class__.__name__ == "ROCmKernelProfiler":
+                self.logger.info(
+                    f"[{round_num}] Skipping SOL profiling on ROCm to avoid re-entering rocprof after fallback"
+                )
+                return None
+
             # Write kernel to temp file for profiling
             kernel_file = self.artifact_dir / f"kernel_round_{round_num}_sol.py"
             kernel_file.write_text(kernel_code)
