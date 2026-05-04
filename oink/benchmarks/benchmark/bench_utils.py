@@ -75,7 +75,9 @@ def ensure_blackwell_arch_env(device: Optional[torch.device] = None) -> str:
 
     Benchmarks often run outside the Oink/vLLM plugin path, so they don't
     benefit from the plugin's device-capability-based `CUTE_DSL_ARCH` setup.
-    On GB300 we want `sm_103a` instead of the older hard-coded `sm_100a`.
+    On this GB300/CuTeDSL 4.4.2 host, LayerNorm backward compiles reliably
+    with `sm_103`; callers may still pin an `a` arch explicitly if their local
+    CuTeDSL build requires it.
     """
     pinned = os.environ.get("CUTE_DSL_ARCH")
     if pinned:
@@ -86,7 +88,9 @@ def ensure_blackwell_arch_env(device: Optional[torch.device] = None) -> str:
         if device is None:
             device = torch.device("cuda")
         major, minor = torch.cuda.get_device_capability(device)
-        if int(major) == 10:
+        if int(major) == 10 and int(minor) == 3:
+            arch = "sm_103"
+        elif int(major) == 10:
             arch = f"sm_{int(major)}{int(minor)}a"
     os.environ["CUTE_DSL_ARCH"] = arch
     return arch
@@ -113,6 +117,13 @@ def do_bench_triton(
 ) -> float:
     """Kernel-only timing consistent with the Oink benchmark harnesses."""
     return float(triton_do_bench(fn, warmup=warmup_ms, rep=rep_ms, return_mode="mean"))
+
+
+def do_bench_cuda_graph(fn: Callable[[], Any], *, rep_ms: int = 100) -> float:
+    """CUDA-graph replay timing via Triton's cudagraph benchmark helper."""
+    from triton.testing import do_bench_cudagraph
+
+    return float(do_bench_cudagraph(fn, rep=rep_ms, return_mode="mean"))
 
 
 def parse_dtype(s: str) -> torch.dtype:

@@ -18,8 +18,8 @@ Recommended env vars:
 
 ```bash
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-# GB300 / SM103:
-export CUTE_DSL_ARCH=sm_103a
+# GB300 / SM103 on the current CuTeDSL host:
+export CUTE_DSL_ARCH=sm_103
 # GB200/B200 / SM100 historical runs:
 # export CUTE_DSL_ARCH=sm_100a
 ```
@@ -42,6 +42,7 @@ conda run -n cute python -m pip install 'git+https://github.com/Dao-AILab/quack.
   with `hidden = 4096` so `M = batch * seq`, `N = 4096`.
 - **DeepSeek-V3-like (DSv3)**
   - RMSNorm / LayerNorm / Softmax: `M ∈ {4096, 16384, 65536}`, `N ∈ {6144, 7168, 8192}`
+  - LayerNorm backward's `--dsv3` suite uses `N ∈ {6144, 8192}`; use `--dsv4` for the `N = 7168` hidden-state sweep.
   - Cross-entropy: `M ∈ {4096, 16384, 65536}`, `N ∈ {3072, 6144, 8192, 12288}`
 - **DeepSeek-V4-Flash norm shapes (DSv4)** from `deepseek-ai/DeepSeek-V4-Flash/inference/model.py`
   - hidden-state RMSNorm / LayerNorm: `M ∈ {4096, 16384, 65536}`, `N = 7168`
@@ -73,7 +74,7 @@ Current measured GB300 BF16 STREAM-like roof used in the README:
 Regenerate on the current machine:
 
 ```bash
-conda run -n cute bash -lc 'PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+conda run -n cute bash -lc 'PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 \
   python benchmarks/benchmark/benchmark_hbm_roofline_sm100.py --dtype bf16 --op both --gb 1 \
   --json /tmp/oink_sm103_hbm_roofline_bf16_current.json'
 ```
@@ -94,11 +95,11 @@ Run the full Quack-suite + DSv3 set (Oink vs Quack) and write all JSON artifacts
 to a timestamped directory:
 
 ```bash
-conda run -n cute bash -lc 'PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+conda run -n cute bash -lc 'PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 \
   python benchmarks/readme/run_sm100_suite.py --dtype bf16'
 
 # Include DeepSeek-V4-Flash norm workloads:
-conda run -n cute bash -lc 'PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+conda run -n cute bash -lc 'PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 \
   python benchmarks/readme/run_sm100_suite.py --dtype bf16 --include-dsv4 \
   --out-dir /tmp/oink_sm103_suite_bf16_current'
 ```
@@ -162,14 +163,14 @@ outputs.
 
 ```bash
 # DeepSeek-V3 hidden-size sweep
-PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 \
   python benchmarks/benchmark/benchmark_fused_add_rmsnorm_sm100.py \
     --dtype bf16 --dsv3 --iters 80 --warmup-ms 15 \
     --quack-baseline kernel_inplace \
     --json /tmp/oink_sm103_fused_add_rmsnorm_dsv3_bf16.json
 
 # DeepSeek-V4-Flash hidden-state sweep (N=7168)
-PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103a \
+PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 \
   python benchmarks/benchmark/benchmark_fused_add_rmsnorm_sm100.py \
     --dtype bf16 --dsv4 --iters 80 --warmup-ms 15 \
     --quack-baseline kernel_inplace \
@@ -243,6 +244,48 @@ python benchmarks/benchmark/benchmark_layernorm_sm100.py --dtype bf16 --quack-su
 
 python benchmarks/benchmark/benchmark_layernorm_sm100.py --dtype bf16 --dsv3 --iters 200 --warmup-ms 25 \
   --json /tmp/oink_layernorm_fwd_dsv3.json
+```
+
+### LayerNorm backward
+
+This compares Oink against ATen's native LayerNorm backward reference and,
+when the installed OSS Quack package exposes `quack.rmsnorm.layernorm_bwd`, Quack
+LayerNorm backward. The benchmark validates each available backend against a
+chunked fp32 PyTorch formula before timing. Current table numbers use CUDA graph
+warm replay (`--cuda-graph`). The local Quack package used for these runs exposes
+LayerNorm forward but not `layernorm_bwd`, so Quack timing columns are omitted.
+
+DSv3 CUDA-graph replay results (`N ∈ {6144,8192}`):
+
+| M | N | Oink ms | Oink TB/s | ATen ref ms | Oink/ref |
+|---:|---:|---:|---:|---:|---:|
+| 4096 | 6144 | 0.0548 | 2.7574 | 0.0777 | 1.4190x |
+| 4096 | 8192 | 0.0611 | 3.2951 | 0.0970 | 1.5873x |
+| 16384 | 6144 | 0.1840 | 3.2833 | 0.2794 | 1.5183x |
+| 16384 | 8192 | 0.2093 | 3.8480 | 0.3387 | 1.6183x |
+| 65536 | 6144 | 0.6896 | 3.5043 | 1.0652 | 1.5447x |
+| 65536 | 8192 | 0.7372 | 4.3705 | 1.3138 | 1.7823x |
+
+DSv4 hidden LayerNorm CUDA-graph replay results (`N = 7168`):
+
+| M | N | Oink ms | Oink TB/s | ATen ref ms | Oink/ref |
+|---:|---:|---:|---:|---:|---:|
+| 4096 | 7168 | 0.0591 | 2.9800 | 0.0858 | 1.4503x |
+| 16384 | 7168 | 0.1990 | 3.5425 | 0.3077 | 1.5467x |
+| 65536 | 7168 | 0.7467 | 3.7753 | 1.1711 | 1.5684x |
+
+```bash
+# DeepSeek-V4-Flash hidden LayerNorm shape sweep (N=7168)
+env PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 PYTORCH_ALLOC_CONF=expandable_segments:True \
+  conda run -n cute python -u benchmarks/benchmark/benchmark_layernorm_bwd_sm100.py \
+    --dtype bf16 --weight-dtype same --dsv4 --iters 80 --warmup-ms 10 --cuda-graph \
+    --json /tmp/oink_layernorm_bwd_sm103_dsv4_cuda_graph_seq.json
+
+# DeepSeek-V3 shape sweep (N in {6144,8192})
+env PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 PYTORCH_ALLOC_CONF=expandable_segments:True \
+  conda run -n cute python -u benchmarks/benchmark/benchmark_layernorm_bwd_sm100.py \
+    --dtype bf16 --weight-dtype same --dsv3 --iters 80 --warmup-ms 10 --cuda-graph \
+    --json /tmp/oink_layernorm_bwd_sm103_dsv3_cuda_graph_seq.json
 ```
 
 ## Notes

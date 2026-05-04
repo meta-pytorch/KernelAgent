@@ -24,7 +24,7 @@ Recommended env vars:
 
 ```bash
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-export CUTE_DSL_ARCH=sm_103a   # GB300 / SM103
+export CUTE_DSL_ARCH=sm_103    # GB300 / SM103 on the current CuTeDSL host
 # export CUTE_DSL_ARCH=sm_100a # GB200/B200 / SM100
 ```
 
@@ -88,7 +88,7 @@ Reported numbers are correctness-gated against PyTorch references before timing.
 
 Current GB300 / SM103 setup:
 
-- NVIDIA GB300, capability `(10, 3)`, `CUTE_DSL_ARCH=sm_103a`
+- NVIDIA GB300, capability `(10, 3)`, `CUTE_DSL_ARCH=sm_103`
 - `torch==2.11.0+cu130`, CUDA `13.0`
 - `nvidia-cutlass-dsl==4.4.2`, `cuda-python==13.2.0`
 - measured BF16 STREAM-like roof: **7.140 TB/s**
@@ -112,6 +112,41 @@ Historical plots remain under `benchmarks/media/`:
 - `sm100_*`: historical SM100 / B200 runs.
 - `gb300_bf16_qk_norm_oink_vs_cutedsl_roofline.svg`: historical GB300 Q/K-norm
   harness, separate from the Quack-suite table above.
+
+### GB300 (SM103) LayerNorm backward results
+
+Oink's LayerNorm backward path is self-contained in this repo. The OSS
+benchmark reports Oink against ATen's native LayerNorm backward reference.
+
+Measured on **GB300 (SM103)** in the `cute` Conda environment with torch
+`2.11.0+cu130`, CUDA `13.0`, and `CUTE_DSL_ARCH=sm_103`, using CUDA graph warm
+replay (`--cuda-graph`), bf16 activations/gradients, same-dtype LayerNorm
+weights, and no bias. Correctness was checked before timing against a chunked
+fp32 PyTorch formula for `dx` / `dweight`; the timed `ref` column uses
+`torch.ops.aten.native_layer_norm_backward.default` with the same precomputed
+`mean` and `rstd`.
+
+The OSS Quack package installed in this environment exposes LayerNorm forward but
+not a `quack.rmsnorm.layernorm_bwd` API, so the benchmark reports Quack as
+unavailable and omits Quack timing columns. If a Quack build with
+`layernorm_bwd` is installed, the same command will add `quack_ms` and
+`Oink/Quack` columns.
+
+The throughput columns use a logical useful-IO model for no-bias LayerNorm
+backward: read `x`, read `dout`, write `dx`, read/write `weight`/`dweight`, and
+read fp32 `mean` + `rstd`. This excludes implementation-specific scratch traffic,
+so the values are a useful-bandwidth roofline view rather than physical HBM bytes.
+Full DSv3/DSv4 tables are in [`benchmarks/README.md`](benchmarks/README.md).
+
+
+Reproduce with:
+
+```bash
+env PYTHONNOUSERSITE=1 CUTE_DSL_ARCH=sm_103 PYTORCH_ALLOC_CONF=expandable_segments:True \
+  conda run -n cute python -u oink/benchmarks/benchmark/benchmark_layernorm_bwd_sm100.py \
+    --dtype bf16 --weight-dtype same --dsv4 --iters 80 --warmup-ms 10 --cuda-graph \
+    --json /tmp/oink_layernorm_bwd_sm103_dsv4_cuda_graph_seq.json
+```
 
 ## Links
 
