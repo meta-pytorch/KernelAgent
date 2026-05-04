@@ -65,6 +65,14 @@ def _pick_columns(rows: Sequence[Dict[str, Any]]) -> List[str]:
         "ours_ms",
         "ours_tbps",
         "ours_hbm_frac",
+        "ref_ms",
+        "ref_tbps",
+        "speedup_vs_ref",
+        # Historical/external JSON compatibility; current OSS Oink benchmarks do
+        # not import a cute-kernels baseline directly.
+        "cute_kernels_ms",
+        "cute_kernels_tbps",
+        "speedup_vs_cute_kernels",
         "quack_ms",
         "quack_tbps",
         "speedup_vs_quack",
@@ -168,7 +176,8 @@ def summarize_one(path: str) -> str:
         ts = meta.get("timestamp")
         parts.append("")
         parts.append(
-            f"- device: `{device}` | capability: `{cap}` | torch: `{torch_ver}` | cuda: `{cuda_ver}` | git_sha: `{git_sha}` | timestamp: `{ts}`"
+            f"- device: `{device}` | capability: `{cap}` | torch: `{torch_ver}` | "
+            f"cuda: `{cuda_ver}` | git_sha: `{git_sha}` | timestamp: `{ts}`"
         )
         method = meta.get("method")
         if method is not None:
@@ -182,13 +191,23 @@ def summarize_one(path: str) -> str:
         parts.append("")
         parts.append(_md_table(rows, cols))
 
-        speeds = [float(r["speedup_vs_quack"]) for r in rows if "speedup_vs_quack" in r]
-        gm = _geomean(speeds)
-        if gm is not None:
-            parts.append("")
-            parts.append(
-                f"- geomean speedup vs Quack: `{gm:.3f}x` (over {len(speeds)} shapes)"
-            )
+        speedup_cols = sorted(
+            {
+                k
+                for r in rows
+                for k in r.keys()
+                if isinstance(k, str) and k.startswith("speedup_vs_")
+            }
+        )
+        for col in speedup_cols:
+            speeds = [float(r[col]) for r in rows if col in r]
+            gm = _geomean(speeds)
+            if gm is not None:
+                baseline = col.removeprefix("speedup_vs_").replace("_", " ")
+                parts.append("")
+                parts.append(
+                    f"- geomean speedup vs {baseline}: `{gm:.3f}x` (over {len(speeds)} shapes)"
+                )
 
         err_block = _summarize_error_stats(rows)
         if err_block:
