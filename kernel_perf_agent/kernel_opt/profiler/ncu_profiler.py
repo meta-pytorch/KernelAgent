@@ -123,7 +123,12 @@ def profile_triton_kernel(
 
     # Resolve paths
     if python_executable is None:
-        python_executable = sys.executable
+        # Generic override hook: a wrapping environment (e.g. a packaged
+        # launcher that re-establishes its own runtime env vars) can set
+        # KERNEL_PROFILER_PYTHON to a Python entrypoint more appropriate for
+        # spawning torch-importable subprocesses than `sys.executable`.
+        # Falls back to `sys.executable` when unset.
+        python_executable = os.environ.get("KERNEL_PROFILER_PYTHON") or sys.executable
 
     if ncu_bin is None:
         ncu_bin = shutil.which("ncu") or "/usr/local/cuda/bin/ncu"
