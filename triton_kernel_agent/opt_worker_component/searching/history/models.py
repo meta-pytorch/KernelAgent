@@ -42,6 +42,16 @@ class ProgramEntry:
     parent_id: str | None = None
     generation: int = 0
 
+    # Normalized-PTX fingerprint used for dedup at beam selection time.
+    # ``None`` when PTX capture failed — such entries are treated as
+    # singletons (never merged with anything else) by the dedup step.
+    ptx_hash: str | None = None
+
+    # Optional technique-vector classification (binary vector, one bit
+    # per entry of the configured technique taxonomy).  ``None`` when
+    # clustering is disabled or classification failed.
+    technique_vector: tuple[int, ...] | None = None
+
     # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
 

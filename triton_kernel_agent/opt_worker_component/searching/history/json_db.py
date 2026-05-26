@@ -139,6 +139,12 @@ class JSONProgramDatabase(ProgramDatabase):
             "problem_id": entry.problem_id,
             "parent_id": entry.parent_id,
             "generation": entry.generation,
+            "ptx_hash": entry.ptx_hash,
+            "technique_vector": (
+                list(entry.technique_vector)
+                if entry.technique_vector is not None
+                else None
+            ),
             "created_at": entry.created_at.isoformat(),
         }
 
@@ -155,6 +161,11 @@ class JSONProgramDatabase(ProgramDatabase):
         else:
             created_at = datetime.now()
 
+        raw_vec = d.get("technique_vector")
+        technique_vector = (
+            tuple(int(x) for x in raw_vec) if raw_vec is not None else None
+        )
+
         return ProgramEntry(
             program_id=d["program_id"],
             kernel_code=d["kernel_code"],
@@ -162,5 +173,7 @@ class JSONProgramDatabase(ProgramDatabase):
             problem_id=d["problem_id"],
             parent_id=d.get("parent_id"),
             generation=d.get("generation", 0),
+            ptx_hash=d.get("ptx_hash"),
+            technique_vector=technique_vector,
             created_at=created_at,
         )

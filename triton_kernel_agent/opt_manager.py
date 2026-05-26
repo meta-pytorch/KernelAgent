@@ -23,7 +23,7 @@ Example:
     >>> manager = OptimizationManager(
     ...     strategy="beam_search",
     ...     num_workers=4,
-    ...     strategy_config={"num_top_kernels": 2, "num_bottlenecks": 2},
+    ...     strategy_config={"candidate_pool_size": 2, "num_bottlenecks": 2},
     ... )
     >>> result = manager.run_optimization(
     ...     initial_kernel=kernel_code,
@@ -39,6 +39,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from kernel_perf_agent.kernel_opt.diagnose_prompt.judger_prompt import BottleneckResult
 from triton_kernel_agent.opt_worker_component.searching.history.json_db import (
     JSONProgramDatabase,
 )
@@ -59,6 +60,48 @@ from utils.config_injectable import config_injectable
 
 # Manager-level component keys resolved by the registry
 _MANAGER_LEVEL_KEYS = {"verifier", "benchmarker", "worker_runner"}
+
+
+def _detect_gpus() -> list[int]:
+    """Return physical GPU ids visible to this process.
+
+    Crucially this MUST NOT initialize the CUDA context in the manager
+    process — workers are spawned via ``mp.Process`` (fork on Linux), and
+    if the manager has already touched ``torch.cuda`` the children inherit
+    that locked-in device list and ignore any post-fork
+    ``CUDA_VISIBLE_DEVICES`` override.  We use ``nvidia-smi`` subprocess
+    detection instead.
+
+    Order of resolution:
+      1. ``CUDA_VISIBLE_DEVICES`` env (respect user restriction).
+      2. ``nvidia-smi --query-gpu=index --format=csv,noheader``.
+      3. Fallback to ``[0]`` (single GPU).
+    """
+    import os
+    import subprocess
+
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cvd:
+        try:
+            ids = [int(x.strip()) for x in cvd.split(",") if x.strip()]
+            if ids:
+                return ids
+        except ValueError:
+            pass
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0:
+            ids = [int(x.strip()) for x in out.stdout.splitlines() if x.strip()]
+            if ids:
+                return ids
+    except Exception:
+        pass
+    return [0]
 
 
 @config_injectable
@@ -88,6 +131,8 @@ class OptimizationManager:
         high_reasoning_effort: bool = True,
         bottleneck_override: str | None = None,
         platform: dict[str, str] | str | None = None,
+        gpu_ids: list[int] | None = None,
+        workers_per_gpu: int = 2,
         **worker_kwargs: Any,
     ):
         """Initialize the optimization manager.
@@ -138,6 +183,20 @@ class OptimizationManager:
             strategy, strategy_config or {}, num_workers
         )
 
+        # Forward the strategy's bottleneck-fanout knob to workers so the
+        # ``BottleneckAnalyzer`` actually requests that many ranked
+        # bottlenecks from the LLM.  Without this, the strategy spawns N
+        # workers per parent (with bottleneck_id ∈ {1..N}) but the analyzer
+        # always returns 1, and workers with id>1 silently fall back to id=1.
+        if (
+            strategy_config
+            and "num_bottlenecks" in strategy_config
+            and "num_bottlenecks_to_request" not in self.worker_kwargs
+        ):
+            self.worker_kwargs["num_bottlenecks_to_request"] = strategy_config[
+                "num_bottlenecks"
+            ]
+
         # Validate worker count
         if num_workers != self.strategy.num_workers_needed:
             raise ValueError(
@@ -146,10 +205,33 @@ class OptimizationManager:
             )
 
         self.num_workers = num_workers
-        self.benchmark_lock = mp.Lock()
-        # Semaphore to serialize NCU profiling - NCU requires exclusive GPU access
-        # and has high memory overhead, so only one worker should profile at a time
-        self.profiling_semaphore = mp.Semaphore(1)
+
+        # Per-GPU lock pool — one lock per GPU does double duty for both
+        # benchmarking and NCU profiling (the two GPU-serialized
+        # operations).  Workers running on different GPUs proceed in
+        # parallel; workers on the same GPU serialize.  This is the
+        # "collapsed" multi-GPU design: a single shared object per GPU
+        # acts as both ``benchmark_lock`` and ``profiling_semaphore``.
+        self.gpu_ids: list[int] = list(gpu_ids) if gpu_ids else _detect_gpus()
+        self.gpu_locks: dict[int, Any] = {g: mp.Lock() for g in self.gpu_ids}
+        # Bound on how many worker processes can be pinned to a single GPU
+        # at once.  The runner uses this as a dynamic pool: a freed slot
+        # pulls the next pending candidate (with the freed GPU's id) so
+        # GPUs that finish quickly don't sit idle while their statically-
+        # assigned share of candidates trickles through LLM phase.
+        self.workers_per_gpu: int = max(1, int(workers_per_gpu))
+
+        # Manager-level GPU work (initial-kernel verify, PyTorch baselines,
+        # baseline NCU cache) uses *separate* locks from workers'.  All
+        # manager GPU operations happen between rounds when no workers
+        # are running, so they don't actually need to coordinate with
+        # workers — and giving them dedicated locks means a worker that
+        # dies holding ``gpu_locks[g]`` can't strand the manager forever
+        # (mp.Lock has no stale-holder recovery).
+        _first_gpu = self.gpu_ids[0]
+        self._mgr_gpu_locks: dict[int, Any] = {g: mp.Lock() for g in self.gpu_ids}
+        self.benchmark_lock = self._mgr_gpu_locks[_first_gpu]
+        self.profiling_semaphore = self._mgr_gpu_locks[_first_gpu]
 
         # Shared history across beam search iterations
         self.shared_history: list[
@@ -158,11 +240,23 @@ class OptimizationManager:
         self.shared_reflexions: list[dict] = []  # List of serialized Reflexion dicts
         self.history_size: int = 10  # Max history entries to pass to workers
 
+        # Per-parent baseline NCU/roofline cache, keyed by program_id.
+        # Populated in _run_workers; shared across all sibling workers of the
+        # same round (and surviving across rounds for beam members that stick).
+        self._baseline_profile_cache: dict[str, dict[str, Any] | None] = {}
+        # Per-parent bottleneck-analysis cache, keyed by program_id.
+        # Populated alongside the baseline profile so sibling workers reuse the
+        # same LLM bottleneck analysis instead of each issuing their own call.
+        self._bottleneck_analysis_cache: dict[str, list[dict[str, Any]] | None] = {}
+
         # ── Platform components (resolved from registry) ─────────
         self._resolve_platform(platform)
 
         self.logger.info(
-            f"OptimizationManager initialized: strategy={strategy}, workers={num_workers}"
+            f"OptimizationManager initialized: strategy={strategy}, "
+            f"workers={num_workers}, gpus={self.gpu_ids}, "
+            f"workers_per_gpu={self.workers_per_gpu} "
+            f"(pool capacity {self.workers_per_gpu * len(self.gpu_ids)})"
         )
 
     # ------------------------------------------------------------------
@@ -177,6 +271,11 @@ class OptimizationManager:
         Worker-level component names are forwarded to worker processes
         via ``self.worker_kwargs["platform_config"]`` so each worker
         can resolve its own instances from the registry.
+
+        Additionally, the manager resolves its *own* ``profiler`` and
+        ``roofline_analyzer`` instances (without removing them from the
+        worker config) so it can profile baseline kernels once per round
+        and share the result across sibling workers.
         """
         from triton_kernel_agent.platform.registry import registry
 
@@ -205,10 +304,47 @@ class OptimizationManager:
             high_reasoning_effort=self.high_reasoning_effort,
             bottleneck_override=self.bottleneck_override,
             worker_kwargs=self.worker_kwargs,
+            gpu_ids=self.gpu_ids,
+            gpu_locks=self.gpu_locks,
+            workers_per_gpu=self.workers_per_gpu,
         )
         self.verifier = components["verifier"]
         self.benchmarker = components["benchmarker"]
         self.worker_runner = components["worker_runner"]
+
+        # Resolve a manager-owned profiler + roofline_analyzer for the
+        # baseline-caching step.  These coexist with the worker-level
+        # instances (workers still build their own from ``worker_config``).
+        self._mgr_profiler: Any | None = None
+        self._mgr_roofline: Any | None = None
+        self._mgr_bottleneck_analyzer: Any | None = None
+        for key, setter_attr in (
+            ("profiler", "_mgr_profiler"),
+            ("roofline_analyzer", "_mgr_roofline"),
+            ("bottleneck_analyzer", "_mgr_bottleneck_analyzer"),
+        ):
+            impl_name = config.get(key)
+            if impl_name and registry.has(key, impl_name):
+                try:
+                    setattr(
+                        self,
+                        setter_attr,
+                        registry.create(
+                            key,
+                            impl_name,
+                            logger=self.logger,
+                            log_dir=self.log_dir,
+                            artifacts_dir=self.log_dir / "baseline_profiles",
+                            profiling_semaphore=self.profiling_semaphore,
+                            openai_model=self.openai_model,
+                            gpu_name=self.worker_kwargs.get("gpu_name"),
+                        ),
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to create manager-level {key}: {e}. "
+                        f"Manager-side caching for {key} disabled."
+                    )
 
         # Propagate worker-level config (string names) to worker
         # processes — each worker resolves its own instances via the
@@ -240,6 +376,61 @@ class OptimizationManager:
 
         return logger
 
+    def _build_technique_clustering_kwargs(
+        self, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve the ``technique_clustering`` block from strategy_config.
+
+        Returns the kwargs to splat into ``BeamSearchStrategy.__init__``
+        (empty dict when clustering is disabled or misconfigured —
+        callers fall back to the plain PTX-dedup behavior).
+        """
+        cfg = config.get("technique_clustering")
+        if not cfg or not cfg.get("enabled", False):
+            return {}
+
+        from triton_kernel_agent.opt_worker_component.searching.technique_vector import (
+            load_techniques,
+        )
+        from utils.providers import get_model_provider
+
+        yaml_path = cfg.get("techniques_yaml")
+        if not yaml_path:
+            self.logger.warning(
+                "technique_clustering.enabled=True but techniques_yaml missing; "
+                "clustering disabled."
+            )
+            return {}
+        try:
+            techniques = load_techniques(yaml_path)
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to load techniques from {yaml_path}: {e}. "
+                "Technique clustering disabled."
+            )
+            return {}
+
+        classifier_model = cfg.get("classifier_model") or self.openai_model
+        try:
+            provider = get_model_provider(classifier_model)
+        except Exception as e:
+            self.logger.warning(
+                f"Cannot obtain provider for technique classifier "
+                f"{classifier_model!r}: {e}. Clustering disabled."
+            )
+            return {}
+
+        self.logger.info(
+            f"Technique clustering enabled: {len(techniques)} techniques, "
+            f"classifier={classifier_model}"
+        )
+        return {
+            "techniques": techniques,
+            "technique_classifier_provider": provider,
+            "technique_classifier_model": classifier_model,
+            "technique_classifier_concurrency": int(cfg.get("max_concurrency", 4)),
+        }
+
     def _create_strategy(
         self, name: str, config: dict[str, Any], num_workers: int
     ) -> SearchStrategy:
@@ -257,11 +448,15 @@ class OptimizationManager:
             ValueError: If strategy name is unknown
         """
         if name == "beam_search":
+            cluster_kwargs = self._build_technique_clustering_kwargs(config)
             return BeamSearchStrategy(
-                num_top_kernels=config.get("num_top_kernels", 2),
+                candidate_pool_size=config.get("candidate_pool_size", 2),
                 num_bottlenecks=config.get("num_bottlenecks", 2),
                 database=self.database,
                 logger=self.logger,
+                models=config.get("models"),
+                samples_per_prompt=config.get("samples_per_prompt", 1),
+                **cluster_kwargs,
             )
         elif name == "greedy":
             return GreedyStrategy(
@@ -455,6 +650,18 @@ class OptimizationManager:
         pytorch_baseline: float,
     ) -> list[dict[str, Any]]:
         """Spawn workers for each candidate and collect results."""
+        # Profile each distinct parent kernel once and share the NCU/roofline
+        # result across sibling workers.  This avoids repeating an expensive,
+        # semaphore-serialized NCU run for every (bottleneck, model) fanout.
+        self._populate_baseline_cache(candidates, problem_file, round_num)
+        self._populate_bottleneck_cache(candidates, round_num)
+        for cand in candidates:
+            parent_id = cand["parent"].program_id
+            cand["baseline_metrics"] = self._baseline_profile_cache.get(parent_id)
+            cand["precomputed_bottleneck_results"] = (
+                self._bottleneck_analysis_cache.get(parent_id)
+            )
+
         results = self.worker_runner.run_workers(
             candidates=candidates,
             round_num=round_num,
@@ -488,3 +695,163 @@ class OptimizationManager:
                     self.logger.debug(f"Traceback:\n{r.get('traceback')}")
 
         return results
+
+    def _populate_baseline_cache(
+        self,
+        candidates: list[dict[str, Any]],
+        problem_file: Path,
+        round_num: int,
+    ) -> None:
+        """Profile each distinct parent kernel once and cache the result.
+
+        The cache is keyed by ``parent.program_id`` and persists across
+        rounds, so a beam member that survives multiple rounds is profiled
+        at most once.  If the manager-level profiler or roofline analyzer
+        is unavailable, this is a no-op and workers fall back to profiling
+        their own baselines.
+        """
+        if self._mgr_profiler is None or self._mgr_roofline is None:
+            return
+
+        from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
+            _get_triton_kernel_metrics,
+        )
+
+        baseline_dir = self.log_dir / "baseline_profiles"
+        baseline_dir.mkdir(parents=True, exist_ok=True)
+
+        # Collect (program_id, kernel_code) for parents we haven't cached yet.
+        # De-dup by program_id since many candidates share the same parent.
+        unseen: dict[str, str] = {}
+        for cand in candidates:
+            parent = cand["parent"]
+            pid = parent.program_id
+            if pid not in self._baseline_profile_cache and pid not in unseen:
+                unseen[pid] = parent.kernel_code
+
+        for pid, kernel_code in unseen.items():
+            try:
+                kernel_file = baseline_dir / f"{pid}.py"
+                kernel_file.write_text(kernel_code)
+
+                profiler_results = self._mgr_profiler.profile_kernel(
+                    kernel_file, problem_file, round_num
+                )
+                if profiler_results is None or not getattr(
+                    profiler_results, "metrics", None
+                ):
+                    self._baseline_profile_cache[pid] = None
+                    self.logger.warning(
+                        f"Baseline profile failed for parent {pid}; "
+                        f"workers will profile their own baselines."
+                    )
+                    continue
+
+                ncu_metrics = profiler_results.metrics
+                flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
+                roofline_result = self._mgr_roofline.analyze(ncu_metrics=flat_metrics)
+
+                self._baseline_profile_cache[pid] = {
+                    "efficiency_pct": roofline_result.efficiency_pct,
+                    "compute_sol_pct": roofline_result.compute_sol_pct,
+                    "memory_sol_pct": roofline_result.memory_sol_pct,
+                    "bottleneck": roofline_result.bottleneck,
+                    "roofline_result": roofline_result,
+                    "ncu_metrics": ncu_metrics,
+                }
+                self.logger.info(
+                    f"Baseline profiled for parent {pid}: "
+                    f"{roofline_result.bottleneck}-bound, "
+                    f"{roofline_result.efficiency_pct:.1f}% SOL"
+                )
+            except Exception as e:
+                self._baseline_profile_cache[pid] = None
+                self.logger.warning(
+                    f"Baseline profile errored for parent {pid}: {e}; "
+                    f"workers will profile their own baselines."
+                )
+
+    def _populate_bottleneck_cache(
+        self,
+        candidates: list[dict[str, Any]],
+        round_num: int,
+    ) -> None:
+        """Analyze each distinct parent kernel once and cache the LLM result."""
+        if self._mgr_bottleneck_analyzer is None:
+            return
+
+        unseen: dict[str, ProgramEntry] = {}
+        for cand in candidates:
+            parent = cand["parent"]
+            pid = parent.program_id
+            if pid not in self._bottleneck_analysis_cache and pid not in unseen:
+                unseen[pid] = parent
+
+        for pid, parent in unseen.items():
+            baseline_metrics = self._baseline_profile_cache.get(pid)
+            if not baseline_metrics or not baseline_metrics.get("ncu_metrics"):
+                self._bottleneck_analysis_cache[pid] = None
+                continue
+
+            try:
+                ncu_metrics = baseline_metrics["ncu_metrics"]
+                roofline_result = baseline_metrics.get("roofline_result")
+                llm_results = self._mgr_bottleneck_analyzer.analyze(
+                    parent.kernel_code,
+                    ncu_metrics,
+                    round_num,
+                    roofline_result,
+                )
+
+                if self.bottleneck_override:
+                    if llm_results:
+                        cached = [
+                            BottleneckResult(
+                                category=self.bottleneck_override,
+                                summary=(
+                                    f"Pre-computed: {self.bottleneck_override}-bound kernel"
+                                ),
+                                reasoning=result.reasoning,
+                                root_causes=result.root_causes,
+                                recommended_fixes=result.recommended_fixes,
+                            ).to_dict()
+                            for result in llm_results
+                        ]
+                    else:
+                        cached = [
+                            BottleneckResult(
+                                category=self.bottleneck_override,
+                                summary=(
+                                    f"Pre-computed: {self.bottleneck_override}-bound kernel"
+                                ),
+                                reasoning=(
+                                    "Classification based on operation arithmetic intensity"
+                                ),
+                                root_causes=[],
+                                recommended_fixes=[],
+                            ).to_dict()
+                        ]
+                else:
+                    cached = (
+                        [result.to_dict() for result in llm_results]
+                        if llm_results
+                        else None
+                    )
+
+                self._bottleneck_analysis_cache[pid] = cached
+                if cached:
+                    categories = ", ".join(item["category"] for item in cached)
+                    self.logger.info(
+                        f"Baseline bottlenecks cached for parent {pid}: {categories}"
+                    )
+                else:
+                    self.logger.warning(
+                        f"Baseline bottleneck analysis failed for parent {pid}; "
+                        f"workers will analyze independently."
+                    )
+            except Exception as e:
+                self._bottleneck_analysis_cache[pid] = None
+                self.logger.warning(
+                    f"Baseline bottleneck analysis errored for parent {pid}: {e}; "
+                    f"workers will analyze independently."
+                )

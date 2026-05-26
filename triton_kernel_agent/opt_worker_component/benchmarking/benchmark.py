@@ -20,13 +20,20 @@ utilities, L2 cache clearing, and comprehensive statistics.
 
 import json
 import logging
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 from typing import Any, Optional
 
 import torch
+
+from triton_kernel_agent.opt_worker_component.searching.ptx_fingerprint import (
+    ptx_hash_from_cache,
+)
 
 from triton_kernel_agent.opt_worker_component.benchmarking.timing import (
     compute_timing_stats,
@@ -124,6 +131,7 @@ class Benchmark:
                 - time_ms: Mean time in ms
                 - speedup: Speedup vs baseline
         """
+        ptx_cache_dir = Path(tempfile.mkdtemp(prefix="triton_cache_bench_"))
         try:
             with self.lock_manager:
                 results_json = self.artifacts_dir / "benchmark_results.json"
@@ -148,11 +156,17 @@ class Benchmark:
                 if baseline_file:
                     cmd.extend(["--baseline"])
 
+                # Isolate this benchmark's Triton compilation cache so we can
+                # capture its PTX for fingerprint-based dedup without being
+                # contaminated by sibling workers' artifacts.
+                env = {**os.environ, "TRITON_CACHE_DIR": str(ptx_cache_dir)}
+
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=300,
+                    env=env,
                 )
 
                 if result.returncode != 0:
@@ -162,7 +176,7 @@ class Benchmark:
                         or "Unknown error"
                     )
                     self.logger.error(f"Kernel benchmark failed: {error_msg}")
-                    return {"time_ms": float("inf"), "speedup": 0.0}
+                    return {"time_ms": float("inf"), "speedup": 0.0, "ptx_hash": None}
 
                 with open(results_json, "r") as f:
                     results = json.load(f)
@@ -170,14 +184,21 @@ class Benchmark:
                 kernel_name = kernel_file.stem
                 kernel_results = results.get("kernels", {}).get(kernel_name, {})
 
+                # Capture the PTX fingerprint from the isolated cache dir.
+                # A None result is graceful — dedup treats it as a singleton.
+                ptx_hash = ptx_hash_from_cache(ptx_cache_dir)
+
                 return {
                     "time_ms": kernel_results.get("time_ms", float("inf")),
                     "speedup": kernel_results.get("speedup", 1.0),
+                    "ptx_hash": ptx_hash,
                 }
 
         except Exception as e:
             self.logger.error(f"Kernel benchmark failed: {e}")
-            return {"time_ms": float("inf"), "speedup": 0.0}
+            return {"time_ms": float("inf"), "speedup": 0.0, "ptx_hash": None}
+        finally:
+            shutil.rmtree(ptx_cache_dir, ignore_errors=True)
 
     def benchmark_pytorch(
         self,

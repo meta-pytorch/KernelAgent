@@ -315,6 +315,8 @@ class OptimizationOrchestrator:
         test_code: list[str],
         known_kernel_time: float | None = None,
         max_opt_rounds: int = 5,
+        baseline_metrics: dict[str, Any] | None = None,
+        precomputed_bottleneck_results: list[dict[str, Any]] | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         """
         Main optimization loop.
@@ -325,6 +327,16 @@ class OptimizationOrchestrator:
             test_code: List of test code strings (primary + additional tests)
             known_kernel_time: Known performance of kernel_code in ms
             max_opt_rounds: Maximum optimization rounds
+            baseline_metrics: Optional pre-computed NCU profile + roofline result
+                for ``kernel_code``. When supplied, the orchestrator skips its
+                own NCU runs on the baseline (used when the manager shares a
+                single profile across sibling workers in the same round).
+                Expected keys: ``efficiency_pct``, ``compute_sol_pct``,
+                ``memory_sol_pct``, ``bottleneck``, ``roofline_result``,
+                ``ncu_metrics``.
+            precomputed_bottleneck_results: Optional manager-computed
+                bottleneck analysis for the parent kernel. When supplied,
+                workers reuse it instead of issuing their own bottleneck LLM call.
 
         Returns:
             Tuple of (success, best_kernel_code, performance_metrics)
@@ -342,6 +354,11 @@ class OptimizationOrchestrator:
         early_stop_reason = ""
         any_verified = False
 
+        # Cached baseline NCU — consumed at most once by _profile_and_analyze
+        # when it runs on the identical baseline kernel (round 1 only).
+        self._pending_baseline_metrics: dict[str, Any] | None = baseline_metrics
+        self._pending_bottleneck_results = precomputed_bottleneck_results
+
         # Reset roofline history for new optimization run
         self.roofline_analyzer.reset_history()
 
@@ -354,7 +371,9 @@ class OptimizationOrchestrator:
 
         # Benchmark baseline and PyTorch (now includes baseline SOL profiling)
         best_time, baseline_results, pytorch_baseline_time, baseline_sol = (
-            self._benchmark_baseline(kernel_code, problem_file, known_kernel_time)
+            self._benchmark_baseline(
+                kernel_code, problem_file, known_kernel_time, baseline_metrics
+            )
         )
 
         # Two-kernel tracking: track best-by-runtime and best-by-SOL independently
@@ -362,6 +381,7 @@ class OptimizationOrchestrator:
         best_runtime_kernel = kernel_code
         best_runtime_time = best_time
         best_runtime_sol = baseline_sol
+        best_runtime_ptx_hash: str | None = None
 
         best_sol_kernel = kernel_code
         best_sol_time = best_time
@@ -474,7 +494,18 @@ class OptimizationOrchestrator:
             # Generate optimized kernel
             optimized_kernel = self._generate_optimized_kernel(opt_prompt, round_num)
             if not optimized_kernel:
-                error_feedback = "Failed to extract valid kernel code. Please provide complete kernel wrapped in ```python blocks."
+                error_feedback = self._last_generation_failure_reason or (
+                    "Failed to extract valid kernel code. Please provide complete kernel wrapped in ```python blocks."
+                )
+                current_attempt.passed_verification = False
+                current_attempt.error_message = error_feedback
+                self.attempt_history.append(current_attempt)
+                if "Malformed LLM kernel response" in error_feedback:
+                    self.logger.warning(
+                        f"[{round_num}] Terminating worker due to malformed LLM response"
+                    )
+                    early_stop_reason = "malformed_llm_response"
+                    break
                 continue
 
             # Verify and refine
@@ -492,6 +523,12 @@ class OptimizationOrchestrator:
                 current_attempt.passed_verification = False
                 current_attempt.error_message = error_feedback
                 self.attempt_history.append(current_attempt)
+                if "Malformed LLM kernel response" in error_feedback:
+                    self.logger.warning(
+                        f"[{round_num}] Terminating worker due to malformed LLM response"
+                    )
+                    early_stop_reason = "malformed_llm_response"
+                    break
                 continue
 
             error_feedback = ""
@@ -504,16 +541,12 @@ class OptimizationOrchestrator:
                 kernel_file_round, problem_file
             )
             new_time = bench_results["time_ms"]
+            new_ptx_hash = bench_results.get("ptx_hash")
 
-            # Profile the NEW kernel to get its SOL metrics
-            new_kernel_metrics = self._profile_kernel_for_sol(
-                optimized_kernel, problem_file, round_num
-            )
-            new_sol = (
-                new_kernel_metrics.get("efficiency_pct", 0.0)
-                if new_kernel_metrics
-                else 0.0
-            )
+            # Candidate-level NCU is intentionally deferred. The manager
+            # profiles only kernels that survive into the next round's parent set.
+            new_kernel_metrics = None
+            new_sol = 0.0
 
             # Complete the attempt with benchmark results
             new_config = extract_triton_config(optimized_kernel)
@@ -535,16 +568,6 @@ class OptimizationOrchestrator:
             current_attempt.passed_verification = True
             any_verified = True
             current_attempt.config_changes = config_changes
-
-            # Add SOL metrics from new kernel profiling
-            if new_kernel_metrics:
-                current_attempt.compute_sol_pct = new_kernel_metrics.get(
-                    "compute_sol_pct", 0.0
-                )
-                current_attempt.memory_sol_pct = new_kernel_metrics.get(
-                    "memory_sol_pct", 0.0
-                )
-                current_attempt.combined_sol_pct = new_sol
 
             # Add attempt to history
             self.attempt_history.append(current_attempt)
@@ -578,64 +601,22 @@ class OptimizationOrchestrator:
                 round_num,
             )
 
-            # Track metadata when new best runtime is found
-            if new_time < best_runtime_time or new_sol > best_sol_sol:
+            # Track metadata when new best runtime is found.  Note:
+            # ``best_runtime_time`` has just been updated by
+            # ``_update_kernels``, so we compare via the post-update
+            # ``best_runtime_kernel`` identity instead of revisiting
+            # ``new_time < best_runtime_time`` (which would always be false
+            # at this point).
+            if best_runtime_kernel == optimized_kernel:
                 best_round_num = round_num
                 best_bottleneck_category = primary.category
-                if new_kernel_metrics:
-                    best_ncu_metrics = new_kernel_metrics.get("ncu_metrics")
+            if best_runtime_kernel == optimized_kernel:
+                best_runtime_ptx_hash = new_ptx_hash
 
-            # Roofline check for early termination
-            # Use best_runtime kernel's SOL for early termination check
-            # We want a kernel that is both fast AND efficient
-            if new_kernel_metrics:
-                roofline_check = new_kernel_metrics.get("roofline_result")
-                if roofline_check:
-                    self.logger.info(
-                        f"[{round_num}] Roofline: {roofline_check.bottleneck}-bound, "
-                        f"{roofline_check.efficiency_pct:.1f}% SOL "
-                        f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
-                        f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
-                    )
-
-                    # Only early terminate if the best runtime kernel is at roofline
-                    # This prevents stopping with a slow but "efficient" kernel
-                    if (
-                        best_runtime_kernel == optimized_kernel
-                        and roofline_check.at_roofline
-                    ):
-                        should_stop, stop_reason = self.roofline_analyzer.should_stop(
-                            roofline_check
-                        )
-                        if should_stop and self.roofline_analyzer.config.early_stop:
-                            self.logger.info(
-                                f"[{round_num}] 🎯 Early termination: {stop_reason}"
-                            )
-                            early_stop_reason = stop_reason
-                            break
-
-        # Profile the final best kernel to get its roofline
-        if best_round_num > 0:
-            final_kernel_file = self.artifact_dir / f"kernel_round_{best_round_num}.py"
-            if final_kernel_file.exists():
+            if best_runtime_kernel == optimized_kernel:
                 self.logger.info(
-                    f"Profiling final best kernel (round {best_round_num})..."
+                    f"[{round_num}] Runtime improved; defer NCU until the next round if this kernel is expanded"
                 )
-                final_profiler_results = self.profiler.profile_kernel(
-                    final_kernel_file, problem_file, best_round_num
-                )
-                if final_profiler_results and final_profiler_results.metrics:
-                    best_ncu_metrics = final_profiler_results.metrics
-                    final_flat_metrics = _get_triton_kernel_metrics(best_ncu_metrics)
-                    final_roofline = self.roofline_analyzer.analyze(
-                        ncu_metrics=final_flat_metrics,
-                    )
-                    self.logger.info(
-                        f"Final roofline (kernel_round_{best_round_num}): "
-                        f"{final_roofline.bottleneck}-bound, {final_roofline.efficiency_pct:.1f}% SOL "
-                        f"(Compute: {final_roofline.compute_sol_pct:.1f}%, "
-                        f"Memory: {final_roofline.memory_sol_pct:.1f}%)"
-                    )
 
         # Final results - use best runtime kernel as primary result
         return self._finalize_results(
@@ -653,12 +634,22 @@ class OptimizationOrchestrator:
             best_round_num,
             early_stop_reason,
             any_verified,
+            best_runtime_ptx_hash=best_runtime_ptx_hash,
         )
 
     def _benchmark_baseline(
-        self, kernel_code: str, problem_file: Path, known_kernel_time: float | None
+        self,
+        kernel_code: str,
+        problem_file: Path,
+        known_kernel_time: float | None,
+        cached_baseline_metrics: dict[str, Any] | None = None,
     ) -> tuple[float, dict[str, float], float | None, float]:
         """Benchmark baseline kernel and PyTorch, and profile baseline SOL.
+
+        When ``cached_baseline_metrics`` is supplied, the NCU/roofline step
+        is skipped and the cached values are reused — this lets the manager
+        share a single baseline profile across sibling workers operating on
+        the same parent kernel.
 
         Returns:
             Tuple of (best_time, baseline_results, pytorch_baseline_time, baseline_sol)
@@ -683,8 +674,14 @@ class OptimizationOrchestrator:
             best_time = baseline_results["time_ms"]
             self.logger.info(f"📊 Baseline time: {best_time:.4f} ms")
 
-        # Profile baseline kernel for SOL metrics
-        baseline_metrics = self._profile_kernel_for_sol(kernel_code, problem_file, 0)
+        # Profile baseline kernel for SOL metrics (skip if cached)
+        if cached_baseline_metrics is not None:
+            baseline_metrics = cached_baseline_metrics
+            self.logger.info("📊 Baseline SOL: (using cached profile from manager)")
+        else:
+            baseline_metrics = self._profile_kernel_for_sol(
+                kernel_code, problem_file, 0
+            )
         if baseline_metrics:
             baseline_sol = baseline_metrics.get("efficiency_pct", 0.0)
             bottleneck = baseline_metrics.get("bottleneck", "unknown")
@@ -726,29 +723,49 @@ class OptimizationOrchestrator:
             Tuple of (bottleneck_results, roofline_result, ncu_metrics).
             All can be None if profiling fails.
         """
-        self.logger.info(f"[{round_num}] Profiling current kernel with NCU...")
-        kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
-        kernel_file_round.write_text(current_kernel)
+        # If the manager pre-profiled the baseline for us, consume it in round 1
+        # (when current_kernel is still the baseline) and skip the NCU run.
+        cached = self._pending_baseline_metrics
+        if cached is not None and round_num == 1 and cached.get("ncu_metrics"):
+            self.logger.info(
+                f"[{round_num}] Using cached baseline NCU profile (skipping NCU)"
+            )
+            # Still write the kernel file so downstream artifact paths are stable.
+            kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
+            kernel_file_round.write_text(current_kernel)
+            ncu_metrics = cached["ncu_metrics"]
+            self._pending_baseline_metrics = None  # consume once
+        else:
+            self.logger.info(f"[{round_num}] Profiling current kernel with NCU...")
+            kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
+            kernel_file_round.write_text(current_kernel)
 
-        profiler_results = self.profiler.profile_kernel(
-            kernel_file_round, problem_file, round_num
-        )
+            profiler_results = self.profiler.profile_kernel(
+                kernel_file_round, problem_file, round_num
+            )
 
-        if profiler_results is None:
-            self.logger.warning(f"[{round_num}] Profiling failed")
-            return None, None, None
+            if profiler_results is None:
+                self.logger.warning(f"[{round_num}] Profiling failed")
+                return None, None, None
 
-        ncu_metrics = profiler_results.metrics
+            ncu_metrics = profiler_results.metrics
 
-        if not ncu_metrics:
-            return None, None, ncu_metrics
+            if not ncu_metrics:
+                return None, None, ncu_metrics
 
         # Run roofline analysis
         flat_metrics = next(iter(ncu_metrics.values()), {}) if ncu_metrics else {}
         roofline_result = self.bottleneck_analyzer.roofline.analyze(flat_metrics)
 
+        precomputed = self._pending_bottleneck_results
+        if precomputed is not None and round_num == 1:
+            self.logger.info(
+                f"[{round_num}] Using pre-computed bottleneck analysis (skipping LLM)"
+            )
+            self._pending_bottleneck_results = None
+            bottleneck_results = [BottleneckResult(**item) for item in precomputed]
         # Use pre-computed bottleneck if override is set
-        if self.bottleneck_override:
+        elif self.bottleneck_override:
             self.logger.info(
                 f"[{round_num}] Using pre-computed bottleneck: {self.bottleneck_override}-bound (with LLM analysis for details)"
             )
@@ -804,21 +821,13 @@ class OptimizationOrchestrator:
         problem_file: Path,
         round_num: int,
     ) -> dict[str, Any] | None:
-        """Profile a kernel to get its SOL metrics.
+        """Profile a kernel to get SOL metrics.
 
-        This is a lightweight profiling specifically for SOL measurement,
-        used to evaluate the new kernel after benchmarking.
-
-        Args:
-            kernel_code: Kernel code to profile
-            problem_file: Path to problem file
-            round_num: Current round number
-
-        Returns:
-            Dict with efficiency_pct, roofline_result, ncu_metrics, or None if profiling fails
+        This helper is retained for baseline kernels. Candidate kernels are
+        intentionally not profiled in-worker; the manager profiles only kernels
+        that survive into the next round's parent set.
         """
         try:
-            # Write kernel to temp file for profiling
             kernel_file = self.artifact_dir / f"kernel_round_{round_num}_sol.py"
             kernel_file.write_text(kernel_code)
 
@@ -831,8 +840,6 @@ class OptimizationOrchestrator:
 
             ncu_metrics = profiler_results.metrics
             flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
-
-            # Run roofline analysis
             roofline_result = self.roofline_analyzer.analyze(ncu_metrics=flat_metrics)
 
             return {
@@ -843,7 +850,6 @@ class OptimizationOrchestrator:
                 "roofline_result": roofline_result,
                 "ncu_metrics": ncu_metrics,
             }
-
         except Exception as e:
             self.logger.warning(f"[{round_num}] SOL profiling failed: {e}")
             return None
@@ -851,6 +857,7 @@ class OptimizationOrchestrator:
     def _generate_optimized_kernel(self, opt_prompt: str, round_num: int) -> str | None:
         """Generate optimized kernel from LLM."""
         self.logger.info(f"[{round_num}] Generating optimized kernel...")
+        self._last_generation_failure_reason = None
         try:
             messages = [{"role": "user", "content": opt_prompt}]
             response_text = self.verification_worker._call_llm(
@@ -869,8 +876,23 @@ class OptimizationOrchestrator:
             )
 
             if not optimized_kernel or len(optimized_kernel) < 100:
+                self._last_generation_failure_reason = (
+                    "Failed to extract valid kernel code from model response"
+                )
                 self.logger.warning(
                     f"[{round_num}] Failed to extract valid kernel code"
+                )
+                return None
+
+            malformed_reason = self.verification_worker._validate_kernel_candidate(
+                optimized_kernel
+            )
+            if malformed_reason:
+                self._last_generation_failure_reason = (
+                    f"Malformed LLM kernel response: {malformed_reason}"
+                )
+                self.logger.warning(
+                    f"[{round_num}] {self._last_generation_failure_reason}"
                 )
                 return None
 
@@ -1072,7 +1094,8 @@ class OptimizationOrchestrator:
                 self.logger.info(f"[{round_num}] 📊 SOL: {new_sol:.1f}%")
             updated_runtime_kernel = optimized_kernel
             updated_runtime_time = new_time
-            updated_runtime_sol = new_sol  # This kernel's SOL (consistent!)
+            if new_sol > 0:
+                updated_runtime_sol = new_sol  # This kernel's SOL (consistent!)
 
         # Check for SOL improvement (independent of runtime)
         if new_sol > best_sol_sol:
@@ -1138,6 +1161,7 @@ class OptimizationOrchestrator:
         best_round: int = 0,
         early_stop_reason: str = "",
         any_verified: bool = False,
+        best_runtime_ptx_hash: str | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         """Finalize and log optimization results.
 
@@ -1187,6 +1211,7 @@ class OptimizationOrchestrator:
             "baseline_time_ms": baseline_results["time_ms"],
             "best_time_ms": best_runtime_time,
             "best_runtime_sol_pct": best_runtime_sol,
+            "best_ptx_hash": best_runtime_ptx_hash,
             "speedup": baseline_speedup,
             "rounds": rounds,
         }
