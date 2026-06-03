@@ -351,7 +351,18 @@ def load_ncu_metrics(
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
-    df = pd.read_csv(csv_path, comment="=", low_memory=False)
+    # Nsight Compute may prepend warnings before the CSV header, for example
+    # when it cannot deploy section files under HOME.  Find the real CSV header
+    # instead of letting pandas treat a warning line as the column list.
+    skiprows = 0
+    with csv_path.open() as f:
+        for line in f:
+            stripped = line.lstrip()
+            if stripped.startswith('"ID",') or stripped.startswith("ID,"):
+                break
+            skiprows += 1
+
+    df = pd.read_csv(csv_path, skiprows=skiprows, low_memory=False)
 
     metric_cols = list(columns) if columns is not None else METRIC_COLUMNS
     keep_cols: List[str] = []
