@@ -349,7 +349,7 @@ class AutoKernelRouter:
         ignore_router_config: bool = False,
         use_router_cache: bool = True,
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int = 300,
         test_code: str | None = None,
     ) -> None:
         self.ka_model = ka_model

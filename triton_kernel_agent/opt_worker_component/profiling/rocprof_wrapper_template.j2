@@ -1,0 +1,236 @@
+{#
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+#}
+
+"""rocprof profiling wrapper for AMD ROCm GPUs."""
+import importlib
+import sys
+import torch
+import inspect
+sys.path.insert(0, str({{ kernel_file_parent }}))
+sys.path.insert(0, str({{ problem_file_parent }}))
+
+from {{ kernel_module }} import kernel_function
+
+_problem_mod = importlib.import_module({{ problem_module | tojson }})
+get_inputs = _problem_mod.get_inputs
+get_init_inputs = _problem_mod.get_init_inputs
+
+# Try to get Model if it exists (for Conv, Linear, etc.)
+has_model = hasattr(_problem_mod, 'Model')
+if has_model:
+    Model = _problem_mod.Model
+
+# Get inputs
+inputs = get_inputs()
+
+# Get additional initialization inputs (e.g., features, eps for RMSNorm)
+init_inputs = get_init_inputs()
+
+{% if dtype_inference %}
+# Infer required dtype from kernel function signature/docstring
+required_dtype = None
+try:
+    kernel_source = inspect.getsource(kernel_function)
+    if 'bfloat16' in kernel_source.lower():
+        required_dtype = torch.bfloat16
+    elif 'float16' in kernel_source.lower() or 'half' in kernel_source.lower():
+        required_dtype = torch.float16
+    elif 'float32' in kernel_source.lower():
+        required_dtype = torch.float32
+except Exception:
+    pass
+{% else %}
+required_dtype = None
+{% endif %}
+
+# Validate dtype
+if required_dtype is not None and not isinstance(required_dtype, torch.dtype):
+    required_dtype = None
+
+# Prepare inputs: move to CUDA (ROCm uses torch.cuda via HIP) and convert dtype.
+# IMPORTANT: Only convert floating-point tensors; preserve integer tensors.
+cuda_inputs = []
+for inp in inputs:
+    if isinstance(inp, torch.Tensor):
+        if not inp.is_cuda:
+            inp = inp.cuda()
+        if required_dtype is not None and inp.is_floating_point() and inp.dtype != required_dtype:
+            inp = inp.to(required_dtype)
+        cuda_inputs.append(inp)
+    else:
+        cuda_inputs.append(inp)
+
+{% if model_extraction %}
+# Check if this is a conv-like kernel that needs a Model to extract weights
+needs_model = False
+has_var_positional = False
+has_var_keyword = False
+kernel_params = []
+try:
+    sig = inspect.signature(kernel_function)
+    kernel_params = [
+        name for name, p in sig.parameters.items()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    param_kinds = [p.kind for p in sig.parameters.values()]
+    has_var_positional = any(k == inspect.Parameter.VAR_POSITIONAL for k in param_kinds)
+    has_var_keyword = any(k == inspect.Parameter.VAR_KEYWORD for k in param_kinds)
+    _MODEL_PARAM_NAMES = {'weight', 'w', 'kernel_size', 'stride', 'padding', 'dilation'}
+    if _MODEL_PARAM_NAMES.intersection(kernel_params):
+        needs_model = True
+    if not needs_model and (has_var_positional or has_var_keyword):
+        try:
+            src = inspect.getsource(kernel_function)
+            needs_model = any(kw in src for kw in ("weight", "is_weight",
+                                                     "w.shape", "w.ndim",
+                                                     "kernel_size", "dilation"))
+        except (OSError, TypeError):
+            pass
+except Exception:
+    pass
+
+_CONV_TYPES = (
+    torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d,
+    torch.nn.ConvTranspose1d, torch.nn.ConvTranspose2d, torch.nn.ConvTranspose3d,
+)
+_NORM_TYPES = (
+    torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d,
+    torch.nn.LayerNorm, torch.nn.GroupNorm,
+    torch.nn.InstanceNorm1d, torch.nn.InstanceNorm2d, torch.nn.InstanceNorm3d,
+)
+_POOL_TYPES = (
+    torch.nn.MaxPool1d, torch.nn.MaxPool2d, torch.nn.MaxPool3d,
+    torch.nn.AvgPool1d, torch.nn.AvgPool2d, torch.nn.AvgPool3d,
+    torch.nn.AdaptiveAvgPool1d, torch.nn.AdaptiveAvgPool2d, torch.nn.AdaptiveAvgPool3d,
+    torch.nn.AdaptiveMaxPool1d, torch.nn.AdaptiveMaxPool2d, torch.nn.AdaptiveMaxPool3d,
+)
+
+model_params = {}
+_all_weights = []
+
+if needs_model and has_model and init_inputs:
+    try:
+        model = Model(*init_inputs) if init_inputs else Model()
+    except TypeError:
+        model = Model()
+
+    model = model.cuda()  # ROCm: torch.cuda works via HIP
+    if required_dtype is not None:
+        model = model.to(required_dtype)
+
+    for _, module in model.named_modules():
+        if isinstance(module, (*_CONV_TYPES, torch.nn.Linear)):
+            if hasattr(module, 'weight') and module.weight is not None:
+                _all_weights.append(module.weight)
+                model_params.setdefault('weight', module.weight)
+                model_params.setdefault('w', module.weight)
+                if getattr(module, 'bias', None) is not None:
+                    model_params.setdefault('conv_bias', module.bias)
+                    model_params.setdefault('bias', module.bias)
+                for attr in ('stride', 'padding', 'dilation', 'output_padding'):
+                    val = getattr(module, attr, None)
+                    if val is not None:
+                        model_params.setdefault(attr, val)
+                if hasattr(module, 'groups'):
+                    model_params.setdefault('groups', module.groups)
+
+        elif isinstance(module, _NORM_TYPES):
+            if getattr(module, 'weight', None) is not None:
+                model_params.setdefault('weight', module.weight)
+                model_params.setdefault('w', module.weight)
+            if getattr(module, 'bias', None) is not None:
+                model_params.setdefault('bias', module.bias)
+            if hasattr(module, 'eps'):
+                model_params['eps'] = module.eps
+            if hasattr(module, 'num_groups'):
+                model_params['num_groups'] = module.num_groups
+            if hasattr(module, 'normalized_shape'):
+                model_params['normalized_shape'] = module.normalized_shape
+
+        elif isinstance(module, _POOL_TYPES):
+            for attr in ('kernel_size', 'stride', 'padding', 'dilation'):
+                val = getattr(module, attr, None)
+                if val is not None:
+                    model_params.setdefault(attr, val)
+
+    if hasattr(model, 'bias') and isinstance(model.bias, (torch.Tensor, torch.nn.Parameter)):
+        model_params['add_bias'] = model.bias
+        model_params.setdefault('bias', model.bias)
+        if not model_params['add_bias'].is_cuda:
+            model_params['add_bias'] = model_params['add_bias'].cuda()
+        if required_dtype is not None and model_params['add_bias'].is_floating_point():
+            model_params['add_bias'] = model_params['add_bias'].to(required_dtype)
+
+
+def run_kernel():
+    """Helper to run the kernel with appropriate arguments."""
+    {% if model_extraction %}
+    if needs_model and model_params:
+        if has_var_positional and _all_weights:
+            pos_args = list(cuda_inputs) + list(_all_weights)
+            config_kwargs = {}
+            for k, v in model_params.items():
+                if k not in ('weight', 'w', 'bias', 'conv_bias', 'add_bias'):
+                    if isinstance(v, (tuple, list)) and len(v) >= 1 and all(e == v[0] for e in v):
+                        v = v[0]
+                    config_kwargs[k] = v
+            return kernel_function(*pos_args, **config_kwargs)
+        else:
+            bound = {}
+            positional_idx = 0
+            for pname in kernel_params:
+                if pname in model_params:
+                    v = model_params[pname]
+                    if isinstance(v, (tuple, list)) and len(v) >= 1 and all(e == v[0] for e in v):
+                        v = v[0]
+                    bound[pname] = v
+                elif positional_idx < len(cuda_inputs):
+                    bound[pname] = cuda_inputs[positional_idx]
+                    positional_idx += 1
+            return kernel_function(**bound)
+    else:
+        return kernel_function(*cuda_inputs, *init_inputs)
+    {% else %}
+    return kernel_function(*cuda_inputs, *init_inputs)
+    {% endif %}
+
+
+# Warmup phase: complete autotuning and JIT compilation BEFORE rocprof profiling.
+# rocprof traces the entire process; these warmup runs ensure that JIT overhead
+# is not included in the final profile capture.
+WARMUP_ITERATIONS = 3
+for _ in range(WARMUP_ITERATIONS):
+    _ = run_kernel()
+torch.cuda.synchronize()  # Works on ROCm via HIP
+
+# Main execution: rocprof will trace this invocation
+{% else %}
+def run_kernel():
+    """Helper to run the kernel with appropriate arguments."""
+    return kernel_function(*cuda_inputs, *init_inputs)
+
+
+# Warmup phase
+WARMUP_ITERATIONS = 3
+for _ in range(WARMUP_ITERATIONS):
+    _ = run_kernel()
+torch.cuda.synchronize()
+
+# Main execution
+{% endif %}
+output = run_kernel()
+
+print("Kernel executed successfully, output shape: " + str(output.shape if hasattr(output, 'shape') else type(output)))

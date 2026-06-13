@@ -76,6 +76,38 @@ _XPU_CUDA_HACKS = (
     "XPUDriver.is_available = classmethod(lambda cls: False)",
 )
 
+# ROCm/AMD GPU platform constants
+_ROCM_GUIDANCE = """\
+**CRITICAL PLATFORM REQUIREMENTS FOR AMD ROCm:**
+- Default tensor allocations to device='cuda' (ROCm exposes HIP as CUDA-compatible via torch.cuda)
+- Check availability with: torch.cuda.is_available() (returns True on ROCm/HIP)
+- AMD wavefront size is 64 (not 32 like NVIDIA warps) — account for this in tiling
+- Do NOT assume NVIDIA-specific ISA features (e.g., warp shuffle semantics differ)
+- Use torch.cuda.synchronize() for synchronization (works on ROCm via HIP)
+- Preferred block sizes: 64, 128, 256, or 512 (multiples of wavefront size 64)
+- triton.language.constexpr BLOCK_SIZE should be a power of 2 >= 64"""
+
+_ROCM_KERNEL_GUIDANCE = """\
+## AMD ROCm-Specific Optimizations
+
+You are generating a Triton kernel for AMD GPUs (ROCm/HIP). Follow these guidelines:
+
+1. **Device Context**: Use 'cuda' as the device string (ROCm provides HIP-CUDA compatibility)
+2. **Wavefront Size**: AMD GPUs use wavefront size 64 (vs NVIDIA warp size 32)
+   - Prefer BLOCK_SIZE multiples of 64 (64, 128, 256, 512)
+   - num_warps maps to num_wavefronts on AMD
+3. **Memory Hierarchy**: AMD CDNA GPUs have HBM memory with very high bandwidth
+   - MI300X: 5.3 TB/s, MI350X: ~8 TB/s
+   - Optimize for memory coalescing and avoid strided access patterns
+4. **Compute Units**: AMD uses Compute Units (CUs), each with 64-lane SIMD
+   - MI300X has 304 CUs, MI350X has 304 CUs
+5. **Data Types**: AMD CDNA supports fp32, fp16, bf16, fp8 (gfx942+)
+   - BF16 matrix units available on MI300X (CDNA3) and later
+6. **Thread Configuration**:
+   - BLOCK_SIZE: prefer 64, 128, 256, or 512
+   - num_warps: typically 4, 8 for AMD (maps to wavefronts)
+7. **Avoid NVIDIA-specific patterns**: Do not use warp-level primitives that assume warp_size=32"""
+
 # Platform registry
 PLATFORMS: dict[str, PlatformConfig] = {
     "cuda": PlatformConfig(
@@ -83,6 +115,13 @@ PLATFORMS: dict[str, PlatformConfig] = {
         device_string="cuda",
         guidance_block="",
         kernel_guidance="",
+        cuda_hacks_to_strip=(),
+    ),
+    "rocm": PlatformConfig(
+        name="rocm",
+        device_string="cuda",  # ROCm uses torch.cuda (HIP compatibility layer)
+        guidance_block=_ROCM_GUIDANCE,
+        kernel_guidance=_ROCM_KERNEL_GUIDANCE,
         cuda_hacks_to_strip=(),
     ),
     "xpu": PlatformConfig(
