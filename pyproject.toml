@@ -42,6 +42,12 @@ dev = [
     "pytest-cov",
 ]
 
+# Add BackendBench as optional (requires Python >=3.10)
+backendbench = [
+    "backendbench @ git+https://git@github.com/meta-pytorch/BackendBench.git ; python_version >= '3.10'",
+]
+
+
 [project.scripts]
 fuser-ui = "scripts.fuser_ui:main"
 kernel-agent = "scripts.triton_ui:main"
