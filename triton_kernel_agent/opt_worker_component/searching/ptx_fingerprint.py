@@ -36,6 +36,9 @@ import hashlib
 import re
 from pathlib import Path
 
+import logging
+logger = logging.getLogger(__name__)
+
 # --- Normalization regex patterns -------------------------------------------
 
 # Strip ``//`` line comments and ``/* */`` block comments.
@@ -156,7 +159,14 @@ def ptx_hash_from_cache(cache_dir: Path) -> str | None:
     for rel, path in rel_sorted:
         try:
             normalized = normalize_ptx(path.read_text(errors="replace"))
-        except OSError:
+        except OSError as e:
+            logger.warning(
+                "Failed to read PTX file %s: %s. "
+                "Fingerprint will be computed from remaining files only "
+                "and may not represent the full kernel.",
+                path,
+                e,
+            )
             continue
         # Include the relative filename in the hash so two kernels with the
         # same PTX content under different function names still differ.
