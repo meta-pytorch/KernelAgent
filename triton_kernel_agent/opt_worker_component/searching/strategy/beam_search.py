@@ -88,6 +88,14 @@ class BeamSearchStrategy(SearchStrategy):
         self.top_kernels: list[ProgramEntry] = []
         self.models = models
         self.samples_per_prompt = max(1, samples_per_prompt)
+        if num_expanding_parents is not None and num_expanding_parents < 1:
+            self.logger.warning(
+                "num_expanding_parents=%d is invalid (must be >= 1); clamping to 1. "
+                "A value of 0 causes select_candidates() to return no candidates, "
+                "silently spawning zero workers and wasting the entire round.",
+                num_expanding_parents,
+            )
+            num_expanding_parents = 1
         self.num_expanding_parents = num_expanding_parents
         # Internal iteration list: [None] means "use runner default".
         self._expansion_models: list[str | None] = list(models) if models else [None]
@@ -155,6 +163,11 @@ class BeamSearchStrategy(SearchStrategy):
                                 "kernel_rank": rank,
                                 "openai_model": model,
                                 "sample_idx": sample_idx,
+                                "inspirations": self.database.sample_inspirations(
+                                    n=2,
+                                    exclude_ids=[kernel.program_id],
+                                    problem_id=self.problem_id,
+                                ) if self.database else [],
                             }
                         )
         return candidates

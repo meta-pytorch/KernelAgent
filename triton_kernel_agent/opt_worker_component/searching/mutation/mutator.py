@@ -43,7 +43,7 @@ class SimpleMutator:
     def __init__(self, store: ProgramDatabase) -> None:
         self.store = store
 
-    def build_prompt(self, parent: AttemptRecord) -> str:
+    def build_prompt(self, parent: AttemptRecord, inspirations: list[AttemptRecord] | None = None) -> str:
         lines = [
             "# Optimize this Triton kernel\n",
             f"Current performance: {parent.time_ms:.4f}ms\n",
@@ -55,7 +55,14 @@ class SimpleMutator:
             for a in history:
                 lines.append(f"- [{a.outcome.value}] {a.time_ms:.4f}ms\n")
 
-        lines.append("\n## Kernel:\n```python\n")
+        if inspirations:
+            lines.append("\n## High-performing reference kernels:\n")
+            for i, insp in enumerate(inspirations):
+                lines.append(f"\n### Reference {i + 1} ({insp.time_ms:.4f}ms):\n```python\n")
+                lines.append(insp.kernel_code)
+                lines.append("\n```\n")
+
+        lines.append("\n## Kernel to optimize:\n```python\n")
         lines.append(parent.kernel_code)
         lines.append("\n```\n")
 
