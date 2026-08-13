@@ -32,7 +32,7 @@ from triton_kernel_agent.worker_util import format_test_code_for_llm
 from utils.providers import get_model_provider
 
 from .prompt_manager import PromptManager
-from .worker_util import _run_test_multiprocess
+from .worker_util import _run_test_multiprocess, validate_kernel_ast
 
 
 DISALLOWED_TORCH_PATTERNS = [
@@ -280,6 +280,9 @@ class VerificationWorker:
         )
         if not has_kernel_function:
             return "missing required top-level kernel_function definition"
+
+        if not validate_kernel_ast(kernel_code):
+            return "Kernel rejected: forbidden dynamic import or execution pattern detected."
 
         return None
 
