@@ -14,6 +14,7 @@
 
 """Utility functions for the verification and optimization workers."""
 
+import ast
 import multiprocessing as mp
 import os
 import re
@@ -95,6 +96,65 @@ def _extract_history_usage_from_response(
         result["evolution_rationale"] = rationale_match.group(1).strip()
 
     return result if result else None
+
+
+def validate_kernel_ast(code_str: str) -> bool:
+    """Validate AST nodes against disallowed execution patterns.
+
+    Args:
+        code_str: The source code to validate.
+
+    Returns:
+        bool: True if safe, False if disallowed patterns are found or parsing fails.
+    """
+    try:
+        tree = ast.parse(code_str)
+    except SyntaxError:
+        return False
+
+    class SecurityVisitor(ast.NodeVisitor):
+        """Node visitor for AST validation."""
+        def __init__(self) -> None:
+            self.is_safe = True
+            self.unsafe_names = {
+                "eval", "exec", "__import__", "getattr",
+                "setattr", "delattr", "compile", "globals",
+                "locals", "vars", "open", "input", "__builtins__"
+            }
+            self.forbidden_modules = {"os", "sys", "subprocess", "builtins", "importlib"}
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if node.id in self.unsafe_names:
+                self.is_safe = False
+            self.generic_visit(node)
+
+        def visit_Attribute(self, node: ast.Attribute) -> None:
+            if node.attr in self.unsafe_names:
+                self.is_safe = False
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                self.is_safe = False
+            self.generic_visit(node)
+            
+        def visit_Call(self, node: ast.Call) -> None:
+            self.generic_visit(node)
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                base_module = alias.name.split(".")[0]
+                if base_module in self.forbidden_modules:
+                    self.is_safe = False
+            self.generic_visit(node)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            if node.module:
+                base_module = node.module.split(".")[0]
+                if base_module in self.forbidden_modules:
+                    self.is_safe = False
+            self.generic_visit(node)
+
+    visitor = SecurityVisitor()
+    visitor.visit(tree)
+    return visitor.is_safe
 
 
 # ------------------------
