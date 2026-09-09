@@ -26,7 +26,11 @@ from dotenv import load_dotenv
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
 from utils.providers import BaseProvider, get_model_provider
-from triton_kernel_agent.platform_config import PlatformConfig, get_platform
+from triton_kernel_agent.platform_config import (
+    DEFAULT_PLATFORM,
+    get_platform,
+    PlatformConfig,
+)
 from triton_kernel_agent.worker_util import format_test_code_for_llm
 
 
@@ -60,8 +64,18 @@ class TritonKernelAgent:
         # Load environment variables
         load_dotenv()
 
-        # Load configuration from environment
-        self.num_workers = num_workers or int(os.getenv("NUM_KERNEL_SEEDS", "4"))
+        # Resolve the backend first: it supplies the default worker count, so it
+        # has to exist before the concurrency decision is made.
+        self._platform_config = (
+            target_platform if target_platform else get_platform(DEFAULT_PLATFORM)
+        )
+
+        # Load configuration from environment. Precedence is caller, then
+        # environment, then the backend's own default -- a backend with no
+        # accelerator behind it has no reason to fan out four ways.
+        self.num_workers = num_workers or int(
+            os.getenv("NUM_KERNEL_SEEDS", str(self._platform_config.default_num_workers))
+        )
         self.max_rounds = max_rounds or int(os.getenv("MAX_REFINEMENT_ROUNDS", "10"))
         self.model_name = model_name or os.getenv(
             "OPENAI_MODEL", "claude-sonnet-4-20250514"
@@ -87,18 +101,16 @@ class TritonKernelAgent:
             self.log_dir = Path.cwd() / "triton_kernel_logs"
         self.log_dir.mkdir(exist_ok=True, parents=True)
 
-        # Normalize to PlatformConfig
-        self._platform_config = (
-            target_platform if target_platform else get_platform("cuda")
-        )
         self.no_cusolver = no_cusolver
         self.test_timeout_s = test_timeout_s
 
         # Setup main logger
         self._setup_logging()
 
-        # Initialize prompt manager
-        self.prompt_manager = PromptManager(target_platform=target_platform)
+        # Initialize prompt manager with the resolved config, not the raw
+        # argument: passing None here made PromptManager re-derive the default
+        # independently, so two places decided the same thing.
+        self.prompt_manager = PromptManager(target_platform=self._platform_config)
 
         # Initialize worker manager
         self.manager = WorkerManager(
@@ -281,7 +293,7 @@ def test_kernel():
     # Adapted from provided test code
     try:
         # Create test data (standardized format)
-        test_input = torch.randn(1024, device='cuda')
+        test_input = torch.randn(1024, device='__DEVICE__')
 
         # Call kernel_function as a normal Python function
         result = kernel_function(test_input)
@@ -302,6 +314,9 @@ if __name__ == "__main__":
     success = test_kernel()
     sys.exit(0 if success else 1)
 '''
+            test_code = test_code.replace(
+                "__DEVICE__", self._platform_config.device_string
+            )
         else:
             test_code = '''"""
 Test for kernel implementation.
@@ -315,7 +330,7 @@ def test_kernel():
     # Mock test - replace with actual test logic
     try:
         # Create test data
-        test_input = torch.randn(1024, device='cuda')
+        test_input = torch.randn(1024, device='__DEVICE__')
 
         # Call kernel_function as a normal Python function
         # (kernel launch logic is handled inside kernel.py)
@@ -332,6 +347,9 @@ if __name__ == "__main__":
     success = test_kernel()
     sys.exit(0 if success else 1)
 '''
+            test_code = test_code.replace(
+                "__DEVICE__", self._platform_config.device_string
+            )
         return test_code
 
     def _generate_kernel_seeds(

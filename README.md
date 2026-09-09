@@ -226,6 +226,19 @@ KernelAgent supports multiple GPU platforms for Triton kernel execution:
 |----------|---------------|------|--------|
 | NVIDIA CUDA | `cuda` | `--target-platform cuda` (default) | Fully supported |
 | Intel XPU | `xpu` | `--target-platform xpu` | Supported |
+| Fake (no accelerator) | `cpu` | `--target-platform fake` | Dry runs and CI without hardware |
+
+A backend is described by the capabilities it declares — availability check,
+device setup, synchronization, test prelude and default worker count — rather
+than by its name, so nothing in the generic templates branches on a device
+string. Register one with
+`triton_kernel_agent.platform_config.register_platform`, and register its
+optimization components with
+`triton_kernel_agent.platform.registry.registry.register`.
+
+The `fake` backend exists to exercise the pipeline where there is no
+accelerator. It reports a placeholder time so the pipeline can complete, and
+nothing it produces is a performance claim.
 
 ### Intel XPU Notes
 
