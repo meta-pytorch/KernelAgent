@@ -151,7 +151,11 @@ class TestPlatformRegistry:
         for name in get_platform_choices():
             config = get_platform(name)
             assert config.name == name
-            assert config.device_string in ["cuda", "xpu"]
+            # Not an allow-list of known device strings: the registry is
+            # extensible, and a backend registered from outside this repository
+            # would fail a hardcoded list without being wrong.
+            assert isinstance(config.device_string, str)
+            assert config.device_string
 
 
 class TestEdgeCases:
@@ -178,7 +182,7 @@ class TestEdgeCases:
             get_platform(" cuda ")
 
 
-@pytest.mark.parametrize("platform_name", ["cuda", "xpu"])
+@pytest.mark.parametrize("platform_name", get_platform_choices())
 def test_all_platforms_have_consistent_structure(platform_name):
     """All platforms should have consistent field types."""
     config = get_platform(platform_name)
@@ -187,11 +191,21 @@ def test_all_platforms_have_consistent_structure(platform_name):
     assert isinstance(config.guidance_block, str)
     assert isinstance(config.kernel_guidance, str)
     assert isinstance(config.cuda_hacks_to_strip, tuple)
+    assert isinstance(config.availability_check, str)
+    assert isinstance(config.device_setup, str)
+    assert isinstance(config.synchronize_call, str)
+    assert isinstance(config.test_prelude, str)
+    assert isinstance(config.default_num_workers, int)
 
 
 @pytest.mark.parametrize("platform_name", ["cuda", "xpu"])
 def test_platform_name_equals_device_string(platform_name):
-    """Platform name should equal device string for simplicity."""
+    """Accelerator backends name themselves after their device.
+
+    Deliberately scoped to the accelerator backends rather than the whole
+    registry: the `fake` backend is named for what it is and runs on `cpu`, so
+    the two differ there on purpose.
+    """
     config = get_platform(platform_name)
     assert config.name == config.device_string
 

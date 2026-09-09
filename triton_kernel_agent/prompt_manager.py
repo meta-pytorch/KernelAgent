@@ -161,6 +161,9 @@ class PromptManager:
             problem_description=problem_description,
             provided_test_code=provided_test_code,
             device_string=self.target_platform.device_string,
+            availability_check=self.target_platform.availability_check,
+            device_setup=self.target_platform.device_setup,
+            test_prelude=self.target_platform.test_prelude,
         )
 
     def render_kernel_generation_prompt(

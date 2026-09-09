@@ -104,7 +104,8 @@ The test file structure should be:
 ```python
 import torch
 # other imports as needed (but NOT triton - that's handled in kernel.py)
-
+{% if test_prelude %}{{ test_prelude }}
+{% endif %}
 # Comment for summary of original problem description
 def test_kernel():
     """Test the kernel implementation."""
@@ -117,13 +118,9 @@ def test_kernel():
 
         # Device setup
         device = "{{ device_string }}"
-{% if device_string == "xpu" %}
-        if not hasattr(torch, 'xpu') or not torch.xpu.is_available():
-            raise RuntimeError("Intel XPU not available. Install PyTorch with Intel GPU support.")
-{% else %}
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA not available")
+{% if device_setup %}{{ device_setup | indent(8, true) }}
 {% endif %}
+{{ availability_check | indent(8, true) }}
 
         # Create test data using EXACT specifications from problem description
         # If problem specifies shape/dtype, use those exact values
