@@ -72,20 +72,97 @@ def detect_amd_gpu_name() -> str | None:
             return None
         name = torch.cuda.get_device_name(0)
         lowered = name.lower()
-        if "AMD" in name or "Instinct" in name or "Radeon" in name or "gfx" in lowered:
-            return name
-        return None
+        if not (
+            "AMD" in name or "Instinct" in name or "Radeon" in name or "gfx" in lowered
+        ):
+            return None
+        # A product name wins. Chip id is only for a bare gfx90a report.
+        if _named_sku(name) is None and "gfx90a" in lowered:
+            chip, cu_count = _pci_chip_id_and_cu_count()
+            sku = sku_name_for_gfx90a_chip(chip, cu_count)
+            if sku is not None:
+                return sku
+        return name
     except Exception:
         return None
 
 
-# gfx942 is shared by MI300X and MI300A. The discrete MI300X entry is the
-# default when the driver only reports the ISA name.
+# gfx942 is shared by MI300X and MI300A. gfx90a is shared by MI210, MI250,
+# and MI250X. A bare ISA name uses the discrete OAM entry unless a PCI
+# chip id says otherwise.
 _GFX_TO_SPEC_NAME = {
     "gfx942": "AMD Instinct MI300X",
     "gfx950": "AMD Instinct MI350X",
     "gfx90a": "AMD Instinct MI250X",
+    "gfx908": "AMD Instinct MI100",
 }
+
+# Longer tokens first so MI250X is not read as MI250.
+_SKU_TOKENS = (
+    ("mi350x", "AMD Instinct MI350X"),
+    ("mi300x", "AMD Instinct MI300X"),
+    ("mi300a", "AMD Instinct MI300A"),
+    ("mi250x", "AMD Instinct MI250X"),
+    ("mi250", "AMD Instinct MI250"),
+    ("mi210", "AMD Instinct MI210"),
+    ("mi100", "AMD Instinct MI100"),
+)
+
+
+def _named_sku(raw_name: str) -> str | None:
+    """Return a spec-database key when the string names a product."""
+    lowered = raw_name.lower()
+    for token, canonical in _SKU_TOKENS:
+        if token in lowered:
+            return canonical
+    return None
+
+
+# Mesa drm data/amdgpu.ids. 0x740C is "MI250X / MI250"; CU count splits it.
+# 0x7410 is the MI210 virtual function.
+_GFX90A_CHIP_ID = {
+    0x7408: "AMD Instinct MI250X",
+    0x740F: "AMD Instinct MI210",
+    0x7410: "AMD Instinct MI210",
+}
+
+
+def sku_name_for_gfx90a_chip(chip_id: int | None, cu_count: int | None) -> str | None:
+    """Pick an MI200 product name from the PCI chip id.
+
+    ``torch.cuda``'s ``pci_device_id`` is the bus slot, not this id. Read
+    ``/sys/bus/pci/devices/<bdf>/device`` for the chip id.
+    """
+    if chip_id is None:
+        return None
+    chip_id = int(chip_id)
+    if chip_id == 0x740C:
+        if cu_count in (104, 208):
+            return "AMD Instinct MI250"
+        return "AMD Instinct MI250X"
+    return _GFX90A_CHIP_ID.get(chip_id)
+
+
+def _pci_chip_id_and_cu_count() -> tuple[int | None, int | None]:
+    """Chip id and CU count for torch device 0, or ``(None, None)``."""
+    try:
+        import torch
+    except ImportError:
+        return None, None
+    if not torch.cuda.is_available():
+        return None, None
+    props = torch.cuda.get_device_properties(0)
+    try:
+        domain = int(getattr(props, "pci_domain_id", 0))
+        bus = int(props.pci_bus_id)
+        dev = int(props.pci_device_id)
+        bdf = f"{domain:04x}:{bus:02x}:{dev:02x}.0"
+        chip_text = Path(f"/sys/bus/pci/devices/{bdf}/device").read_text().strip()
+        chip = int(chip_text, 16)
+        cu_count = int(props.multi_processor_count)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None, None
+    return chip, cu_count
 
 
 def _normalize_amd_gpu_name(raw_name: str) -> str:
@@ -106,6 +183,10 @@ def _normalize_amd_gpu_name(raw_name: str) -> str:
     for suffix in (" OAM", " PCIe", " SXM", " NVL"):
         if raw_name.endswith(suffix):
             raw_name = raw_name[: -len(suffix)].strip()
+
+    named = _named_sku(raw_name)
+    if named is not None:
+        return named
 
     lowered = raw_name.lower()
     for gfx, canonical in _GFX_TO_SPEC_NAME.items():

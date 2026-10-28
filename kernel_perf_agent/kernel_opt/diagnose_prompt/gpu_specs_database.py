@@ -273,6 +273,75 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "form_factor": "OAM",
         "tdp_w": 560,
     },
+    # AMD Instinct MI250 (CDNA2 / gfx90a, dual GCD)
+    # Same 3.2 TB/s HBM2e as MI250X. Peaks follow the 208/220 CU ratio.
+    "AMD Instinct MI250": {
+        "name": "AMD Instinct MI250",
+        "architecture": "CDNA2",
+        "gfx_target": "gfx90a",
+        "peak_fp32_tflops": 45.3,
+        "peak_fp16_tflops": 362.1,
+        "peak_bf16_tflops": 362.1,
+        "peak_memory_bw_gbps": 3277,  # 3.2768 TB/s HBM2e
+        "cu_count": 208,
+        "sm_count": 208,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 16,  # 8 MB per GCD
+        "memory_gb": 128,
+        "memory_type": "HBM2e",
+        "form_factor": "OAM",
+        "tdp_w": 500,
+    },
+    # AMD Instinct MI210 (CDNA2 / gfx90a, single GCD PCIe)
+    # gfx90a is shared with MI250 and MI250X. A bare ISA name stays MI250X
+    # unless the PCI chip id selects this row.
+    # Sources: AMD MI210 product page and brochure (2022), ROCm gpu-arch-specs
+    "AMD Instinct MI210": {
+        "name": "AMD Instinct MI210",
+        "architecture": "CDNA2",
+        "gfx_target": "gfx90a",
+        "peak_fp32_tflops": 22.6,
+        "peak_fp16_tflops": 181.0,
+        "peak_bf16_tflops": 181.0,
+        "peak_memory_bw_gbps": 1638,  # 1.6384 TB/s HBM2e
+        "cu_count": 104,
+        "sm_count": 104,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 8,
+        "memory_gb": 64,
+        "memory_type": "HBM2e",
+        "form_factor": "PCIe",
+        "tdp_w": 300,
+    },
+    # AMD Instinct MI100 (CDNA / gfx908)
+    # Sources: AMD MI100 product page, CDNA whitepaper, ROCm gpu-arch-specs.
+    # Matrix BF16 is half the FP16 rate on CDNA1.
+    "AMD Instinct MI100": {
+        "name": "AMD Instinct MI100",
+        "architecture": "CDNA",
+        "gfx_target": "gfx908",
+        "peak_fp32_tflops": 23.1,
+        "peak_fp16_tflops": 184.6,
+        "peak_bf16_tflops": 92.3,
+        "peak_memory_bw_gbps": 1229,  # 1.2288 TB/s HBM2
+        "cu_count": 120,
+        "sm_count": 120,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 8,
+        "memory_gb": 32,
+        "memory_type": "HBM2",
+        "form_factor": "PCIe",
+        "tdp_w": 300,
+    },
 }
 
 # Make database read-only to prevent accidental modification

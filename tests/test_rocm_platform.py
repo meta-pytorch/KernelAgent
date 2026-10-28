@@ -44,6 +44,7 @@ from triton_kernel_agent.platform.rocm import (
     ROCmWorkerRunner,
     _normalize_amd_gpu_name,
     _rocm_worker_process,
+    sku_name_for_gfx90a_chip,
 )
 from triton_kernel_agent.platform_config import get_platform, resolve_test_timeout_s
 
@@ -143,10 +144,49 @@ def test_timeout_default_is_platform_specific():
 def test_gfx_isa_names_map_onto_spec_database_keys():
     assert _normalize_amd_gpu_name("gfx942") == "AMD Instinct MI300X"
     assert _normalize_amd_gpu_name("gfx950") == "AMD Instinct MI350X"
+    assert _normalize_amd_gpu_name("gfx908") == "AMD Instinct MI100"
+    assert _normalize_amd_gpu_name("gfx90a") == "AMD Instinct MI250X"
+    assert _normalize_amd_gpu_name("gfx90a:sramecc+:xnack-") == "AMD Instinct MI250X"
     assert _normalize_amd_gpu_name("Instinct MI300X OAM") == "AMD Instinct MI300X"
+    assert _normalize_amd_gpu_name("Instinct MI210 PCIe") == "AMD Instinct MI210"
+    assert (
+        _normalize_amd_gpu_name("AMD Instinct MI210 (gfx90a)") == "AMD Instinct MI210"
+    )
+    assert _normalize_amd_gpu_name("Instinct MI250 OAM") == "AMD Instinct MI250"
+    assert _normalize_amd_gpu_name("AMD Instinct MI250X (gfx90a)") == (
+        "AMD Instinct MI250X"
+    )
     specs = get_gpu_specs(_normalize_amd_gpu_name("gfx942"))
     assert specs is not None
     assert specs["cu_count"] == 304
+
+    mi100 = get_gpu_specs("AMD Instinct MI100")
+    assert mi100 is not None
+    assert mi100["cu_count"] == 120
+    assert mi100["gfx_target"] == "gfx908"
+    assert mi100["peak_bf16_tflops"] == 92.3
+
+    mi210 = get_gpu_specs("AMD Instinct MI210")
+    assert mi210 is not None
+    assert mi210["cu_count"] == 104
+    assert mi210["memory_gb"] == 64
+    assert mi210["gfx_target"] == "gfx90a"
+
+    mi250 = get_gpu_specs("AMD Instinct MI250")
+    assert mi250 is not None
+    assert mi250["cu_count"] == 208
+    assert mi250["memory_gb"] == 128
+
+
+def test_gfx90a_chip_id_separates_mi210_and_mi250():
+    assert sku_name_for_gfx90a_chip(0x740F, 104) == "AMD Instinct MI210"
+    assert sku_name_for_gfx90a_chip(0x7410, 104) == "AMD Instinct MI210"
+    assert sku_name_for_gfx90a_chip(0x7408, 110) == "AMD Instinct MI250X"
+    assert sku_name_for_gfx90a_chip(0x740C, 104) == "AMD Instinct MI250"
+    assert sku_name_for_gfx90a_chip(0x740C, 208) == "AMD Instinct MI250"
+    assert sku_name_for_gfx90a_chip(0x740C, 110) == "AMD Instinct MI250X"
+    assert sku_name_for_gfx90a_chip(0x740C, None) == "AMD Instinct MI250X"
+    assert sku_name_for_gfx90a_chip(None, 104) is None
 
 
 def test_prompt_uses_cu_labels_and_marks_estimated_specs():
