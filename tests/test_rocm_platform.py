@@ -15,7 +15,8 @@
 """ROCm platform wiring that must hold without an AMD GPU."""
 
 import inspect
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -198,6 +199,23 @@ platform_kwargs:
     )
     assert manager.worker_kwargs["gpu_name"] == gpu_name
     assert manager._mgr_profiler._rocprof_bin_path == rocprof_bin_path
+
+    # OptimizationWorker always constructs Benchmark, and that module imports
+    # torch. CI does not install torch, so stand in for the class.
+    benchmark_mod = ModuleType(
+        "triton_kernel_agent.opt_worker_component.benchmarking.benchmark"
+    )
+
+    class _Benchmark:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    benchmark_mod.Benchmark = _Benchmark
+    monkeypatch.setitem(
+        sys.modules,
+        "triton_kernel_agent.opt_worker_component.benchmarking.benchmark",
+        benchmark_mod,
+    )
 
     worker = OptimizationWorker(
         worker_id=0,
