@@ -552,6 +552,12 @@ class NvidiaRooflineAnalyzer(RooflineAnalyzerBase):
     def should_stop(self, result: Any) -> tuple[bool, str]:
         return self._get_delegate().should_stop(result)
 
+    @property
+    def config(self) -> Any:
+        # The orchestrator reads early_stop on the platform analyzer after
+        # should_stop(). The flag lives on the inner NCU analyzer.
+        return self._get_delegate().config
+
     def reset_history(self) -> None:
         self._get_delegate().reset_history()
 

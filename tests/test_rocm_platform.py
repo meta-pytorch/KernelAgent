@@ -16,6 +16,7 @@
 
 import inspect
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -24,12 +25,17 @@ from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import get_gpu_specs
 from kernel_perf_agent.kernel_opt.diagnose_prompt.judger_prompt import (
     _format_gpu_specs,
 )
+from kernel_perf_agent.kernel_opt.profiler.rocprof_profiler import (
+    _merge_rocprof_outputs,
+    _run_rocprofv3_pmc_passes,
+)
 from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import ROCmRooflineAnalyzer
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
     _get_triton_kernel_metrics,
     profiler_is_rocm,
     should_disable_profiling,
 )
+from triton_kernel_agent.platform.nvidia import NvidiaRooflineAnalyzer
 from triton_kernel_agent.platform.registry import registry
 from triton_kernel_agent.platform.rocm import (
     ROCmBottleneckAnalyzer,
@@ -225,6 +231,83 @@ platform_kwargs:
     )
     assert worker.gpu_name == gpu_name
     assert worker.profiler._rocprof_bin_path == rocprof_bin_path
+
+
+def test_missing_rocprof_csv_is_not_a_profile(tmp_path):
+    stats = tmp_path / "rocprof_round_1_stats.csv"
+    pmc = tmp_path / "rocprof_round_1_pmc.csv"
+    with pytest.raises(RuntimeError, match="without a usable CSV"):
+        _merge_rocprof_outputs(stats, pmc)
+
+    stats.write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
+        "kernel,1,2000000,2000000,100\n"
+    )
+    with pytest.raises(RuntimeError, match="without a usable CSV"):
+        _merge_rocprof_outputs(stats, pmc)
+
+
+def test_collected_rocprof_csvs_keep_measured_counters(tmp_path):
+    stats = tmp_path / "stats.csv"
+    pmc = tmp_path / "pmc.csv"
+    stats.write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
+        "kernel,1,2000000,2000000,100\n"
+    )
+    pmc.write_text(
+        "KernelName,SQ_INSTS_VALU,SQ_INSTS_SALU,TCC_HIT_sum,TCC_MISS_sum\n"
+        "kernel,900,100,80,20\n"
+    )
+    metrics = _merge_rocprof_outputs(stats, pmc)
+    assert metrics["duration_ms"] == 2.0
+    assert metrics["sq_insts_valu"] == 900.0
+    assert metrics["tcc_hit"] == 80.0
+    assert metrics["tcc_miss"] == 20.0
+
+
+def _fake_rocprof(path, source: str) -> str:
+    path.write_text("#!/usr/bin/env python3\n" + source)
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_rocprofv3_pass_without_csv_is_not_collected(tmp_path):
+    bin_path = _fake_rocprof(
+        tmp_path / "rocprofv3",
+        "import sys\n"
+        "out = sys.argv[sys.argv.index('-o') + 1]\n"
+        "if out.endswith('_pass0'):\n"
+        "    open(out + '_counter_collection.csv', 'w').write(\n"
+        "        'Counter_Name,Counter_Value\\nSQ_INSTS_VALU,900\\n'\n"
+        "    )\n",
+    )
+    out_csv = tmp_path / "pmc.csv"
+    with pytest.raises(RuntimeError, match="wrote no"):
+        _run_rocprofv3_pmc_passes(
+            rocprof_bin=bin_path,
+            benchmark_script=tmp_path / "bench.py",
+            workdir=tmp_path,
+            out_csv=out_csv,
+            python_executable=sys.executable,
+            env={},
+            timeout=30,
+        )
+    assert not Path(str(out_csv) + "_counter_collection.csv").exists()
+
+
+def test_roofline_wrappers_expose_early_stop():
+    wrapper = ROCmRooflineAnalyzerWrapper()
+    result = wrapper.analyze(ncu_metrics=_FLAT_ROCM_METRICS)
+    assert wrapper.config.early_stop is False
+    stop = False
+    for _ in range(wrapper.config.convergence_rounds):
+        stop, _reason = wrapper.should_stop(result)
+    assert stop is True
+    # The orchestrator breaks only when both are true. ROCm leaves the flag
+    # off, so a converged multi-round run continues.
+    assert not (stop and wrapper.config.early_stop)
+
+    assert NvidiaRooflineAnalyzer().config.early_stop is True
 
 
 def test_worker_runner_matches_multi_gpu_contract():

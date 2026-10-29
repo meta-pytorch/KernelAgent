@@ -395,11 +395,15 @@ def _run_rocprofv3_pmc_passes(
             )
         csv_path = Path(str(pass_out) + "_counter_collection.csv")
         if not csv_path.exists():
-            continue
+            raise RuntimeError(
+                f"rocprof PMC pass {index + 1} exited 0 but wrote no {csv_path.name}"
+            )
         with csv_path.open(newline="") as handle:
             rows = list(csv.reader(handle))
         if len(rows) < 2:
-            continue
+            raise RuntimeError(
+                f"rocprof PMC pass {index + 1} wrote no counter rows in {csv_path.name}"
+            )
         if combined_header is None:
             combined_header = rows[0]
         combined_rows.extend(rows[1:])
@@ -558,6 +562,15 @@ def _merge_rocprof_outputs(
     The returned dict is compatible with the rest of the KernelAgent pipeline
     (same structure expected by RooflineAnalyzer and BottleneckAnalyzer).
     """
+    stats_path = _resolve_collected_csv(stats_csv, "_kernel_stats.csv")
+    pmc_path = _resolve_collected_csv(pmc_csv, "_counter_collection.csv")
+    missing = [path for path in (stats_path, pmc_path) if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            "rocprof completed without a usable CSV: "
+            + ", ".join(str(path) for path in missing)
+        )
+
     stats = _parse_stats_csv(stats_csv)
     pmc = _parse_pmc_csv(pmc_csv)
 
