@@ -47,9 +47,12 @@ from triton_kernel_agent.platform.rocm import (
     ROCmKernelProfilerWrapper,
     ROCmRooflineAnalyzerWrapper,
     ROCmWorkerRunner,
+    _amd_smi_gpu_record,
     _normalize_amd_gpu_name,
     _rocm_worker_process,
+    _sku_for_torch_name,
     sku_name_for_gfx90a_chip,
+    sku_name_for_gfx942_chip,
 )
 from triton_kernel_agent.platform_config import get_platform, resolve_test_timeout_s
 
@@ -192,6 +195,45 @@ def test_gfx90a_chip_id_separates_mi210_and_mi250():
     assert sku_name_for_gfx90a_chip(0x740C, 110) == "AMD Instinct MI250X"
     assert sku_name_for_gfx90a_chip(0x740C, None) == "AMD Instinct MI250X"
     assert sku_name_for_gfx90a_chip(None, 104) is None
+
+
+def test_combined_mi250_name_uses_chip_id():
+    combined = "AMD Instinct MI250X / MI250"
+    no_space = "AMD Instinct MI250X/MI250"
+    assert _sku_for_torch_name(combined, 0x740C, 104) == "AMD Instinct MI250"
+    assert _sku_for_torch_name(combined, 0x740C, 208) == "AMD Instinct MI250"
+    assert _sku_for_torch_name(combined, 0x740C, 110) == "AMD Instinct MI250X"
+    assert _sku_for_torch_name(no_space, 0x740C, 104) == "AMD Instinct MI250"
+    assert _sku_for_torch_name("AMD Instinct MI250X", 0x740C, 104) == (
+        "AMD Instinct MI250X"
+    )
+    # No chip id and no CU count: the string-only path keeps the longer token.
+    assert _normalize_amd_gpu_name(combined) == "AMD Instinct MI250X"
+    assert _normalize_amd_gpu_name(no_space) == "AMD Instinct MI250X"
+
+
+def test_amd_smi_asic_follows_hip_id():
+    listed = "GPU: 0\n    HIP_ID: 2\nGPU: 1\n    HIP_ID: 0\n"
+    asic = (
+        "GPU: 0\n    DEVICE_ID: 0x7408\n    NUM_COMPUTE_UNITS: 110\n"
+        "GPU: 1\n    DEVICE_ID: 0x740c\n    NUM_COMPUTE_UNITS: 104\n"
+    )
+    assert _amd_smi_gpu_record(listed, asic, 0) == (0x740C, 104)
+    assert _amd_smi_gpu_record(listed, asic, 2) == (0x7408, 110)
+
+
+def test_gfx942_chip_id_separates_mi300a_and_mi300x():
+    assert sku_name_for_gfx942_chip(0x74A0) == "AMD Instinct MI300A"
+    assert sku_name_for_gfx942_chip(0x74A1) == "AMD Instinct MI300X"
+    assert sku_name_for_gfx942_chip(0x74A9) == "AMD Instinct MI300X"
+    assert sku_name_for_gfx942_chip(0x74A2) is None
+    assert sku_name_for_gfx942_chip(None) is None
+    assert _sku_for_torch_name("gfx942", 0x74A0, 228) == "AMD Instinct MI300A"
+    assert _sku_for_torch_name("gfx942", 0x74A9, 304) == "AMD Instinct MI300X"
+    assert _sku_for_torch_name("gfx942", None, None) == "gfx942"
+    assert _sku_for_torch_name("AMD Instinct MI300A", 0x74A1, 304) == (
+        "AMD Instinct MI300A"
+    )
 
 
 def test_prompt_uses_cu_labels_and_marks_estimated_specs():
@@ -340,7 +382,7 @@ def test_rocprofv3_pass_without_csv_is_not_collected(tmp_path):
     assert not Path(str(out_csv) + "_counter_collection.csv").exists()
 
 
-def test_v3_output_format_flag_is_accepted_by_rocm7(tmp_path):
+def test_rocprofv3_uses_long_output_format(tmp_path):
     bin_path = _fake_rocprof(
         tmp_path / "rocprofv3",
         "import sys\n"
@@ -406,11 +448,7 @@ def test_roofline_wrappers_expose_early_stop():
 
 
 def _installed_rocprofv3() -> str | None:
-    """Return rocprofv3, or None when this ROCm build does not ship it.
-
-    A TheRock venv copies the binary next to the Python executable, and
-    that directory is not always on PATH.
-    """
+    """Return rocprofv3, or None when it is not installed."""
     found = shutil.which("rocprofv3")
     if found:
         return found
@@ -451,6 +489,101 @@ def test_matmul_profile_when_rocprofv3_is_installed(tmp_path):
     )
     metrics = json.loads(metrics_path.read_text())
     assert metrics["duration_ms"] > 0
+
+
+def test_detect_gpus_uses_amd_smi_hip_ids_when_nvidia_smi_is_absent(monkeypatch):
+    from triton_kernel_agent.opt_manager import _detect_gpus
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    enumerated = "GPU: 0\n    HIP_ID: 1\nGPU: 1\n    HIP_ID: 3\n"
+    binary = "/opt/python-3.11-venv/bin/amd-smi"
+
+    def query(argv):
+        if argv == [binary, "list", "-e"]:
+            return enumerated
+        return None
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: binary
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
+    assert _detect_gpus() == [1, 3]
+
+
+def test_find_amd_smi_beside_python_before_resolved_path(monkeypatch, tmp_path):
+    from triton_kernel_agent.platform.rocm import _find_amd_smi
+
+    link_dir = tmp_path / "venv" / "bin"
+    real_dir = tmp_path / "real"
+    link_dir.mkdir(parents=True)
+    real_dir.mkdir()
+    real_python = real_dir / "python3"
+    real_python.write_text("")
+    python = link_dir / "python"
+    python.symlink_to(real_python)
+    sibling = link_dir / "amd-smi"
+    sibling.write_text("")
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm.shutil.which", lambda _name: None
+    )
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm.sys.executable", str(python)
+    )
+    assert _find_amd_smi() == str(sibling)
+
+
+def test_find_amd_smi_uses_opt_rocm_bin(monkeypatch, tmp_path):
+    from triton_kernel_agent.platform.rocm import _find_amd_smi
+
+    python = tmp_path / "python"
+    python.write_text("")
+    bundled = Path("/opt/rocm/bin/amd-smi")
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm.shutil.which", lambda _name: None
+    )
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm.sys.executable", str(python)
+    )
+    real_is_file = Path.is_file
+
+    def is_file(self):
+        if self == bundled:
+            return True
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    assert _find_amd_smi() == str(bundled)
+
+
+def test_detect_gpus_prefers_cuda_visible_devices_and_nvidia_smi(monkeypatch):
+    from triton_kernel_agent.opt_manager import _detect_gpus
+
+    def fail_query(argv):
+        raise AssertionError(argv)
+
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", fail_query)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+    assert _detect_gpus() == [4, 5]
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
+
+    def nvidia_query(argv):
+        if argv[0] == "nvidia-smi":
+            return "0\n1\n"
+        raise AssertionError(argv)
+
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", nvidia_query)
+    assert _detect_gpus() == [0, 1]
+
+
+def test_detect_gpus_falls_back_to_one_gpu(monkeypatch):
+    from triton_kernel_agent.opt_manager import _detect_gpus
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(
+        "triton_kernel_agent.opt_manager._query_smi", lambda argv: None
+    )
+    assert _detect_gpus() == [0]
 
 
 def test_worker_runner_matches_multi_gpu_contract():

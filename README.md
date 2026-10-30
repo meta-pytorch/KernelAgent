@@ -30,7 +30,7 @@ Every stage writes artifacts to a run directory under `.optimize/<run_id>/`, inc
 - Linux or macOS
 - **GPU Requirements (one of the following):**
   - **CUDA**: NVIDIA GPU with CUDA support
-  - **ROCm**: AMD GPU with ROCm 6.x+ (e.g., Instinct MI300X)
+  - **ROCm**: AMD GPU with ROCm 10.1 or later (e.g., Instinct MI300X)
   - **XPU**: Intel GPU with oneAPI support (Arc, Data Center GPUs, or integrated Xe graphics)
 - Triton (installed separately: `pip install triton` or nightly from source)
 - PyTorch (https://pytorch.org/get-started/locally/)
@@ -44,13 +44,20 @@ pip install -e .
 ### Platform-Specific PyTorch Installation
 
 #### AMD ROCm (AMD GPUs)
+Install PyTorch, ROCm, and KernelAgent into the same virtualenv. `rocprofv3` and `amd-smi` are placed beside that environment's Python.
+
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ \
+  "torch[device-all]==2.14.0+rocm10.1.0" \
+  "torchvision[device-all]==0.29.0a0+rocm10.1.0" \
+  "torchaudio==2.11.0.3+rocm10.1.0"
+# Install KernelAgent into this environment.
+pip install -e .
 ```
 
-**Note:** AMD ROCm support requires:
-- ROCm installed and `rocprofv3` on `$PATH`
-- Compatible AMD GPU (e.g., Instinct MI300X)
+**Note:** The `torch` install also installs ROCm 10.1.0. KernelAgent finds `rocprofv3` and `amd-smi` beside that Python, on `$PATH`, or in `/opt/rocm/bin`. Requires a compatible AMD GPU (e.g., Instinct MI300X).
 
 For optimization, use the bundled config as a quickstart:
 ```bash
@@ -254,7 +261,7 @@ KernelAgent supports multiple GPU platforms for Triton kernel execution:
 
 ### AMD ROCm Notes
 
-When targeting AMD ROCm, KernelAgent automatically:
+When targeting AMD ROCm 10.1 or later, KernelAgent automatically:
 - Uses `rocprofv3` for hardware profiling
 - Applies ROCm-specific Triton block/wave occupancy hints
 - Generates appropriate device availability checks

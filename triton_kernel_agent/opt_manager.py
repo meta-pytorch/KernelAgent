@@ -35,6 +35,7 @@ Example:
 
 import logging
 import multiprocessing as mp
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,47 @@ from utils.config_injectable import config_injectable
 _MANAGER_LEVEL_KEYS = {"verifier", "benchmarker", "worker_runner"}
 
 
+def _query_smi(argv: list[str]) -> str | None:
+    """Run a GPU listing tool. Return stdout, or None when it is unavailable."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout
+
+
+def _parse_amd_smi_gpu_ids(text: str) -> list[int]:
+    """HIP ordinals from ``amd-smi list``. Prefer ``HIP_ID`` over the tool index."""
+    hip_ids = [int(match) for match in re.findall(r"(?m)^\s*HIP_ID:\s*(\d+)\s*$", text)]
+    if hip_ids:
+        return hip_ids
+    return [int(match) for match in re.findall(r"(?m)^GPU:\s*(\d+)\s*$", text)]
+
+
+def _parse_nvidia_smi_gpu_ids(text: str) -> list[int]:
+    """GPU indexes from ``nvidia-smi --query-gpu=index``."""
+    ids: list[int] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ids.append(int(line))
+        except ValueError:
+            continue
+    return ids
+
+
 def _detect_gpus() -> list[int]:
     """Return physical GPU ids visible to this process.
 
@@ -68,16 +110,19 @@ def _detect_gpus() -> list[int]:
     process — workers are spawned via ``mp.Process`` (fork on Linux), and
     if the manager has already touched ``torch.cuda`` the children inherit
     that locked-in device list and ignore any post-fork
-    ``CUDA_VISIBLE_DEVICES`` override.  We use ``nvidia-smi`` subprocess
-    detection instead.
+    ``CUDA_VISIBLE_DEVICES`` override. Listing goes through subprocess
+    tools instead of ``torch.cuda``.
 
     Order of resolution:
       1. ``CUDA_VISIBLE_DEVICES`` env (respect user restriction).
       2. ``nvidia-smi --query-gpu=index --format=csv,noheader``.
-      3. Fallback to ``[0]`` (single GPU).
+      3. ``amd-smi list -e`` HIP ids, then ``amd-smi list``.
+         The binary is taken from PATH, beside Python, or ``/opt/rocm/bin``.
+      4. Fallback to ``[0]`` (single GPU).
     """
     import os
-    import subprocess
+
+    from triton_kernel_agent.platform.rocm import _find_amd_smi
 
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
     if cvd:
@@ -87,19 +132,22 @@ def _detect_gpus() -> list[int]:
                 return ids
         except ValueError:
             pass
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if out.returncode == 0:
-            ids = [int(x.strip()) for x in out.stdout.splitlines() if x.strip()]
+    nvidia = _query_smi(
+        ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"]
+    )
+    if nvidia:
+        ids = _parse_nvidia_smi_gpu_ids(nvidia)
+        if ids:
+            return ids
+    amd_smi = _find_amd_smi()
+    if amd_smi:
+        for args in (["list", "-e"], ["list"]):
+            listed = _query_smi([amd_smi, *args])
+            if not listed:
+                continue
+            ids = _parse_amd_smi_gpu_ids(listed)
             if ids:
                 return ids
-    except Exception:
-        pass
     return [0]
 
 

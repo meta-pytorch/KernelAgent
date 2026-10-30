@@ -16,9 +16,9 @@
 rocprof Profiling Module for Triton Kernels on AMD GPUs.
 
 This module wraps ``rocprofv3`` to collect hardware performance counters for
-Triton kernels on AMD GPUs. The same command line is used on ROCm 7 and
-ROCm 10: ``--kernel-trace --stats --output-format csv`` and ``--`` before
-the application. ROCm 7 rejects the later ``-f`` short option.
+Triton kernels on AMD GPUs (ROCm 10.1 or later). Profiling uses
+``--kernel-trace --stats --output-format csv`` and ``--`` before the
+application.
 
 Counter Categories
 ------------------
@@ -120,16 +120,11 @@ ROCM_METRIC_KEYS = [
 
 
 def _find_rocprof() -> str:
-    """Find ``rocprofv3``.
-
-    ROCm 7 installs it under ``/opt/rocm/bin``. A TheRock ROCm 10 venv
-    places it next to the Python executable, which is not always on PATH.
-    """
+    """Find ``rocprofv3`` on PATH, beside Python, or under ``/opt/rocm/bin``."""
     found = shutil.which("rocprofv3")
     if found:
         return found
-    # A venv python is often a symlink to the system interpreter. Look beside
-    # the symlink first so a TheRock copy of rocprofv3 is found.
+    # A venv python is often a symlink. Look beside the symlink first.
     for executable in (Path(sys.executable), Path(sys.executable).resolve()):
         sibling = executable.with_name("rocprofv3")
         if sibling.is_file():
@@ -138,7 +133,7 @@ def _find_rocprof() -> str:
     if bundled.is_file():
         return str(bundled)
     raise FileNotFoundError(
-        "rocprofv3 not found. Install a ROCm build that provides rocprofv3."
+        "rocprofv3 not found. Install ROCm 10.1 or later."
     )
 
 
@@ -244,8 +239,7 @@ def _run_rocprof_stats(
 ) -> None:
     """Collect kernel timing with rocprofv3.
 
-    ``--output-format csv`` writes ``{prefix}_kernel_stats.csv``. The long
-    flag is required: ROCm 7 rejects ``-f``, and ROCm 10 accepts both.
+    ``--output-format csv`` writes ``{prefix}_kernel_stats.csv``.
     """
     cmd = [
         rocprof_bin,

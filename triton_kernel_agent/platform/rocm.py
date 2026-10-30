@@ -32,7 +32,11 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import os
+import re
 import shutil
+import subprocess
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -76,20 +80,19 @@ def detect_amd_gpu_name() -> str | None:
             "AMD" in name or "Instinct" in name or "Radeon" in name or "gfx" in lowered
         ):
             return None
-        # A product name wins. Chip id is only for a bare gfx90a report.
-        if _named_sku(name) is None and "gfx90a" in lowered:
-            chip, cu_count = _pci_chip_id_and_cu_count()
-            sku = sku_name_for_gfx90a_chip(chip, cu_count)
-            if sku is not None:
-                return sku
+        # "MI250X / MI250" and a bare gfx90a or gfx942 name cover more than
+        # one product. amd-smi's device id picks the spec row.
+        if _gpu_name_needs_chip_id(name):
+            chip, cu_count = _amd_smi_chip_id_and_cu_count()
+            return _sku_for_torch_name(name, chip, cu_count)
         return name
     except Exception:
         return None
 
 
 # gfx942 is shared by MI300X and MI300A. gfx90a is shared by MI210, MI250,
-# and MI250X. A bare ISA name uses the discrete OAM entry unless a PCI
-# chip id says otherwise.
+# and MI250X. A bare ISA name uses the discrete OAM entry when amd-smi
+# does not report a device id.
 _GFX_TO_SPEC_NAME = {
     "gfx942": "AMD Instinct MI300X",
     "gfx950": "AMD Instinct MI350X",
@@ -110,12 +113,32 @@ _SKU_TOKENS = (
 
 
 def _named_sku(raw_name: str) -> str | None:
-    """Return a spec-database key when the string names a product."""
+    """Return a spec-database key when the string names a product.
+
+    The combined ``MI250X / MI250`` string matches MI250X here. Callers that
+    have a PCI chip id use :func:`_gpu_name_needs_chip_id` first.
+    """
     lowered = raw_name.lower()
     for token, canonical in _SKU_TOKENS:
         if token in lowered:
             return canonical
     return None
+
+
+def _names_both_mi250_products(raw_name: str) -> bool:
+    """True for the combined ``MI250X / MI250`` marketing name."""
+    lowered = raw_name.lower()
+    return "mi250x" in lowered and "mi250" in lowered.replace("mi250x", "")
+
+
+def _gpu_name_needs_chip_id(raw_name: str) -> bool:
+    """True when the torch string does not name a single spec row."""
+    if _names_both_mi250_products(raw_name):
+        return True
+    if _named_sku(raw_name) is not None:
+        return False
+    lowered = raw_name.lower()
+    return "gfx90a" in lowered or "gfx942" in lowered
 
 
 # Mesa drm data/amdgpu.ids. 0x740C is "MI250X / MI250"; CU count splits it.
@@ -126,12 +149,23 @@ _GFX90A_CHIP_ID = {
     0x7410: "AMD Instinct MI210",
 }
 
+# gfx942 device ids that have a spec row. 0x74A2 is MI308X or MI300X
+# depending on the revision byte, so it stays on the gfx942 default.
+_GFX942_CHIP_ID = {
+    0x74A0: "AMD Instinct MI300A",
+    0x74A1: "AMD Instinct MI300X",
+    0x74A9: "AMD Instinct MI300X",
+    0x74B5: "AMD Instinct MI300X",
+    0x74B6: "AMD Instinct MI300X",
+    0x74BD: "AMD Instinct MI300X",
+}
+
 
 def sku_name_for_gfx90a_chip(chip_id: int | None, cu_count: int | None) -> str | None:
     """Pick an MI200 product name from the PCI chip id.
 
-    ``torch.cuda``'s ``pci_device_id`` is the bus slot, not this id. Read
-    ``/sys/bus/pci/devices/<bdf>/device`` for the chip id.
+    ``amd-smi static --asic`` prints this id as ``DEVICE_ID``.
+    ``torch.cuda``'s ``pci_device_id`` is the bus slot, not this id.
     """
     if chip_id is None:
         return None
@@ -143,26 +177,145 @@ def sku_name_for_gfx90a_chip(chip_id: int | None, cu_count: int | None) -> str |
     return _GFX90A_CHIP_ID.get(chip_id)
 
 
-def _pci_chip_id_and_cu_count() -> tuple[int | None, int | None]:
-    """Chip id and CU count for torch device 0, or ``(None, None)``."""
+def sku_name_for_gfx942_chip(chip_id: int | None) -> str | None:
+    """Pick an MI300 product name from the PCI chip id."""
+    if chip_id is None:
+        return None
+    return _GFX942_CHIP_ID.get(int(chip_id))
+
+
+def sku_name_for_chip(chip_id: int | None, cu_count: int | None) -> str | None:
+    """Pick a spec-database key from a PCI chip id."""
+    sku = sku_name_for_gfx90a_chip(chip_id, cu_count)
+    if sku is not None:
+        return sku
+    return sku_name_for_gfx942_chip(chip_id)
+
+
+def _sku_for_torch_name(
+    raw_name: str,
+    chip_id: int | None,
+    cu_count: int | None,
+) -> str:
+    """Resolve a torch device name, using the chip id when the name is shared."""
+    if _gpu_name_needs_chip_id(raw_name):
+        sku = sku_name_for_chip(chip_id, cu_count)
+        if sku is not None:
+            return sku
+    return raw_name
+
+
+def _parse_amd_smi_hip_index(text: str) -> dict[int, int]:
+    """Map ``HIP_ID`` to the ``amd-smi`` GPU index."""
+    index = None
+    mapping: dict[int, int] = {}
+    for line in text.splitlines():
+        gpu = re.match(r"^GPU:\s*(\d+)\s*$", line)
+        if gpu:
+            index = int(gpu.group(1))
+            continue
+        hip = re.match(r"^\s*HIP_ID:\s*(\d+)\s*$", line)
+        if hip is not None and index is not None:
+            mapping[int(hip.group(1))] = index
+    return mapping
+
+
+def _parse_amd_smi_asic(text: str) -> dict[int, tuple[int, int | None]]:
+    """Map an ``amd-smi`` GPU index to ``(device_id, cu_count)``."""
+    index = None
+    device_id = None
+    cu_count = None
+    parsed: dict[int, tuple[int, int | None]] = {}
+
+    def store() -> None:
+        if index is not None and device_id is not None:
+            parsed[index] = (device_id, cu_count)
+
+    for line in text.splitlines():
+        gpu = re.match(r"^GPU:\s*(\d+)\s*$", line)
+        if gpu:
+            store()
+            index = int(gpu.group(1))
+            device_id = None
+            cu_count = None
+            continue
+        device = re.search(r"DEVICE_ID:\s*(0x[0-9a-fA-F]+)", line)
+        if device:
+            device_id = int(device.group(1), 16)
+            continue
+        units = re.search(r"NUM_COMPUTE_UNITS:\s*(\d+)", line)
+        if units:
+            cu_count = int(units.group(1))
+    store()
+    return parsed
+
+
+def _amd_smi_gpu_record(
+    list_text: str,
+    asic_text: str,
+    hip_id: int,
+) -> tuple[int, int | None] | None:
+    """ASIC record for the GPU torch exposes as ``hip_id``."""
+    asics = _parse_amd_smi_asic(asic_text)
+    hip_index = _parse_amd_smi_hip_index(list_text)
+    index = hip_index.get(hip_id, hip_id)
+    return asics.get(index)
+
+
+def _find_amd_smi() -> str | None:
+    """Find ``amd-smi`` on PATH, beside Python, or under ``/opt/rocm/bin``."""
+    found = shutil.which("amd-smi")
+    if found:
+        return found
+    # A venv python is often a symlink. Look beside the symlink first.
+    for executable in (Path(sys.executable), Path(sys.executable).resolve()):
+        sibling = executable.with_name("amd-smi")
+        if sibling.is_file():
+            return str(sibling)
+    bundled = Path("/opt/rocm/bin/amd-smi")
+    if bundled.is_file():
+        return str(bundled)
+    return None
+
+
+def _run_amd_smi(args: list[str]) -> str | None:
+    binary = _find_amd_smi()
+    if not binary:
+        return None
     try:
-        import torch
-    except ImportError:
+        out = subprocess.run(
+            [binary, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0 or not out.stdout:
+        return None
+    return out.stdout
+
+
+def _visible_hip_id() -> int:
+    """HIP id of torch device 0. ``CUDA_VISIBLE_DEVICES`` selects it."""
+    for part in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            return int(part)
+    return 0
+
+
+def _amd_smi_chip_id_and_cu_count() -> tuple[int | None, int | None]:
+    """Device id and CU count from ``amd-smi``, or ``(None, None)``."""
+    listed = _run_amd_smi(["list", "-e"]) or ""
+    asic = _run_amd_smi(["static", "--asic"])
+    if not asic:
         return None, None
-    if not torch.cuda.is_available():
+    record = _amd_smi_gpu_record(listed, asic, _visible_hip_id())
+    if record is None:
         return None, None
-    props = torch.cuda.get_device_properties(0)
-    try:
-        domain = int(getattr(props, "pci_domain_id", 0))
-        bus = int(props.pci_bus_id)
-        dev = int(props.pci_device_id)
-        bdf = f"{domain:04x}:{bus:02x}:{dev:02x}.0"
-        chip_text = Path(f"/sys/bus/pci/devices/{bdf}/device").read_text().strip()
-        chip = int(chip_text, 16)
-        cu_count = int(props.multi_processor_count)
-    except (AttributeError, OSError, TypeError, ValueError):
-        return None, None
-    return chip, cu_count
+    return record
 
 
 def _normalize_amd_gpu_name(raw_name: str) -> str:
