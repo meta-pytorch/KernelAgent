@@ -49,7 +49,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ```
 
 **Note:** AMD ROCm support requires:
-- ROCm 6.x installed and `rocprofv3` (or `rocprof`) on `$PATH`
+- ROCm installed and `rocprofv3` on `$PATH`
 - Compatible AMD GPU (e.g., Instinct MI300X)
 
 For optimization, use the bundled config as a quickstart:
@@ -255,7 +255,7 @@ KernelAgent supports multiple GPU platforms for Triton kernel execution:
 ### AMD ROCm Notes
 
 When targeting AMD ROCm, KernelAgent automatically:
-- Uses `rocprofv3` (or `rocprof` as fallback) for hardware profiling
+- Uses `rocprofv3` for hardware profiling
 - Applies ROCm-specific Triton block/wave occupancy hints
 - Generates appropriate device availability checks
 

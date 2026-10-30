@@ -122,11 +122,7 @@ class ROCmKernelProfiler:
 
         if self.rocprof_bin_path:
             return self.rocprof_bin_path
-        for candidate in ("rocprofv3", "rocprof"):
-            found = shutil.which(candidate)
-            if found:
-                return found
-        return None
+        return shutil.which("rocprofv3")
 
     def _wait_with_backoff(self, attempt: int) -> None:
         wait_time = 2**attempt

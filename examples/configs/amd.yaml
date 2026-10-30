@@ -20,7 +20,7 @@ divergence_threshold: 50.0
 target_platform: rocm
 gpu_name: "AMD Instinct MI300X"
 
-# Optional profiler binary. Omit to auto-detect rocprofv3, then rocprof.
+# Optional profiler binary. Omit to auto-detect rocprofv3.
 # platform_kwargs:
 #   rocprof_bin_path: /opt/rocm/bin/rocprofv3
 

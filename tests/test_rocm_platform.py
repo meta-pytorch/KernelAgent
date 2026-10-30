@@ -15,6 +15,8 @@
 """ROCm platform wiring that must hold without an AMD GPU."""
 
 import inspect
+import json
+import shutil
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -27,7 +29,10 @@ from kernel_perf_agent.kernel_opt.diagnose_prompt.judger_prompt import (
 )
 from kernel_perf_agent.kernel_opt.profiler.rocprof_profiler import (
     _merge_rocprof_outputs,
+    _run_rocprof_pmc,
+    _run_rocprof_stats,
     _run_rocprofv3_pmc_passes,
+    profile_triton_kernel_rocm,
 )
 from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import ROCmRooflineAnalyzer
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
@@ -316,7 +321,7 @@ def test_rocprofv3_pass_without_csv_is_not_collected(tmp_path):
         tmp_path / "rocprofv3",
         "import sys\n"
         "out = sys.argv[sys.argv.index('-o') + 1]\n"
-        "if out.endswith('_pass0'):\n"
+        "if out.endswith('_pass0_0'):\n"
         "    open(out + '_counter_collection.csv', 'w').write(\n"
         "        'Counter_Name,Counter_Value\\nSQ_INSTS_VALU,900\\n'\n"
         "    )\n",
@@ -335,6 +340,56 @@ def test_rocprofv3_pass_without_csv_is_not_collected(tmp_path):
     assert not Path(str(out_csv) + "_counter_collection.csv").exists()
 
 
+def test_v3_output_format_flag_is_accepted_by_rocm7(tmp_path):
+    bin_path = _fake_rocprof(
+        tmp_path / "rocprofv3",
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "if '-f' in args or '--output-format' not in args:\n"
+        "    raise SystemExit(2)\n"
+        "out = Path(args[args.index('-o') + 1])\n"
+        "if '--stats' in args:\n"
+        "    out.with_name(out.name + '_kernel_stats.csv').write_text(\n"
+        "        'Name,Calls,TotalDurationNs,AverageNs,Percentage\\n'\n"
+        "        'gemm,1,100000,100000,100\\n'\n"
+        "    )\n"
+        "elif '-i' in args:\n"
+        "    text = Path(args[args.index('-i') + 1]).read_text()\n"
+        "    if 'TCC_EA0_' in text:\n"
+        "        raise SystemExit(0)\n"
+        "    name, value = 'SQ_WAVES', '4'\n"
+        "    if 'TCC_EA_RDREQ_sum' in text:\n"
+        "        name, value = 'TCC_EA_RDREQ_sum', '11'\n"
+        "    elif 'TCC_EA_WRREQ_sum' in text:\n"
+        "        name, value = 'TCC_EA_WRREQ_sum', '7'\n"
+        "    out.with_name(out.name + '_counter_collection.csv').write_text(\n"
+        "        f'Counter_Name,Counter_Value\\n{name},{value}\\n'\n"
+        "    )\n"
+        "else:\n"
+        "    raise SystemExit(2)\n",
+    )
+    stats = tmp_path / "rocprof_v3_stats.csv"
+    pmc = tmp_path / "rocprof_v3_pmc.csv"
+    shared = {
+        "rocprof_bin": bin_path,
+        "benchmark_script": tmp_path / "bench.py",
+        "workdir": tmp_path,
+        "python_executable": sys.executable,
+        "env": {},
+        "timeout": 30,
+    }
+    _run_rocprof_stats(out_csv=stats, **shared)
+    _run_rocprof_pmc(out_csv=pmc, **shared)
+    metrics = _merge_rocprof_outputs(stats, pmc)
+    assert metrics["duration_ms"] == pytest.approx(0.1)
+    # Four passes report SQ_WAVES. The gfx942 EA names write nothing, so the
+    # gfx90a names are collected instead.
+    assert metrics["sq_waves"] == 16.0
+    assert metrics["tcc_ea_rdreq"] == 11.0
+    assert metrics["tcc_ea_wrreq"] == 7.0
+
+
 def test_roofline_wrappers_expose_early_stop():
     wrapper = ROCmRooflineAnalyzerWrapper()
     result = wrapper.analyze(ncu_metrics=_FLAT_ROCM_METRICS)
@@ -348,6 +403,54 @@ def test_roofline_wrappers_expose_early_stop():
     assert not (stop and wrapper.config.early_stop)
 
     assert NvidiaRooflineAnalyzer().config.early_stop is True
+
+
+def _installed_rocprofv3() -> str | None:
+    """Return rocprofv3, or None when this ROCm build does not ship it.
+
+    A TheRock venv copies the binary next to the Python executable, and
+    that directory is not always on PATH.
+    """
+    found = shutil.which("rocprofv3")
+    if found:
+        return found
+    for executable in (Path(sys.executable), Path(sys.executable).resolve()):
+        sibling = executable.with_name("rocprofv3")
+        if sibling.is_file():
+            return str(sibling)
+    bundled = Path("/opt/rocm/bin/rocprofv3")
+    if bundled.is_file():
+        return str(bundled)
+    return None
+
+
+def test_matmul_profile_when_rocprofv3_is_installed(tmp_path):
+    binary = _installed_rocprofv3()
+    if binary is None:
+        pytest.skip("rocprofv3 is not installed")
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("rocprofv3 is installed but no GPU is visible")
+
+    script = tmp_path / "bench.py"
+    script.write_text(
+        "import torch\n"
+        "a = torch.randn(1024, 1024, device='cuda', dtype=torch.float16)\n"
+        "b = torch.randn(1024, 1024, device='cuda', dtype=torch.float16)\n"
+        "c = a @ b\n"
+        "torch.cuda.synchronize()\n"
+        "print(float(c[0, 0]))\n"
+    )
+    metrics_path = profile_triton_kernel_rocm(
+        benchmark_script=script,
+        workdir=tmp_path / "rocprofv3",
+        out_prefix="rocprofv3",
+        rocprof_bin=binary,
+        timeout=180,
+    )
+    metrics = json.loads(metrics_path.read_text())
+    assert metrics["duration_ms"] > 0
 
 
 def test_worker_runner_matches_multi_gpu_contract():
