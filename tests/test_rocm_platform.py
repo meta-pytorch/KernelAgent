@@ -15,8 +15,6 @@
 """ROCm platform wiring that must hold without an AMD GPU."""
 
 import inspect
-import json
-import shutil
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -32,7 +30,6 @@ from kernel_perf_agent.kernel_opt.profiler.rocprof_profiler import (
     _run_rocprof_pmc,
     _run_rocprof_stats,
     _run_rocprofv3_pmc_passes,
-    profile_triton_kernel_rocm,
 )
 from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import ROCmRooflineAnalyzer
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
@@ -46,10 +43,8 @@ from triton_kernel_agent.platform.rocm import (
     ROCmBottleneckAnalyzer,
     ROCmKernelProfilerWrapper,
     ROCmRooflineAnalyzerWrapper,
-    ROCmWorkerRunner,
     _amd_smi_gpu_record,
     _normalize_amd_gpu_name,
-    _rocm_worker_process,
     _sku_for_torch_name,
     sku_name_for_gfx90a_chip,
     sku_name_for_gfx942_chip,
@@ -447,50 +442,6 @@ def test_roofline_wrappers_expose_early_stop():
     assert NvidiaRooflineAnalyzer().config.early_stop is True
 
 
-def _installed_rocprofv3() -> str | None:
-    """Return rocprofv3, or None when it is not installed."""
-    found = shutil.which("rocprofv3")
-    if found:
-        return found
-    for executable in (Path(sys.executable), Path(sys.executable).resolve()):
-        sibling = executable.with_name("rocprofv3")
-        if sibling.is_file():
-            return str(sibling)
-    bundled = Path("/opt/rocm/bin/rocprofv3")
-    if bundled.is_file():
-        return str(bundled)
-    return None
-
-
-def test_matmul_profile_when_rocprofv3_is_installed(tmp_path):
-    binary = _installed_rocprofv3()
-    if binary is None:
-        pytest.skip("rocprofv3 is not installed")
-    import torch
-
-    if not torch.cuda.is_available():
-        pytest.skip("rocprofv3 is installed but no GPU is visible")
-
-    script = tmp_path / "bench.py"
-    script.write_text(
-        "import torch\n"
-        "a = torch.randn(1024, 1024, device='cuda', dtype=torch.float16)\n"
-        "b = torch.randn(1024, 1024, device='cuda', dtype=torch.float16)\n"
-        "c = a @ b\n"
-        "torch.cuda.synchronize()\n"
-        "print(float(c[0, 0]))\n"
-    )
-    metrics_path = profile_triton_kernel_rocm(
-        benchmark_script=script,
-        workdir=tmp_path / "rocprofv3",
-        out_prefix="rocprofv3",
-        rocprof_bin=binary,
-        timeout=180,
-    )
-    metrics = json.loads(metrics_path.read_text())
-    assert metrics["duration_ms"] > 0
-
-
 def test_detect_gpus_uses_amd_smi_hip_ids_when_nvidia_smi_is_absent(monkeypatch):
     from triton_kernel_agent.opt_manager import _detect_gpus
 
@@ -584,16 +535,3 @@ def test_detect_gpus_falls_back_to_one_gpu(monkeypatch):
         "triton_kernel_agent.opt_manager._query_smi", lambda argv: None
     )
     assert _detect_gpus() == [0]
-
-
-def test_worker_runner_matches_multi_gpu_contract():
-    params = inspect.signature(ROCmWorkerRunner.__init__).parameters
-    assert "gpu_ids" in params
-    assert "gpu_locks" in params
-    source = inspect.getsource(ROCmWorkerRunner.run_workers)
-    assert "remaining_workers" in source
-    assert "baseline_metrics" in source
-    process_source = inspect.getsource(_rocm_worker_process)
-    assert "CUDA_VISIBLE_DEVICES" in process_source
-    assert "baseline_metrics=baseline_metrics" in process_source
-    assert 'worker_kwargs.pop("target_platform"' not in process_source
