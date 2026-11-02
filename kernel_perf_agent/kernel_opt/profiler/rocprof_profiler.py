@@ -74,8 +74,8 @@ _PMC_PASS4 = [
 
 # rocprofv3 reruns the app once per pmc group and overwrites the CSV, so
 # each group is collected on its own. A tuple is a list of alternative
-# names: gfx942 exposes TCC_EA0_* and drops the pass when that name is
-# absent, while gfx90a exposes TCC_EA_RDREQ_sum / TCC_EA_WRREQ_sum.
+# names: gfx942 exposes TCC_EA0_*, gfx90a exposes TCC_EA_RDREQ_sum /
+# TCC_EA_WRREQ_sum. A non-zero exit or an empty CSV tries the next name.
 _PMC_V3_PASSES: list[list[str] | tuple[list[str], ...]] = [
     _PMC_PASS1,
     ["TCC_HIT_sum", "TCC_MISS_sum"],
@@ -338,13 +338,15 @@ def _run_rocprofv3_pmc_passes(
                 timeout=timeout,
                 check=False,
             )
+            another_choice = choice_index + 1 < len(choices)
             if result.returncode != 0:
+                if another_choice:
+                    continue
                 raise RuntimeError(
                     f"rocprof PMC pass {index + 1} failed (rc={result.returncode}):\n"
                     f"{(result.stderr or result.stdout)[:500]}"
                 )
             csv_path = Path(str(pass_out) + "_counter_collection.csv")
-            another_choice = choice_index + 1 < len(choices)
             if not csv_path.exists():
                 if another_choice:
                     continue
@@ -550,65 +552,68 @@ def _merge_rocprof_outputs(
 
     stats = _parse_stats_csv(stats_csv)
     pmc = _parse_pmc_csv(pmc_csv)
+    if "duration_ms" not in stats:
+        raise RuntimeError(f"rocprof stats CSV has no AverageNs: {stats_path}")
+    if not pmc:
+        raise RuntimeError(f"rocprof PMC CSV has no counter rows: {pmc_path}")
 
     # Raw counters (lower-cased for consistency)
     raw: dict[str, Any] = {}
     for k, v in pmc.items():
         raw[k.lower()] = v
 
-    # Normalize to our metric keys
-    metrics: dict[str, Any] = {
-        "sq_waves": raw.get("sq_waves", 0.0),
-        "sq_insts_valu": raw.get("sq_insts_valu", 0.0),
-        "sq_insts_salu": raw.get("sq_insts_salu", 0.0),
-        "sq_insts_vmem_rd": raw.get("sq_insts_vmem_rd", 0.0),
-        "sq_insts_vmem_wr": raw.get("sq_insts_vmem_wr", 0.0),
-        "sq_insts_lds": raw.get("sq_insts_lds", 0.0),
-        "sq_wait_inst_any": raw.get("sq_wait_inst_any", 0.0),
-        "tcc_hit": raw.get("tcc_hit_sum", 0.0),
-        "tcc_miss": raw.get("tcc_miss_sum", 0.0),
-        "tcc_ea_rdreq": raw.get("tcc_ea_rdreq_sum", raw.get("tcc_ea0_rdreq_sum", 0.0)),
-        "tcc_ea_wrreq": raw.get("tcc_ea_wrreq_sum", raw.get("tcc_ea0_wrreq_sum", 0.0)),
-        "fetch_size_kb": raw.get("fetch_size", 0.0),
-        "write_size_kb": raw.get("write_size", 0.0),
-        # Timing from stats pass
-        "duration_ms": stats.get("duration_ms", 0.0),
-    }
+    # Copy only counters the CSV actually contained. A missing column is an
+    # uncollected counter, not a measured zero.
+    fields = (
+        ("sq_waves", ("sq_waves",)),
+        ("sq_insts_valu", ("sq_insts_valu",)),
+        ("sq_insts_salu", ("sq_insts_salu",)),
+        ("sq_insts_vmem_rd", ("sq_insts_vmem_rd",)),
+        ("sq_insts_vmem_wr", ("sq_insts_vmem_wr",)),
+        ("sq_insts_lds", ("sq_insts_lds",)),
+        ("sq_wait_inst_any", ("sq_wait_inst_any",)),
+        ("tcc_hit", ("tcc_hit_sum",)),
+        ("tcc_miss", ("tcc_miss_sum",)),
+        ("tcc_ea_rdreq", ("tcc_ea_rdreq_sum", "tcc_ea0_rdreq_sum")),
+        ("tcc_ea_wrreq", ("tcc_ea_wrreq_sum", "tcc_ea0_wrreq_sum")),
+        ("fetch_size_kb", ("fetch_size",)),
+        ("write_size_kb", ("write_size",)),
+    )
+    metrics: dict[str, Any] = {"duration_ms": stats["duration_ms"]}
+    for key, names in fields:
+        value = next((raw[name] for name in names if name in raw), None)
+        if value is not None:
+            metrics[key] = value
 
     # Derived: L2 cache hit rate
-    tcc_total = metrics["tcc_hit"] + metrics["tcc_miss"]
-    metrics["tcc_cache_hit_rate_pct"] = (
-        100.0 * metrics["tcc_hit"] / tcc_total if tcc_total > 0 else 0.0
-    )
+    if "tcc_hit" in metrics and "tcc_miss" in metrics:
+        tcc_total = metrics["tcc_hit"] + metrics["tcc_miss"]
+        metrics["tcc_cache_hit_rate_pct"] = (
+            100.0 * metrics["tcc_hit"] / tcc_total if tcc_total > 0 else 0.0
+        )
 
     # Derived: VALU share of counted shader instructions, not cycles and
-    # not percent of peak FLOPs.
-    total_insts = (
-        metrics["sq_insts_valu"]
-        + metrics["sq_insts_salu"]
-        + metrics["sq_insts_vmem_rd"]
-        + metrics["sq_insts_vmem_wr"]
-        + metrics["sq_insts_lds"]
+    # not percent of peak FLOPs. Counters the CSV omitted stay out of the sum.
+    inst_keys = (
+        "sq_insts_valu",
+        "sq_insts_salu",
+        "sq_insts_vmem_rd",
+        "sq_insts_vmem_wr",
+        "sq_insts_lds",
     )
-    metrics["valu_utilization_pct"] = (
-        100.0 * metrics["sq_insts_valu"] / total_insts if total_insts > 0 else 0.0
-    )
-
-    # Derived: memory-bound heuristic — fraction of instructions that are memory ops
-    vmem_insts = metrics["sq_insts_vmem_rd"] + metrics["sq_insts_vmem_wr"]
-    metrics["memory_bound_pct"] = (
-        100.0 * vmem_insts / total_insts if total_insts > 0 else 0.0
-    )
-
-    # Derive roofline-compatible SOL estimates from counter ratios.
-    # These are heuristic approximations since rocprof does not provide
-    # "Speed of Light" metrics directly (unlike NCU).
-    #
-    # Compute SOL: VALU instruction share, used as a proxy for compute mix.
-    # Memory SOL: VMEM instruction share. L2-miss amplification is applied
-    # later by ROCmRooflineAnalyzer. Neither value is percent of peak.
-    metrics["compute_sol_pct"] = min(metrics["valu_utilization_pct"], 100.0)
-    metrics["memory_sol_pct"] = min(metrics["memory_bound_pct"], 100.0)
+    present_insts = [metrics[key] for key in inst_keys if key in metrics]
+    total_insts = sum(present_insts)
+    if total_insts > 0 and "sq_insts_valu" in metrics:
+        metrics["valu_utilization_pct"] = 100.0 * metrics["sq_insts_valu"] / total_insts
+        metrics["compute_sol_pct"] = min(metrics["valu_utilization_pct"], 100.0)
+    if total_insts > 0 and (
+        "sq_insts_vmem_rd" in metrics or "sq_insts_vmem_wr" in metrics
+    ):
+        vmem_insts = metrics.get("sq_insts_vmem_rd", 0.0) + metrics.get(
+            "sq_insts_vmem_wr", 0.0
+        )
+        metrics["memory_bound_pct"] = 100.0 * vmem_insts / total_insts
+        metrics["memory_sol_pct"] = min(metrics["memory_bound_pct"], 100.0)
 
     # Include raw counter dump for debugging / LLM consumption
     metrics["_raw_counters"] = {k: v for k, v in raw.items()}

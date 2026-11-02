@@ -417,6 +417,18 @@ def test_collected_rocprof_csvs_keep_measured_counters(tmp_path):
     assert metrics["sq_insts_valu"] == 900.0
     assert metrics["tcc_hit"] == 80.0
     assert metrics["tcc_miss"] == 20.0
+    assert "sq_waves" not in metrics
+    assert "tcc_ea_rdreq" not in metrics
+    assert "fetch_size_kb" not in metrics
+
+
+def test_stats_csv_without_averagens_is_not_a_profile(tmp_path):
+    stats = tmp_path / "stats.csv"
+    pmc = tmp_path / "pmc.csv"
+    stats.write_text("Name,Calls,Duration(ns)\nkernel,1,2000000\n")
+    pmc.write_text("Counter_Name,Counter_Value\nSQ_INSTS_VALU,900\nSQ_INSTS_SALU,100\n")
+    with pytest.raises(RuntimeError, match="no AverageNs"):
+        _merge_rocprof_outputs(stats, pmc)
 
 
 def _fake_rocprof(path, source: str) -> str:
@@ -495,6 +507,50 @@ def test_rocprofv3_uses_long_output_format(tmp_path):
     # Four passes report SQ_WAVES. The gfx942 EA names write nothing, so the
     # gfx90a names are collected instead.
     assert metrics["sq_waves"] == 16.0
+    assert metrics["tcc_ea_rdreq"] == 11.0
+    assert metrics["tcc_ea_wrreq"] == 7.0
+
+
+def test_rocprofv3_retries_ea_counter_after_nonzero_exit(tmp_path):
+    bin_path = _fake_rocprof(
+        tmp_path / "rocprofv3",
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out = Path(args[args.index('-o') + 1])\n"
+        "text = Path(args[args.index('-i') + 1]).read_text()\n"
+        "if 'TCC_EA0_' in text:\n"
+        "    raise SystemExit(1)\n"
+        "name, value = 'SQ_WAVES', '1'\n"
+        "if 'TCC_EA_RDREQ_sum' in text:\n"
+        "    name, value = 'TCC_EA_RDREQ_sum', '11'\n"
+        "elif 'TCC_EA_WRREQ_sum' in text:\n"
+        "    name, value = 'TCC_EA_WRREQ_sum', '7'\n"
+        "out.with_name(out.name + '_counter_collection.csv').write_text(\n"
+        "    f'Counter_Name,Counter_Value\\n{name},{value}\\n'\n"
+        ")\n",
+    )
+    pmc = tmp_path / "pmc.csv"
+    _run_rocprofv3_pmc_passes(
+        rocprof_bin=bin_path,
+        benchmark_script=tmp_path / "bench.py",
+        workdir=tmp_path,
+        out_csv=pmc,
+        python_executable=sys.executable,
+        env={},
+        timeout=30,
+    )
+    assert (tmp_path / "rocprof_input_pass2_1.txt").read_text() == (
+        "pmc: TCC_EA_RDREQ_sum\n"
+    )
+    assert (tmp_path / "rocprof_input_pass3_1.txt").read_text() == (
+        "pmc: TCC_EA_WRREQ_sum\n"
+    )
+    stats = tmp_path / "stats.csv"
+    stats.write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\nkernel,1,100000,100000,100\n"
+    )
+    metrics = _merge_rocprof_outputs(stats, pmc)
     assert metrics["tcc_ea_rdreq"] == 11.0
     assert metrics["tcc_ea_wrreq"] == 7.0
 
