@@ -231,7 +231,7 @@ def test_gfx942_chip_id_separates_mi300a_and_mi300x():
     )
 
 
-def test_prompt_uses_cu_labels_and_marks_estimated_specs():
+def test_prompt_uses_cu_labels():
     mi300a = get_gpu_specs("AMD Instinct MI300A")
     assert mi300a is not None
     text = _format_gpu_specs(mi300a)
@@ -241,7 +241,8 @@ def test_prompt_uses_cu_labels_and_marks_estimated_specs():
 
     mi350 = get_gpu_specs("AMD Instinct MI350X")
     assert mi350 is not None
-    assert "Specs confidence: estimated" in _format_gpu_specs(mi350)
+    assert mi350["cu_count"] == 256
+    assert "Specs confidence" not in _format_gpu_specs(mi350)
 
 
 def test_bottleneck_analyzer_accepts_num_bottlenecks():

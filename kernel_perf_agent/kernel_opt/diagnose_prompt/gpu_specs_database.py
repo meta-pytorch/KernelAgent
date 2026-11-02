@@ -202,7 +202,7 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "max_threads_per_sm": 2048,  # Alias for compatibility
         "wavefront_size": 64,
         "l1_cache_kb": 32,  # L1 per CU (vector L1D)
-        "l2_cache_mb": 256,  # Total Infinity Cache (across all dies)
+        "l2_cache_mb": 32,  # 4 MB per XCD
         "memory_gb": 192,
         "memory_type": "HBM3",
         "form_factor": "OAM",
@@ -216,41 +216,40 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "peak_fp32_tflops": 122.6,
         "peak_fp16_tflops": 980.6,
         "peak_bf16_tflops": 980.6,
-        "peak_memory_bw_gbps": 3200,  # Unified HBM3 (shared with CPU)
+        "peak_memory_bw_gbps": 5300,  # 5.3 TB/s HBM3, same peak as MI300X
         "cu_count": 228,
         "sm_count": 228,
         "max_threads_per_cu": 2048,
         "max_threads_per_sm": 2048,
         "wavefront_size": 64,
         "l1_cache_kb": 32,
-        "l2_cache_mb": 192,
+        "l2_cache_mb": 24,  # 4 MB per XCD
         "memory_gb": 128,
         "memory_type": "HBM3 unified",
-        "form_factor": "OAM",
+        "form_factor": "APU",
         "tdp_w": 550,
     },
     # AMD Instinct MI350X (CDNA4 / gfx950)
-    # Sources: AMD press release (Nov 2024), estimated specs
+    # CDNA 4 whitepaper: 256 CUs, FP32 144.2, FP16/BF16 matrix 2.3 PF.
     "AMD Instinct MI350X": {
         "name": "AMD Instinct MI350X",
         "architecture": "CDNA4",
         "gfx_target": "gfx950",
-        "peak_fp32_tflops": 288.0,
-        "peak_fp16_tflops": 2304.0,  # BF16 matrix estimate
-        "peak_bf16_tflops": 2304.0,
-        "peak_memory_bw_gbps": 8000,  # ~8 TB/s HBM3E
-        "cu_count": 304,
-        "sm_count": 304,
+        "peak_fp32_tflops": 144.2,
+        "peak_fp16_tflops": 2300.0,  # 2.3 PF matrix
+        "peak_bf16_tflops": 2300.0,
+        "peak_memory_bw_gbps": 8000,  # 8 TB/s HBM3E
+        "cu_count": 256,
+        "sm_count": 256,
         "max_threads_per_cu": 2048,
         "max_threads_per_sm": 2048,
         "wavefront_size": 64,
         "l1_cache_kb": 32,
-        "l2_cache_mb": 256,
+        "l2_cache_mb": 32,  # 4 MB per XCD
         "memory_gb": 288,
         "memory_type": "HBM3E",
         "form_factor": "OAM",
         "tdp_w": 1000,
-        "specs_confidence": "estimated",
     },
     # AMD Instinct MI250X (CDNA2 / gfx90a)
     "AMD Instinct MI250X": {
@@ -267,7 +266,7 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "max_threads_per_sm": 2048,
         "wavefront_size": 64,
         "l1_cache_kb": 16,
-        "l2_cache_mb": 32,
+        "l2_cache_mb": 16,  # 8 MB per GCD
         "memory_gb": 128,
         "memory_type": "HBM2e",
         "form_factor": "OAM",
@@ -326,7 +325,7 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "name": "AMD Instinct MI100",
         "architecture": "CDNA",
         "gfx_target": "gfx908",
-        "peak_fp32_tflops": 23.1,
+        "peak_fp32_tflops": 46.1,  # matrix headline; vector FP32 is 23.1
         "peak_fp16_tflops": 184.6,
         "peak_bf16_tflops": 92.3,
         "peak_memory_bw_gbps": 1229,  # 1.2288 TB/s HBM2
