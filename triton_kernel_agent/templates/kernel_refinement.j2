@@ -77,4 +77,8 @@ CRITICAL REQUIREMENTS - NO CHEATING ALLOWED:
 - Implement the algorithm step-by-step in Triton operations, not PyTorch shortcuts
 - The kernel should be decorated with @triton.jit, not the wrapper function
 
+{% if kernel_guidance %}
+{{ kernel_guidance }}
+{% endif %}
+
 Generate the complete fixed kernel implementation with actual Triton code:

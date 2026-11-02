@@ -90,23 +90,25 @@ _ROCM_GUIDANCE = """\
 _ROCM_KERNEL_GUIDANCE = """\
 ## AMD ROCm-Specific Optimizations
 
+Where this section conflicts with the Triton programming guidelines, follow this section. Do not use tensor descriptors or TMA, and do not pass warp_specialize.
+
 You are generating a Triton kernel for AMD GPUs (ROCm/HIP). Follow these guidelines:
 
 1. **Device Context**: Use 'cuda' as the device string (ROCm provides HIP-CUDA compatibility)
-2. **Wavefront Size**: AMD GPUs use wavefront size 64 (vs NVIDIA warp size 32)
+2. **Wavefront Size**: AMD GPUs use wavefront size 64
    - Prefer BLOCK_SIZE multiples of 64 (64, 128, 256, 512)
    - num_warps maps to num_wavefronts on AMD
 3. **Memory Hierarchy**: AMD CDNA GPUs have HBM memory with very high bandwidth
-   - MI300X: 5.3 TB/s, MI350X: ~8 TB/s
    - Optimize for memory coalescing and avoid strided access patterns
 4. **Compute Units**: AMD uses Compute Units (CUs), each with 64-lane SIMD
-   - MI300X has 304 CUs, MI350X has 304 CUs
-5. **Data Types**: AMD CDNA supports fp32, fp16, bf16, fp8 (gfx942+)
-   - BF16 matrix units available on MI300X (CDNA3) and later
+5. **Data Types**: AMD CDNA supports fp32, fp16, and bf16. fp8 is available on gfx942 and later
+   - BF16 matrix units are available on CDNA
 6. **Thread Configuration**:
    - BLOCK_SIZE: prefer 64, 128, 256, or 512
    - num_warps: typically 4, 8 for AMD (maps to wavefronts)
-7. **Avoid NVIDIA-specific patterns**: Do not use warp-level primitives that assume warp_size=32"""
+7. **Avoid NVIDIA-specific patterns**: Do not use warp-level primitives that assume warp_size=32
+   - Do not use tensor descriptors or TMA
+   - Do not pass warp_specialize"""
 
 # Platform registry
 PLATFORMS: dict[str, PlatformConfig] = {

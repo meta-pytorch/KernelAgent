@@ -24,9 +24,15 @@ TASK: Optimize the following Triton kernel based on hardware profiling analysis 
 - Peak FP32: {{ gpu_specs.peak_fp32_tflops }} TFLOPS
 - Peak FP16: {{ gpu_specs.peak_fp16_tflops }} TFLOPS
 - Peak BF16: {{ gpu_specs.peak_bf16_tflops }} TFLOPS
+{% if gpu_specs.architecture.startswith('CDNA') or ('cu_count' in gpu_specs) %}
+- CU Count: {{ gpu_specs.sm_count }}
+- Max Threads per CU: {{ gpu_specs.max_threads_per_sm }}
+- L1 Cache per CU: {{ gpu_specs.l1_cache_kb }} KB
+{% else %}
 - SM Count: {{ gpu_specs.sm_count }}
 - Max Threads per SM: {{ gpu_specs.max_threads_per_sm }}
 - L1 Cache per SM: {{ gpu_specs.l1_cache_kb }} KB
+{% endif %}
 - L2 Cache: {{ gpu_specs.l2_cache_mb }} MB
 - Memory: {{ gpu_specs.memory_gb }} GB {{ gpu_specs.memory_type }}
 {% endif %}

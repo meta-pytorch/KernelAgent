@@ -50,6 +50,7 @@ from triton_kernel_agent.platform.rocm import (
     sku_name_for_gfx942_chip,
 )
 from triton_kernel_agent.platform_config import get_platform, resolve_test_timeout_s
+from triton_kernel_agent.prompt_manager import PromptManager
 
 _ROCM_COMPONENTS = (
     "verifier",
@@ -243,6 +244,76 @@ def test_prompt_uses_cu_labels():
     assert mi350 is not None
     assert mi350["cu_count"] == 256
     assert "Specs confidence" not in _format_gpu_specs(mi350)
+
+
+def _render_optimization_prompt(gpu_specs: dict) -> str:
+    manager = PromptManager(target_platform=get_platform("rocm"))
+    return manager.render_kernel_optimization_prompt(
+        problem_description="problem",
+        kernel_code="kernel",
+        gpu_specs=gpu_specs,
+        roofline={},
+        category="memory",
+        summary="summary",
+        reasoning="reasoning",
+        root_cause={"cause": "cause"},
+        recommended_fix={"fix": "fix"},
+        pytorch_baseline_ms=1.0,
+        current_best_ms=1.0,
+    )
+
+
+def test_rocm_kernel_guidance_skips_sku_numbers():
+    text = get_platform("rocm").kernel_guidance
+    assert "MI300X" not in text
+    assert "MI350X" not in text
+    assert "wavefront size 64" in text
+    assert "warp_size=32" in text
+    assert "Do not use tensor descriptors or TMA" in text
+    assert "Do not pass warp_specialize" in text
+    assert (
+        "Where this section conflicts with the Triton programming guidelines, "
+        "follow this section."
+    ) in text
+    assert "fp8 is available on gfx942" in text
+    assert "BF16 matrix units are available on CDNA" in text
+
+
+def test_optimization_prompt_uses_cu_labels_for_cdna():
+    mi300 = get_gpu_specs("AMD Instinct MI300X")
+    assert mi300 is not None
+    text = _render_optimization_prompt(mi300)
+    assert "CU Count: 304" in text
+    assert "Max Threads per CU" in text
+    assert "L1 Cache per CU" in text
+    assert "SM Count" not in text
+
+    h100 = get_gpu_specs("NVIDIA H100 SXM5 80GB")
+    assert h100 is not None
+    nvidia = _render_optimization_prompt(h100)
+    assert "SM Count:" in nvidia
+    assert "CU Count" not in nvidia
+
+
+def test_refinement_prompt_includes_rocm_kernel_guidance():
+    rocm = PromptManager(target_platform=get_platform("rocm"))
+    text = rocm.render_kernel_refinement_prompt(
+        problem_description="problem",
+        test_code="test",
+        kernel_code="kernel",
+        error_info={"stderr": "", "stdout": ""},
+    )
+    assert "AMD ROCm-Specific Optimizations" in text
+    assert "Do not pass warp_specialize" in text
+
+    cuda = PromptManager(target_platform=get_platform("cuda"))
+    cuda_text = cuda.render_kernel_refinement_prompt(
+        problem_description="problem",
+        test_code="test",
+        kernel_code="kernel",
+        error_info={"stderr": "", "stdout": ""},
+    )
+    assert "AMD ROCm-Specific Optimizations" not in cuda_text
 
 
 def test_bottleneck_analyzer_accepts_num_bottlenecks():
