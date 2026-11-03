@@ -493,13 +493,51 @@ def _parse_stats_csv(csv_path: Path) -> dict[str, Any]:
         return {"has_averagens": True}
     return {
         "has_averagens": True,
+        "kernel_name": kernel_name,
         "duration_ns": duration_ns,
         "duration_ms": duration_ns / 1e6,
     }
 
 
-def _parse_pmc_csv(csv_path: Path) -> dict[str, Any]:
-    """Parse rocprof PMC CSV to extract hardware counter values."""
+def _pmc_row_kernel_name(row: dict[str, str]) -> str:
+    return (row.get("Kernel_Name") or row.get("KernelName") or "").strip()
+
+
+def _pmc_dispatch_rank(row: dict[str, str], index: int) -> float:
+    """Dispatch order. A missing id keeps file order, and a later row wins.
+
+    rocprofv3 writes ``Dispatch_Id``. ``Dispatch_ID`` is accepted too.
+    """
+    raw = (row.get("Dispatch_Id") or row.get("Dispatch_ID") or "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return float(index)
+
+
+def _pmc_rows_for_kernel(
+    rows: list[dict[str, str]], kernel_name: str
+) -> list[dict[str, str]] | None:
+    """Rows for ``kernel_name``, or None when the CSV names no kernel.
+
+    A counter file that only has counter columns cannot tell dispatches
+    apart. A file that names kernels keeps one kernel, so ``at::`` rows
+    and other launches drop out.
+    """
+    if not any(_pmc_row_kernel_name(row) for row in rows):
+        return None
+    return [row for row in rows if _pmc_row_kernel_name(row) == kernel_name]
+
+
+def _parse_pmc_csv(csv_path: Path, kernel_name: str) -> dict[str, Any]:
+    """Parse rocprof PMC CSV to extract hardware counter values.
+
+    When the CSV names kernels, each counter keeps the value from the last
+    dispatch of ``kernel_name``. Passes appended into one file number
+    ``Dispatch_ID`` separately, so the last dispatch is per counter.
+    """
     csv_path = _resolve_collected_csv(csv_path, "_counter_collection.csv")
     if not csv_path.exists():
         return {}
@@ -517,25 +555,56 @@ def _parse_pmc_csv(csv_path: Path) -> dict[str, Any]:
     if not rows:
         return {}
 
+    chosen = _pmc_rows_for_kernel(rows, kernel_name)
+    if chosen is not None:
+        rows = chosen
+    if not rows:
+        return {}
+
     # rocprofv3 writes one row per counter: Counter_Name, Counter_Value.
     if "Counter_Name" in rows[0] and "Counter_Value" in rows[0]:
-        aggregated: dict[str, float] = {}
-        for row in rows:
+        if chosen is None:
+            aggregated: dict[str, float] = {}
+            for row in rows:
+                name = (row.get("Counter_Name") or "").strip()
+                if not name:
+                    continue
+                try:
+                    aggregated[name] = aggregated.get(name, 0.0) + float(
+                        row["Counter_Value"]
+                    )
+                except (ValueError, TypeError, KeyError):
+                    pass
+            return aggregated
+        last: dict[str, tuple[float, float]] = {}
+        for index, row in enumerate(rows):
             name = (row.get("Counter_Name") or "").strip()
             if not name:
                 continue
             try:
-                aggregated[name] = aggregated.get(name, 0.0) + float(
-                    row["Counter_Value"]
-                )
+                value = float(row["Counter_Value"])
             except (ValueError, TypeError, KeyError):
-                pass
-        return aggregated
+                continue
+            rank = _pmc_dispatch_rank(row, index)
+            previous = last.get(name)
+            if previous is None or rank >= previous[0]:
+                last[name] = (rank, value)
+        return {name: value for name, (_rank, value) in last.items()}
 
     # rocprof v2 PMC CSV columns: Index, KernelName, gpu-id, queue-id,
     # queue-index, pid, tid, grd, wgr, lds, scr, arch_vgpr, accum_vgpr,
     # sgpr, wave_size, sig, obj, <counter1>, <counter2>, ...
     # Aggregate all rows by summing numeric counter columns
+    if chosen is not None:
+        best_rank = -1.0
+        best_index = -1
+        for index, row in enumerate(rows):
+            rank = _pmc_dispatch_rank(row, index)
+            if rank >= best_rank:
+                best_rank = rank
+                best_index = index
+        rows = [rows[best_index]] if best_index >= 0 else []
+
     aggregated: dict[str, float] = {}
     counter_cols = [
         k
@@ -556,6 +625,7 @@ def _parse_pmc_csv(csv_path: Path) -> dict[str, Any]:
             "tid",
             "TID",
             "Dispatch_ID",
+            "Dispatch_Id",
             "Grid_Size",
             "Workgroup_Size",
             "LDS_Per_Workgroup",
@@ -601,12 +671,12 @@ def _merge_rocprof_outputs(
         )
 
     stats = _parse_stats_csv(stats_csv)
-    pmc = _parse_pmc_csv(pmc_csv)
     if not stats.get("has_averagens"):
         raise RuntimeError(f"rocprof stats CSV has no AverageNs: {stats_path}")
     if "duration_ms" not in stats:
         trace_path = _kernel_trace_csv(stats_csv)
         raise RuntimeError(f"rocprof kernel trace has no dispatch: {trace_path}")
+    pmc = _parse_pmc_csv(pmc_csv, stats["kernel_name"])
     if not pmc:
         raise RuntimeError(f"rocprof PMC CSV has no counter rows: {pmc_path}")
 

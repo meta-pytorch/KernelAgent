@@ -171,7 +171,7 @@ def _nvidia_gpu_ids() -> list[int]:
     return listed
 
 
-def _select_gpus() -> tuple[str, list[int]]:
+def _select_gpus(requested: str | None = None) -> tuple[str, list[int]]:
     """Return ``("nvidia"|"rocm", gpu ids)`` for this process.
 
     Crucially this MUST NOT initialize the CUDA context in the manager
@@ -180,18 +180,19 @@ def _select_gpus() -> tuple[str, list[int]]:
     that locked-in device list and ignore any post-fork visibility change.
     Listing goes through subprocess tools instead of ``torch.cuda``.
 
-    A run uses NVIDIA or AMD, not both. NVIDIA is the default. AMD is used
-    when no NVIDIA GPU is listed. When both are listed, AMD is used only if
-    ``HIP_VISIBLE_DEVICES`` or ``ROCR_VISIBLE_DEVICES`` names a HIP id from
-    ``amd-smi``. An empty value or an index outside that list disables AMD
-    and leaves NVIDIA in place. An empty visibility variable disables that
-    vendor and may be combined with the other vendor. A non-empty
-    ``CUDA_VISIBLE_DEVICES`` together with a non-empty ``HIP_VISIBLE_DEVICES``
-    or ``ROCR_VISIBLE_DEVICES`` is an error. ``CUDA_VISIBLE_DEVICES`` selects
+    A run uses NVIDIA or AMD, not both. NVIDIA is the default when no
+    platform was requested. AMD is used when no NVIDIA GPU is listed, or
+    when ``HIP_VISIBLE_DEVICES`` or ``ROCR_VISIBLE_DEVICES`` leaves an
+    amd-smi HIP id. A requested ROCm platform reads that HIP list even
+    when both masks are unset, and a mask only restricts the list. An
+    empty value or an index outside that list leaves the ROCm result
+    empty. An empty visibility variable disables that vendor and may be
+    combined with the other vendor. A non-empty ``CUDA_VISIBLE_DEVICES``
+    together with a non-empty ``HIP_VISIBLE_DEVICES`` or
+    ``ROCR_VISIBLE_DEVICES`` is an error. ``CUDA_VISIBLE_DEVICES`` selects
     NVIDIA indexes only after ``nvidia-smi`` lists a GPU. The caller runs
     that vendor's platform components, so the worker matches the id list.
-    A requested platform does not accept the other vendor. Nothing listed
-    is an empty result, and the manager stops.
+    Nothing listed is an empty result, and the manager stops.
     """
     import os
 
@@ -207,7 +208,8 @@ def _select_gpus() -> tuple[str, list[int]]:
         )
 
     nvidia_ids = _nvidia_gpu_ids()
-    if nvidia_ids and not rocm_names:
+    # No requested platform and no ROCm mask: NVIDIA wins without amd-smi.
+    if requested != "rocm" and nvidia_ids and not rocm_names:
         return "nvidia", nvidia_ids
     hip_ids = _amd_smi_hip_ids()
     if hip_ids:
@@ -216,13 +218,14 @@ def _select_gpus() -> tuple[str, list[int]]:
         ids = visible_hip_ids(hip_ids)
         if ids:
             return "rocm", ids
-        # The ROCm mask did not match an amd-smi device.
-        if nvidia_ids:
+        # The ROCm mask did not match an amd-smi device. A requested ROCm
+        # platform stays on that empty list.
+        if requested != "rocm" and nvidia_ids:
             return "nvidia", nvidia_ids
         return "rocm", []
-    if nvidia_ids:
+    if requested != "rocm" and nvidia_ids:
         return "nvidia", nvidia_ids
-    if rocm_names:
+    if rocm_names or requested == "rocm":
         return "rocm", []
     return "nvidia", []
 
@@ -355,8 +358,10 @@ class OptimizationManager:
             self.gpu_ids = list(gpu_ids)
         else:
             # The visibility rules choose the vendor, and the workers must
-            # be that vendor. An explicit platform does not cross over.
-            vendor, detected = _select_gpus()
+            # be that vendor. A requested ROCm platform reads the HIP ids.
+            # The mask restricts that list.
+            requested = "rocm" if _uses_rocm_gpu_list(platform) else None
+            vendor, detected = _select_gpus(requested)
             if _uses_rocm_gpu_list(platform) and (vendor != "rocm" or not detected):
                 raise RuntimeError(
                     _requested_platform_error("ROCm", vendor, detected)

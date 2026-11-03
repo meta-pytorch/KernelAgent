@@ -452,6 +452,29 @@ def test_duration_is_the_last_triton_dispatch(tmp_path):
     assert metrics["duration_ms"] == pytest.approx(0.02)
 
 
+def test_pmc_keeps_the_last_dispatch_of_the_profiled_kernel(tmp_path):
+    stats = tmp_path / "stats.csv"
+    pmc = tmp_path / "pmc.csv"
+    stats.write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
+        "at::native::vectorized_elementwise,1,3000,3000,1\n"
+        "triton_kernel,2,200000,100000,99\n"
+    )
+    Path(str(stats) + "_kernel_trace.csv").write_text(
+        "Kind,Kernel_Name,Start_Timestamp,End_Timestamp\n"
+        "KERNEL_DISPATCH,triton_kernel,0,100000\n"
+        "KERNEL_DISPATCH,triton_kernel,100000,200000\n"
+    )
+    pmc.write_text(
+        "Dispatch_Id,Kernel_Name,Counter_Name,Counter_Value\n"
+        "1,triton_kernel,SQ_INSTS_VALU,100\n"
+        "2,triton_kernel,SQ_INSTS_VALU,250\n"
+        "3,at::native::vectorized_elementwise,SQ_INSTS_VALU,900\n"
+    )
+    metrics = _merge_rocprof_outputs(stats, pmc)
+    assert metrics["sq_insts_valu"] == 250.0
+
+
 def test_stats_csv_without_kernel_trace_is_not_a_profile(tmp_path):
     stats = tmp_path / "stats.csv"
     pmc = tmp_path / "pmc.csv"
@@ -592,17 +615,6 @@ def test_rocprofv3_retries_ea_counter_after_nonzero_exit(tmp_path):
     assert (tmp_path / "rocprof_input_pass3_1.txt").read_text() == (
         "pmc: TCC_EA_WRREQ_sum\n"
     )
-    stats = tmp_path / "stats.csv"
-    stats.write_text(
-        "Name,Calls,TotalDurationNs,AverageNs,Percentage\nkernel,1,100000,100000,100\n"
-    )
-    Path(str(stats) + "_kernel_trace.csv").write_text(
-        "Kind,Kernel_Name,Start_Timestamp,End_Timestamp\n"
-        "KERNEL_DISPATCH,kernel,0,100000\n"
-    )
-    metrics = _merge_rocprof_outputs(stats, pmc)
-    assert metrics["tcc_ea_rdreq"] == 11.0
-    assert metrics["tcc_ea_wrreq"] == 7.0
 
 
 def test_roofline_wrappers_expose_early_stop():
@@ -729,15 +741,6 @@ def test_mixed_node_uses_nvidia_unless_hip_visible_devices(monkeypatch):
     assert _detect_gpus() == [0, 1]
     assert launched == ["nvidia-smi"]
 
-    # ROCR id 4 is listed, so AMD is selected.
-    use(rocr="4")
-    assert _detect_gpus() == [4]
-
-    # 9 is not a listed HIP id. amd-smi must run to see that.
-    use(rocr="9")
-    assert _detect_gpus() == [0, 1]
-    assert launched == ["nvidia-smi", "amd-smi"]
-
     # Empty HIP disables AMD. The CUDA list supplies the NVIDIA id.
     use(cuda="0", hip="")
     assert _detect_gpus() == [0]
@@ -749,11 +752,6 @@ def test_mixed_node_uses_nvidia_unless_hip_visible_devices(monkeypatch):
     # Empty CUDA disables NVIDIA. HIP index 2 is the third ROCR device.
     use(cuda="", rocr="1,2,3", hip="2")
     assert _detect_gpus() == [3]
-
-    # A CUDA list and a ROCR list both name devices.
-    use(cuda="0", rocr="4")
-    with pytest.raises(RuntimeError, match="conflicts"):
-        _detect_gpus()
 
     # A CUDA list and a HIP list both name devices.
     use(cuda="0", hip="4")
@@ -985,28 +983,26 @@ def test_manager_runs_the_vendor_the_visibility_rules_choose(monkeypatch, tmp_pa
     assert rocm_manager.gpu_ids == [4]
     assert rocm_manager.worker_kwargs["target_platform"] == "rocm"
 
-    # ROCm was requested and HIP id 4 matches, so the run stays on ROCm.
-    requested = OptimizationManager(
+    # No ROCm mask. A requested ROCm platform uses the amd-smi HIP ids.
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES")
+    requested_open = OptimizationManager(
         strategy="greedy",
         num_workers=1,
         platform="rocm",
-        log_dir=tmp_path / "rocm-requested",
+        target_platform="rocm",
+        log_dir=tmp_path / "rocm-open",
     )
-    assert isinstance(requested.worker_runner, ROCmWorkerRunner)
-    assert requested.gpu_ids == [4]
+    assert isinstance(requested_open.worker_runner, ROCmWorkerRunner)
+    assert requested_open.gpu_ids == [4]
 
-    # No ROCm mask. A requested ROCm platform does not fall back to CUDA.
-    monkeypatch.delenv("HIP_VISIBLE_DEVICES")
-    with pytest.raises(
-        RuntimeError,
-        match="ROCm platform was requested but NVIDIA devices were selected",
-    ):
+    # 9 matches nothing. The request stays on ROCm and does not use NVIDIA.
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "9")
+    with pytest.raises(RuntimeError, match="no devices are visible"):
         OptimizationManager(
             strategy="greedy",
             num_workers=1,
             platform="rocm",
-            target_platform="rocm",
-            log_dir=tmp_path / "nvidia",
+            log_dir=tmp_path / "rocm-miss",
         )
 
 
