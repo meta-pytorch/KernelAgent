@@ -399,53 +399,103 @@ def _resolve_collected_csv(csv_path: Path, suffix: str) -> Path:
     return csv_path
 
 
-def _parse_stats_csv(csv_path: Path) -> dict[str, Any]:
-    """Parse rocprof --stats CSV to extract kernel durations."""
-    csv_path = _resolve_collected_csv(csv_path, "_kernel_stats.csv")
-    if not csv_path.exists():
-        return {}
+def _kernel_trace_csv(stats_out: Path) -> Path:
+    """Kernel trace rocprofv3 writes for a ``--stats`` ``-o`` path."""
+    return Path(str(stats_out) + "_kernel_trace.csv")
 
+
+def _read_csv_rows(csv_path: Path) -> list[dict[str, str]]:
     import csv
 
-    rows: list[dict[str, str]] = []
+    if not csv_path.exists():
+        return []
     try:
-        with csv_path.open(newline="") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-    except Exception:
-        return {}
+        with csv_path.open(newline="") as handle:
+            return list(csv.DictReader(handle))
+    except (OSError, csv.Error):
+        return []
 
-    if not rows:
-        return {}
 
-    # rocprof stats CSV columns: Name, Calls, TotalDurationNs, AverageNs, ...
-    # One row per kernel name. Use the kernel with the most total time.
-    row = rows[-1]
+def _busiest_kernel_name(rows: list[dict[str, str]]) -> str | None:
+    """Non-PyTorch stats row with the largest ``TotalDurationNs``."""
+    best_name: str | None = None
     best_total = -1.0
-    for candidate in rows:
-        raw_total = candidate.get("TotalDurationNs")
-        if raw_total is None:
+    for row in rows:
+        name = (row.get("Name") or "").strip()
+        if not name or "at::" in name:
             continue
         try:
-            total = float(raw_total)
-        except (ValueError, TypeError):
+            total = float(row.get("TotalDurationNs") or "")
+        except (TypeError, ValueError):
             continue
         if total >= best_total:
             best_total = total
-            row = candidate
-    result: dict[str, Any] = {}
-    for key in ("Name", "Calls", "TotalDurationNs", "AverageNs", "Percentage"):
-        if key in row:
-            try:
-                result[key.lower()] = float(row[key]) if key != "Name" else row[key]
-            except (ValueError, TypeError):
-                result[key.lower()] = row[key]
+            best_name = name
+    return best_name
 
-    if "averagens" in result:
-        result["duration_ns"] = result["averagens"]
-        result["duration_ms"] = result["averagens"] / 1e6
 
-    return result
+def _last_profiled_dispatch_ns(trace_path: Path, kernel_name: str) -> float | None:
+    """Duration of the last trace dispatch of ``kernel_name``.
+
+    The profiled process runs the kernel three times and then once more, and
+    ``rocprofv3`` records every dispatch. ``AverageNs`` is the mean of those
+    launches. A later helper kernel is not this duration.
+    """
+    chosen_end: float | None = None
+    chosen_duration: float | None = None
+    for row in _read_csv_rows(trace_path):
+        name = (row.get("Kernel_Name") or row.get("Name") or "").strip()
+        if name != kernel_name:
+            continue
+        kind = (row.get("Kind") or "KERNEL_DISPATCH").strip()
+        if kind != "KERNEL_DISPATCH":
+            continue
+        try:
+            start = float(row["Start_Timestamp"])
+            end = float(row["End_Timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end < start:
+            continue
+        if chosen_end is None or end >= chosen_end:
+            chosen_end = end
+            chosen_duration = end - start
+    return chosen_duration
+
+
+def _parse_stats_csv(csv_path: Path) -> dict[str, Any]:
+    """Parse rocprofv3 stats and the kernel trace written beside them.
+
+    ``duration_ms`` is the last dispatch of the busiest non-PyTorch kernel.
+    A stats file with no ``AverageNs`` is not a completed profile.
+    """
+    resolved = _resolve_collected_csv(csv_path, "_kernel_stats.csv")
+    rows = _read_csv_rows(resolved)
+    has_averagens = False
+    for row in rows:
+        raw = row.get("AverageNs")
+        if raw is None or raw == "":
+            continue
+        try:
+            float(raw)
+        except (ValueError, TypeError):
+            continue
+        has_averagens = True
+        break
+    if not has_averagens:
+        return {}
+
+    kernel_name = _busiest_kernel_name(rows)
+    if kernel_name is None:
+        return {"has_averagens": True}
+    duration_ns = _last_profiled_dispatch_ns(_kernel_trace_csv(csv_path), kernel_name)
+    if duration_ns is None:
+        return {"has_averagens": True}
+    return {
+        "has_averagens": True,
+        "duration_ns": duration_ns,
+        "duration_ms": duration_ns / 1e6,
+    }
 
 
 def _parse_pmc_csv(csv_path: Path) -> dict[str, Any]:
@@ -552,8 +602,11 @@ def _merge_rocprof_outputs(
 
     stats = _parse_stats_csv(stats_csv)
     pmc = _parse_pmc_csv(pmc_csv)
-    if "duration_ms" not in stats:
+    if not stats.get("has_averagens"):
         raise RuntimeError(f"rocprof stats CSV has no AverageNs: {stats_path}")
+    if "duration_ms" not in stats:
+        trace_path = _kernel_trace_csv(stats_csv)
+        raise RuntimeError(f"rocprof kernel trace has no dispatch: {trace_path}")
     if not pmc:
         raise RuntimeError(f"rocprof PMC CSV has no counter rows: {pmc_path}")
 

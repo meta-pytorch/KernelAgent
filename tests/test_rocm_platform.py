@@ -409,6 +409,10 @@ def test_collected_rocprof_csvs_keep_measured_counters(tmp_path):
         "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
         "kernel,1,2000000,2000000,100\n"
     )
+    Path(str(stats) + "_kernel_trace.csv").write_text(
+        "Kind,Kernel_Name,Start_Timestamp,End_Timestamp\n"
+        "KERNEL_DISPATCH,kernel,0,2000000\n"
+    )
     pmc.write_text(
         "KernelName,SQ_INSTS_VALU,SQ_INSTS_SALU,TCC_HIT_sum,TCC_MISS_sum\n"
         "kernel,900,100,80,20\n"
@@ -421,6 +425,43 @@ def test_collected_rocprof_csvs_keep_measured_counters(tmp_path):
     assert "sq_waves" not in metrics
     assert "tcc_ea_rdreq" not in metrics
     assert "fetch_size_kb" not in metrics
+
+
+def test_duration_is_the_last_triton_dispatch(tmp_path):
+    stats = tmp_path / "stats.csv"
+    pmc = tmp_path / "pmc.csv"
+    stats.write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
+        "at::native::vectorized_elementwise,2,3000,1500,10\n"
+        "triton_add,4,204960,51240,90\n"
+        "_reduce_kernel,4,2000,500,1\n"
+    )
+    Path(str(stats) + "_kernel_trace.csv").write_text(
+        "Kind,Kernel_Name,Start_Timestamp,End_Timestamp\n"
+        "KERNEL_DISPATCH,at::native::fill,0,1000\n"
+        "KERNEL_DISPATCH,triton_add,1000,35000\n"
+        "KERNEL_DISPATCH,triton_add,35000,55000\n"
+        "KERNEL_DISPATCH,triton_add,55000,80000\n"
+        "KERNEL_DISPATCH,triton_add,80000,100000\n"
+        "KERNEL_DISPATCH,_reduce_kernel,100000,100500\n"
+        "KERNEL_DISPATCH,at::native::fill,100500,103000\n"
+    )
+    pmc.write_text("Counter_Name,Counter_Value\nSQ_INSTS_VALU,100\n")
+    metrics = _merge_rocprof_outputs(stats, pmc)
+    # Last triton_add is 20000 ns. The later _reduce_kernel is not the duration.
+    assert metrics["duration_ms"] == pytest.approx(0.02)
+
+
+def test_stats_csv_without_kernel_trace_is_not_a_profile(tmp_path):
+    stats = tmp_path / "stats.csv"
+    pmc = tmp_path / "pmc.csv"
+    stats.write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
+        "triton_add,4,204960,51240,100\n"
+    )
+    pmc.write_text("Counter_Name,Counter_Value\nSQ_INSTS_VALU,100\n")
+    with pytest.raises(RuntimeError, match="kernel trace has no dispatch"):
+        _merge_rocprof_outputs(stats, pmc)
 
 
 def test_stats_csv_without_averagens_is_not_a_profile(tmp_path):
@@ -475,6 +516,10 @@ def test_rocprofv3_uses_long_output_format(tmp_path):
         "    out.with_name(out.name + '_kernel_stats.csv').write_text(\n"
         "        'Name,Calls,TotalDurationNs,AverageNs,Percentage\\n'\n"
         "        'gemm,1,100000,100000,100\\n'\n"
+        "    )\n"
+        "    out.with_name(out.name + '_kernel_trace.csv').write_text(\n"
+        "        'Kind,Kernel_Name,Start_Timestamp,End_Timestamp\\n'\n"
+        "        'KERNEL_DISPATCH,gemm,0,100000\\n'\n"
         "    )\n"
         "elif '-i' in args:\n"
         "    text = Path(args[args.index('-i') + 1]).read_text()\n"
@@ -550,6 +595,10 @@ def test_rocprofv3_retries_ea_counter_after_nonzero_exit(tmp_path):
     stats = tmp_path / "stats.csv"
     stats.write_text(
         "Name,Calls,TotalDurationNs,AverageNs,Percentage\nkernel,1,100000,100000,100\n"
+    )
+    Path(str(stats) + "_kernel_trace.csv").write_text(
+        "Kind,Kernel_Name,Start_Timestamp,End_Timestamp\n"
+        "KERNEL_DISPATCH,kernel,0,100000\n"
     )
     metrics = _merge_rocprof_outputs(stats, pmc)
     assert metrics["tcc_ea_rdreq"] == 11.0
