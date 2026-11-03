@@ -103,28 +103,64 @@ def _parse_nvidia_smi_gpu_ids(text: str) -> list[int]:
     return ids
 
 
-def _detect_gpus() -> list[int]:
-    """Return physical GPU ids visible to this process.
+def _uses_rocm_gpu_list(platform: dict[str, str] | str | None) -> bool:
+    """True when the caller asked for a ROCm platform."""
+    if platform == "rocm":
+        return True
+    if isinstance(platform, dict):
+        if platform.get("worker_runner") == "rocm":
+            return True
+        return bool(platform) and all(value == "rocm" for value in platform.values())
+    return False
 
-    Crucially this MUST NOT initialize the CUDA context in the manager
-    process — workers are spawned via ``mp.Process`` (fork on Linux), and
-    if the manager has already touched ``torch.cuda`` the children inherit
-    that locked-in device list and ignore any post-fork
-    ``CUDA_VISIBLE_DEVICES`` override. Listing goes through subprocess
-    tools instead of ``torch.cuda``.
 
-    Order of resolution:
-      1. ``CUDA_VISIBLE_DEVICES`` env (respect user restriction).
-      2. ``nvidia-smi --query-gpu=index --format=csv,noheader``.
-      3. ``amd-smi list -e`` HIP ids, then ``amd-smi list``.
-         The binary is taken from PATH, beside Python, or ``/opt/rocm/bin``.
-      4. Fallback to ``[0]`` (single GPU).
+def _uses_nvidia_gpu_list(platform: dict[str, str] | str | None) -> bool:
+    """True when the caller asked for an NVIDIA platform."""
+    if platform == "nvidia":
+        return True
+    if isinstance(platform, dict):
+        if platform.get("worker_runner") == "nvidia":
+            return True
+        return bool(platform) and all(value == "nvidia" for value in platform.values())
+    return False
+
+
+def _amd_smi_hip_ids() -> list[int] | None:
+    """HIP ids from ``amd-smi``. None when the binary cannot be found."""
+    from triton_kernel_agent.platform.rocm import _find_amd_smi
+
+    amd_smi = _find_amd_smi()
+    if not amd_smi:
+        return None
+    for args in (["list", "-e"], ["list"]):
+        listed = _query_smi([amd_smi, *args])
+        if not listed:
+            continue
+        hip_ids = _parse_amd_smi_gpu_ids(listed)
+        if hip_ids:
+            return hip_ids
+    return []
+
+
+def _nvidia_gpu_ids() -> list[int]:
+    """NVIDIA indexes from ``nvidia-smi``, narrowed by ``CUDA_VISIBLE_DEVICES``.
+
+    An empty ``CUDA_VISIBLE_DEVICES`` disables NVIDIA and does not call
+    ``nvidia-smi``. A non-empty value is the index list only when
+    ``nvidia-smi`` lists a GPU. The variable alone does not mean the
+    machine has an NVIDIA GPU.
     """
     import os
 
-    from triton_kernel_agent.platform.rocm import _find_amd_smi
-
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if cvd is not None and not cvd.strip():
+        return []
+    nvidia = _query_smi(
+        ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"]
+    )
+    listed = _parse_nvidia_smi_gpu_ids(nvidia) if nvidia else []
+    if not listed:
+        return []
     if cvd:
         try:
             ids = [int(x.strip()) for x in cvd.split(",") if x.strip()]
@@ -132,23 +168,76 @@ def _detect_gpus() -> list[int]:
                 return ids
         except ValueError:
             pass
-    nvidia = _query_smi(
-        ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"]
+    return listed
+
+
+def _select_gpus() -> tuple[str, list[int]]:
+    """Return ``("nvidia"|"rocm", gpu ids)`` for this process.
+
+    Crucially this MUST NOT initialize the CUDA context in the manager
+    process — workers are spawned via ``mp.Process`` (fork on Linux), and
+    if the manager has already touched ``torch.cuda`` the children inherit
+    that locked-in device list and ignore any post-fork visibility change.
+    Listing goes through subprocess tools instead of ``torch.cuda``.
+
+    A run uses NVIDIA or AMD, not both. NVIDIA is the default. AMD is used
+    when no NVIDIA GPU is listed. When both are listed, AMD is used only if
+    ``HIP_VISIBLE_DEVICES`` or ``ROCR_VISIBLE_DEVICES`` names a HIP id from
+    ``amd-smi``. An empty value or an index outside that list disables AMD
+    and leaves NVIDIA in place. An empty visibility variable disables that
+    vendor and may be combined with the other vendor. A non-empty
+    ``CUDA_VISIBLE_DEVICES`` together with a non-empty ``HIP_VISIBLE_DEVICES``
+    or ``ROCR_VISIBLE_DEVICES`` is an error. ``CUDA_VISIBLE_DEVICES`` selects
+    NVIDIA indexes only after ``nvidia-smi`` lists a GPU. The caller runs
+    that vendor's platform components, so the worker matches the id list.
+    A requested platform does not accept the other vendor. Nothing listed
+    is an empty result, and the manager stops.
+    """
+    import os
+
+    # Empty is not a device list. It disables that vendor.
+    cuda_names = bool(os.environ.get("CUDA_VISIBLE_DEVICES"))
+    rocm_names = bool(os.environ.get("HIP_VISIBLE_DEVICES")) or bool(
+        os.environ.get("ROCR_VISIBLE_DEVICES")
     )
-    if nvidia:
-        ids = _parse_nvidia_smi_gpu_ids(nvidia)
+    if cuda_names and rocm_names:
+        raise RuntimeError(
+            "CUDA_VISIBLE_DEVICES conflicts with HIP_VISIBLE_DEVICES"
+            " or ROCR_VISIBLE_DEVICES"
+        )
+
+    nvidia_ids = _nvidia_gpu_ids()
+    if nvidia_ids and not rocm_names:
+        return "nvidia", nvidia_ids
+    hip_ids = _amd_smi_hip_ids()
+    if hip_ids:
+        from triton_kernel_agent.platform.rocm import visible_hip_ids
+
+        ids = visible_hip_ids(hip_ids)
         if ids:
-            return ids
-    amd_smi = _find_amd_smi()
-    if amd_smi:
-        for args in (["list", "-e"], ["list"]):
-            listed = _query_smi([amd_smi, *args])
-            if not listed:
-                continue
-            ids = _parse_amd_smi_gpu_ids(listed)
-            if ids:
-                return ids
-    return [0]
+            return "rocm", ids
+        # The ROCm mask did not match an amd-smi device.
+        if nvidia_ids:
+            return "nvidia", nvidia_ids
+        return "rocm", []
+    if nvidia_ids:
+        return "nvidia", nvidia_ids
+    if rocm_names:
+        return "rocm", []
+    return "nvidia", []
+
+
+def _requested_platform_error(requested: str, vendor: str, ids: list[int]) -> str:
+    """Error for an explicit platform that did not get its own devices."""
+    if not ids:
+        return f"{requested} platform was requested but no devices are visible"
+    selected = "NVIDIA" if vendor == "nvidia" else "ROCm"
+    return f"{requested} platform was requested but {selected} devices were selected"
+
+
+def _detect_gpus() -> list[int]:
+    """GPU ids from :func:`_select_gpus`."""
+    return _select_gpus()[1]
 
 
 @config_injectable
@@ -197,6 +286,10 @@ class OptimizationManager:
                 - ``None`` — use ``"nvidia"`` for all components (default)
                 - a string like ``"nvidia"`` — shorthand for all components
                 - a dict like ``{"verifier": "nvidia", ...}`` — per-component
+              When ``gpu_ids`` is omitted, the visibility rules choose the
+              vendor and every component uses that vendor. A requested ROCm
+              platform is not replaced with NVIDIA, and a requested NVIDIA
+              platform is not replaced with ROCm; either mismatch raises.
             **worker_kwargs: Additional kwargs passed to OptimizationWorker
         """
         self.max_rounds = max_rounds
@@ -258,7 +351,36 @@ class OptimizationManager:
         # parallel; workers on the same GPU serialize.  This is the
         # "collapsed" multi-GPU design: a single shared object per GPU
         # acts as both ``benchmark_lock`` and ``profiling_semaphore``.
-        self.gpu_ids: list[int] = list(gpu_ids) if gpu_ids else _detect_gpus()
+        if gpu_ids:
+            self.gpu_ids = list(gpu_ids)
+        else:
+            # The visibility rules choose the vendor, and the workers must
+            # be that vendor. An explicit platform does not cross over.
+            vendor, detected = _select_gpus()
+            if _uses_rocm_gpu_list(platform) and (vendor != "rocm" or not detected):
+                raise RuntimeError(
+                    _requested_platform_error("ROCm", vendor, detected)
+                )
+            if _uses_nvidia_gpu_list(platform) and (
+                vendor != "nvidia" or not detected
+            ):
+                raise RuntimeError(
+                    _requested_platform_error("NVIDIA", vendor, detected)
+                )
+            self.gpu_ids = detected
+            if detected:
+                platform = vendor
+                self.worker_kwargs["target_platform"] = (
+                    "rocm" if vendor == "rocm" else "cuda"
+                )
+        if not self.gpu_ids:
+            raise RuntimeError("no GPU visible")
+        if platform == "rocm" or _uses_rocm_gpu_list(platform):
+            # A CUDA device list left in the environment conflicts with the
+            # HIP and ROCR lists. Remove the variable; do not set it empty.
+            import os
+
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         self.gpu_locks: dict[int, Any] = {g: mp.Lock() for g in self.gpu_ids}
 
         # Manager-level GPU work (initial-kernel verify, PyTorch baselines,

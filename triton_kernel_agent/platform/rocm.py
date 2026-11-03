@@ -297,22 +297,106 @@ def _run_amd_smi(args: list[str]) -> str | None:
     return out.stdout
 
 
-def _visible_hip_id() -> int:
-    """HIP id of torch device 0. ``CUDA_VISIBLE_DEVICES`` selects it."""
-    for part in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(","):
+def _visibility_indexes(name: str) -> list[int] | None:
+    """Integer indexes from a visibility variable, or None when it is unset.
+
+    An empty value is a mask that selects nothing. Non-integer tokens are
+    skipped. The caller decides which list those indexes address.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    indexes: list[int] = []
+    for part in raw.split(","):
         part = part.strip()
         if part.isdigit():
-            return int(part)
-    return 0
+            indexes.append(int(part))
+    return indexes
+
+
+def visible_hip_ids(hip_ids: list[int]) -> list[int]:
+    """HIP ids that remain after the ROCm visibility masks.
+
+    Index ``i`` is the device whose ``HIP_ID`` is ``i``. ``ROCR_VISIBLE_DEVICES``
+    selects from that full list, in the order written. ``HIP_VISIBLE_DEVICES``
+    then indexes the ROCR result. With ``ROCR_VISIBLE_DEVICES`` unset, it
+    indexes the full list. With neither variable set, ``hip_ids`` is returned
+    in the order ``amd-smi`` printed them.
+    """
+    rocr = _visibility_indexes("ROCR_VISIBLE_DEVICES")
+    hip = _visibility_indexes("HIP_VISIBLE_DEVICES")
+    if rocr is None and hip is None:
+        return list(hip_ids)
+
+    present = set(hip_ids)
+    # Slot i is HIP id i. A missing id is a hole, so index 0 is not "the
+    # first id amd-smi printed".
+    full: list[int | None] = [None] * (max(present) + 1 if present else 0)
+    for hip_id in present:
+        full[hip_id] = hip_id
+
+    def choose(indexes: list[int], items: list[int | None]) -> list[int]:
+        chosen: list[int] = []
+        for index in indexes:
+            if index < 0 or index >= len(items):
+                continue
+            item = items[index]
+            if item is None or item in chosen:
+                continue
+            chosen.append(item)
+        return chosen
+
+    if rocr is None:
+        return choose(hip or [], full)
+    rocr_items: list[int | None] = list(choose(rocr, full))
+    if hip is None:
+        return [item for item in rocr_items if item is not None]
+    return choose(hip, rocr_items)
+
+
+def _pin_rocm_visible_devices(gpu_id: int) -> None:
+    """Show one HIP device inside a ROCm worker.
+
+    ``CUDA_VISIBLE_DEVICES`` is removed, not set to an empty string. An empty
+    value is still a device list and conflicts with the ROCm lists.
+    ``ROCR_VISIBLE_DEVICES`` is removed so ``HIP_VISIBLE_DEVICES`` indexes the
+    full device list. ``gpu_id`` is that full-list index.
+    """
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+    os.environ["HIP_VISIBLE_DEVICES"] = str(gpu_id)
+
+
+def _visible_hip_listing() -> tuple[str, int]:
+    """``amd-smi`` text and the first HIP id from that same text.
+
+    ``list -e`` is used when it contains ids. Otherwise ``list`` is used.
+    A mask that selects nothing, or a listing with no ids, raises.
+    ``CUDA_VISIBLE_DEVICES`` is not a HIP id.
+    """
+    from triton_kernel_agent.opt_manager import _parse_amd_smi_gpu_ids
+
+    for args in (["list", "-e"], ["list"]):
+        listed = _run_amd_smi(args)
+        if not listed:
+            continue
+        hip_ids = _parse_amd_smi_gpu_ids(listed)
+        if not hip_ids:
+            continue
+        visible = visible_hip_ids(hip_ids)
+        if not visible:
+            raise RuntimeError("no GPU visible")
+        return listed, visible[0]
+    raise RuntimeError("no GPU visible")
 
 
 def _amd_smi_chip_id_and_cu_count() -> tuple[int | None, int | None]:
     """Device id and CU count from ``amd-smi``, or ``(None, None)``."""
-    listed = _run_amd_smi(["list", "-e"]) or ""
     asic = _run_amd_smi(["static", "--asic"])
     if not asic:
         return None, None
-    record = _amd_smi_gpu_record(listed, asic, _visible_hip_id())
+    listed, hip_id = _visible_hip_listing()
+    record = _amd_smi_gpu_record(listed, asic, hip_id)
     if record is None:
         return None, None
     return record
@@ -514,8 +598,8 @@ class ROCmWorkerRunner(WorkerRunner):
         self.high_reasoning_effort = high_reasoning_effort
         self.bottleneck_override = bottleneck_override
         self.worker_kwargs = worker_kwargs
-        # Same multi-GPU contract as NvidiaWorkerRunner. HIP still honors
-        # CUDA_VISIBLE_DEVICES, so pinning works on the ROCm PyTorch build.
+        # gpu_ids are HIP ids. The worker unsets CUDA_VISIBLE_DEVICES and
+        # pins with HIP_VISIBLE_DEVICES so the two lists cannot conflict.
         self.gpu_ids: list[int] = list(gpu_ids) if gpu_ids else [0]
         self.gpu_locks: dict[int, Any] = (
             dict(gpu_locks) if gpu_locks else {0: benchmark_lock}
@@ -653,10 +737,10 @@ def _rocm_worker_process(
     import os
     import sys
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    _pin_rocm_visible_devices(gpu_id)
     print(
         f"[worker {worker_id}] pinned to GPU {gpu_id} "
-        f"(CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})",
+        f"(HIP_VISIBLE_DEVICES={os.environ['HIP_VISIBLE_DEVICES']})",
         flush=True,
     )
 

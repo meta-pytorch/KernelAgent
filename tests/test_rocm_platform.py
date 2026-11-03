@@ -15,6 +15,7 @@
 """ROCm platform wiring that must hold without an AMD GPU."""
 
 import inspect
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -570,23 +571,9 @@ def test_roofline_wrappers_expose_early_stop():
     assert NvidiaRooflineAnalyzer().config.early_stop is True
 
 
-def test_detect_gpus_uses_amd_smi_hip_ids_when_nvidia_smi_is_absent(monkeypatch):
-    from triton_kernel_agent.opt_manager import _detect_gpus
-
-    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    enumerated = "GPU: 0\n    HIP_ID: 1\nGPU: 1\n    HIP_ID: 3\n"
-    binary = "/opt/python-3.11-venv/bin/amd-smi"
-
-    def query(argv):
-        if argv == [binary, "list", "-e"]:
-            return enumerated
-        return None
-
-    monkeypatch.setattr(
-        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: binary
-    )
-    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
-    assert _detect_gpus() == [1, 3]
+def _hide_rocm_masks(monkeypatch) -> None:
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
 
 
 def test_find_amd_smi_beside_python_before_resolved_path(monkeypatch, tmp_path):
@@ -634,32 +621,391 @@ def test_find_amd_smi_uses_opt_rocm_bin(monkeypatch, tmp_path):
     assert _find_amd_smi() == str(bundled)
 
 
-def test_detect_gpus_prefers_cuda_visible_devices_and_nvidia_smi(monkeypatch):
+def test_mixed_node_uses_nvidia_unless_hip_visible_devices(monkeypatch):
     from triton_kernel_agent.opt_manager import _detect_gpus
 
-    def fail_query(argv):
-        raise AssertionError(argv)
+    launched: list[str] = []
 
-    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", fail_query)
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
-    assert _detect_gpus() == [4, 5]
-
-    monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
-
-    def nvidia_query(argv):
+    def query(argv):
+        launched.append(argv[0])
         if argv[0] == "nvidia-smi":
             return "0\n1\n"
-        raise AssertionError(argv)
+        if argv == ["amd-smi", "list", "-e"]:
+            return (
+                "GPU: 0\n    HIP_ID: 1\n"
+                "GPU: 1\n    HIP_ID: 2\n"
+                "GPU: 2\n    HIP_ID: 3\n"
+                "GPU: 3\n    HIP_ID: 4\n"
+            )
+        return None
 
-    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", nvidia_query)
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: "amd-smi"
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
+
+    def use(cuda=None, hip=None, rocr=None):
+        for name, value in (
+            ("CUDA_VISIBLE_DEVICES", cuda),
+            ("HIP_VISIBLE_DEVICES", hip),
+            ("ROCR_VISIBLE_DEVICES", rocr),
+        ):
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
+        launched.clear()
+
+    # No visibility variables: NVIDIA is the default.
+    use()
     assert _detect_gpus() == [0, 1]
+    assert launched == ["nvidia-smi"]
 
+    # Only CUDA_VISIBLE_DEVICES is set, so its indexes are used.
+    use(cuda="3")
+    assert _detect_gpus() == [3]
 
-def test_detect_gpus_falls_back_to_one_gpu(monkeypatch):
+    # HIP id 4 is listed, so AMD is selected.
+    use(hip="4")
+    assert _detect_gpus() == [4]
+    assert "amd-smi" in launched
+
+    # 9 is not a listed HIP id. amd-smi must run to see that.
+    use(hip="9")
+    assert _detect_gpus() == [0, 1]
+    assert launched == ["nvidia-smi", "amd-smi"]
+
+    # An empty HIP variable disables AMD.
+    use(hip="")
+    assert _detect_gpus() == [0, 1]
+    assert launched == ["nvidia-smi"]
+
+    # ROCR id 4 is listed, so AMD is selected.
+    use(rocr="4")
+    assert _detect_gpus() == [4]
+
+    # 9 is not a listed HIP id. amd-smi must run to see that.
+    use(rocr="9")
+    assert _detect_gpus() == [0, 1]
+    assert launched == ["nvidia-smi", "amd-smi"]
+
+    # Empty HIP disables AMD. The CUDA list supplies the NVIDIA id.
+    use(cuda="0", hip="")
+    assert _detect_gpus() == [0]
+
+    # Empty CUDA disables NVIDIA, so a listed HIP id selects AMD.
+    use(cuda="", hip="4")
+    assert _detect_gpus() == [4]
+
+    # Empty CUDA disables NVIDIA. HIP index 2 is the third ROCR device.
+    use(cuda="", rocr="1,2,3", hip="2")
+    assert _detect_gpus() == [3]
+
+    # A CUDA list and a ROCR list both name devices.
+    use(cuda="0", rocr="4")
+    with pytest.raises(RuntimeError, match="conflicts"):
+        _detect_gpus()
+
+    # A CUDA list and a HIP list both name devices.
+    use(cuda="0", hip="4")
+    with pytest.raises(RuntimeError, match="conflicts"):
+        _detect_gpus()
+
+def test_path_binaries_use_nvidia_unless_hip_visible_devices(monkeypatch, tmp_path):
+    """Run fake ``nvidia-smi`` and ``amd-smi`` from ``PATH``.
+
+    The NVIDIA listing is the live output of
+    ``nvidia-smi --query-gpu=index --format=csv,noheader`` on
+    rocm-framework-h100-pcie.amd.com (two NVIDIA H100 PCIe GPUs). That host
+    has no ``amd-smi``, so the HIP listing is synthetic and distinct.
+    """
     from triton_kernel_agent.opt_manager import _detect_gpus
 
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    # Shebang is this test's interpreter. PATH below contains only bindir, so
+    # ``#!/usr/bin/env python3`` cannot find Python. A bash wrapper is also
+    # unsafe: the NVIDIA container sets BASH_ENV to a file that runs
+    # ``nvidia-smi -q -d COMPUTE`` for every bash script, and a script of
+    # that name then calls itself.
+    shebang = f"#!{sys.executable}\n"
+    nvidia = bindir / "nvidia-smi"
+    nvidia.write_text(
+        shebang
+        + "import sys\n"
+        + "if sys.argv[1:] == ['--query-gpu=index', '--format=csv,noheader']:\n"
+        + "    sys.stdout.write('0\\n1\\n')\n"
+        + "    raise SystemExit(0)\n"
+        + "raise SystemExit(2)\n"
+    )
+    amd = bindir / "amd-smi"
+    amd.write_text(
+        shebang
+        + "import sys\n"
+        + "if sys.argv[1:] == ['list', '-e']:\n"
+        + "    sys.stdout.write("
+        + "'GPU: 0\\n    HIP_ID: 0\\n"
+        + "GPU: 1\\n    HIP_ID: 1\\n"
+        + "GPU: 2\\n    HIP_ID: 2\\n')\n"
+        + "    raise SystemExit(0)\n"
+        + "raise SystemExit(2)\n"
+    )
+    nvidia.chmod(0o755)
+    amd.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    _hide_rocm_masks(monkeypatch)
+
+    assert _detect_gpus() == [0, 1]
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "2")
+    assert _detect_gpus() == [2]
+
+
+def test_no_listed_gpu_stops(monkeypatch, tmp_path):
+    from triton_kernel_agent.opt_manager import OptimizationManager
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    _hide_rocm_masks(monkeypatch)
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: None
+    )
     monkeypatch.setattr(
         "triton_kernel_agent.opt_manager._query_smi", lambda argv: None
     )
-    assert _detect_gpus() == [0]
+    with pytest.raises(RuntimeError, match="no GPU visible"):
+        OptimizationManager(
+            strategy="greedy",
+            num_workers=1,
+            log_dir=tmp_path / "no-gpu",
+        )
+
+
+def _amd_enum(*hip_ids: int) -> str:
+    lines = []
+    for index, hip_id in enumerate(hip_ids):
+        lines.append(f"GPU: {index}\n    HIP_ID: {hip_id}\n")
+    return "".join(lines)
+
+
+def test_amd_smi_print_order_is_kept_when_nvidia_is_absent(monkeypatch):
+    from triton_kernel_agent.opt_manager import _detect_gpus
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    _hide_rocm_masks(monkeypatch)
+    binary = "amd-smi"
+    enumerated = _amd_enum(2, 0, 1)
+
+    def query(argv):
+        if argv == [binary, "list", "-e"]:
+            return enumerated
+        return None
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: binary
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
+    assert _detect_gpus() == [2, 0, 1]
+
+
+def test_unmatched_hip_visible_devices_disables_amd(monkeypatch):
+    from triton_kernel_agent.opt_manager import _detect_gpus
+
+    binary = "amd-smi"
+
+    def amd_only(argv):
+        if argv == [binary, "list", "-e"]:
+            return _amd_enum(0)
+        return None
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: binary
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", amd_only)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "9")
+    assert _detect_gpus() == []
+
+
+def test_pin_rocm_worker_unsets_cuda_visible_devices(monkeypatch):
+    from triton_kernel_agent.platform.rocm import _pin_rocm_visible_devices
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "2,0")
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "1")
+    _pin_rocm_visible_devices(2)
+    assert "CUDA_VISIBLE_DEVICES" not in os.environ
+    assert "ROCR_VISIBLE_DEVICES" not in os.environ
+    assert os.environ["HIP_VISIBLE_DEVICES"] == "2"
+
+
+def test_visible_hip_id_uses_the_detected_list(monkeypatch):
+    from triton_kernel_agent.platform.rocm import _visible_hip_listing
+
+    def visible_hip_id() -> int:
+        return _visible_hip_listing()[1]
+
+    listing = "GPU: 0\n    HIP_ID: 2\nGPU: 1\n    HIP_ID: 0\nGPU: 2\n    HIP_ID: 1\n"
+
+    def run(args):
+        if args == ["list", "-e"]:
+            return listing
+        return None
+
+    monkeypatch.setattr("triton_kernel_agent.platform.rocm._run_amd_smi", run)
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    assert visible_hip_id() == 2
+
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "9")
+    with pytest.raises(RuntimeError, match="no GPU visible"):
+        visible_hip_id()
+
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._run_amd_smi", lambda _args: None
+    )
+    with pytest.raises(RuntimeError, match="no GPU visible"):
+        visible_hip_id()
+
+
+def test_chip_lookup_uses_the_listing_that_produced_the_hip_id(monkeypatch):
+    from triton_kernel_agent.platform.rocm import _amd_smi_chip_id_and_cu_count
+
+    listed = "GPU: 0\n    HIP_ID: 2\nGPU: 1\n    HIP_ID: 0\n"
+    asic = (
+        "GPU: 0\n    DEVICE_ID: 0x7408\n    NUM_COMPUTE_UNITS: 110\n"
+        "GPU: 1\n    DEVICE_ID: 0x740c\n    NUM_COMPUTE_UNITS: 104\n"
+    )
+
+    def run(args):
+        if args == ["list", "-e"]:
+            return None
+        if args == ["list"]:
+            return listed
+        if args == ["static", "--asic"]:
+            return asic
+        return None
+
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr("triton_kernel_agent.platform.rocm._run_amd_smi", run)
+    # HIP id 2 is GPU 0. Using 2 as an ASIC index would miss both records.
+    assert _amd_smi_chip_id_and_cu_count() == (0x7408, 110)
+
+
+def test_manager_runs_the_vendor_the_visibility_rules_choose(monkeypatch, tmp_path):
+    from triton_kernel_agent.opt_manager import OptimizationManager
+    from triton_kernel_agent.platform.rocm import ROCmWorkerRunner
+
+    def query(argv):
+        if argv[0] == "nvidia-smi":
+            return "0\n1\n"
+        if argv == ["amd-smi", "list", "-e"]:
+            return "GPU: 0\n    HIP_ID: 4\n"
+        return None
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: "amd-smi"
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "4")
+
+    # NVIDIA was requested and HIP id 4 matches. Do not run ROCm.
+    with pytest.raises(
+        RuntimeError,
+        match="NVIDIA platform was requested but ROCm devices were selected",
+    ):
+        OptimizationManager(
+            strategy="greedy",
+            num_workers=1,
+            platform="nvidia",
+            log_dir=tmp_path / "nvidia-requested",
+        )
+
+    # No platform was requested. HIP id 4 is listed, so the run is ROCm.
+    rocm_manager = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        log_dir=tmp_path / "rocm",
+    )
+    assert isinstance(rocm_manager.worker_runner, ROCmWorkerRunner)
+    assert rocm_manager.gpu_ids == [4]
+    assert rocm_manager.worker_kwargs["target_platform"] == "rocm"
+
+    # ROCm was requested and HIP id 4 matches, so the run stays on ROCm.
+    requested = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        platform="rocm",
+        log_dir=tmp_path / "rocm-requested",
+    )
+    assert isinstance(requested.worker_runner, ROCmWorkerRunner)
+    assert requested.gpu_ids == [4]
+
+    # No ROCm mask. A requested ROCm platform does not fall back to CUDA.
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES")
+    with pytest.raises(
+        RuntimeError,
+        match="ROCm platform was requested but NVIDIA devices were selected",
+    ):
+        OptimizationManager(
+            strategy="greedy",
+            num_workers=1,
+            platform="rocm",
+            target_platform="rocm",
+            log_dir=tmp_path / "nvidia",
+        )
+
+
+def test_cuda_visible_devices_without_nvidia_smi_keeps_amd(monkeypatch, tmp_path):
+    from triton_kernel_agent.opt_manager import OptimizationManager
+    from triton_kernel_agent.platform.rocm import ROCmWorkerRunner
+
+    enumerated = _amd_enum(1, 3)
+
+    def query(argv):
+        if argv == ["amd-smi", "list", "-e"]:
+            return enumerated
+        return None
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: "amd-smi"
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    _hide_rocm_masks(monkeypatch)
+
+    manager = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        platform="rocm",
+        log_dir=tmp_path / "amd-only",
+    )
+    assert isinstance(manager.worker_runner, ROCmWorkerRunner)
+    assert manager.gpu_ids == [1, 3]
+
+
+def test_explicit_nvidia_without_listed_gpus_does_not_invent_one(
+    monkeypatch, tmp_path
+):
+    from triton_kernel_agent.opt_manager import OptimizationManager
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    _hide_rocm_masks(monkeypatch)
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: None
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", lambda argv: None)
+    with pytest.raises(
+        RuntimeError, match="NVIDIA platform was requested but no devices are visible"
+    ):
+        OptimizationManager(
+            strategy="greedy",
+            num_workers=1,
+            platform="nvidia",
+            log_dir=tmp_path / "no-gpu",
+        )
