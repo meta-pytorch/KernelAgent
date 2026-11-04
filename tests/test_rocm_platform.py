@@ -37,6 +37,7 @@ from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestr
     _get_triton_kernel_metrics,
     profiler_is_rocm,
     should_disable_profiling,
+    should_profile_final_kernel,
 )
 from triton_kernel_agent.platform.nvidia import NvidiaRooflineAnalyzer
 from triton_kernel_agent.platform.registry import registry
@@ -420,6 +421,9 @@ def test_collected_rocprof_csvs_keep_measured_counters(tmp_path):
     metrics = _merge_rocprof_outputs(stats, pmc)
     assert metrics["duration_ms"] == 2.0
     assert metrics["sq_insts_valu"] == 900.0
+    assert metrics["valu_utilization_pct"] == 90.0
+    assert "compute_sol_pct" not in metrics
+    assert "memory_sol_pct" not in metrics
     assert metrics["tcc_hit"] == 80.0
     assert metrics["tcc_miss"] == 20.0
     assert "sq_waves" not in metrics
@@ -874,6 +878,151 @@ def test_unmatched_hip_visible_devices_disables_amd(monkeypatch):
     assert _detect_gpus() == []
 
 
+def test_rocm_worker_process_pins_and_forces_target_platform(monkeypatch, tmp_path):
+    from triton_kernel_agent.platform.worker_runner import rocm_worker_process
+
+    constructed: dict = {}
+
+    class FakeWorker:
+        def __init__(self, **kwargs):
+            constructed.update(kwargs)
+
+        def optimize_kernel(self, **kwargs):
+            return True, "kernel", {"best_time_ms": 1.0}
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.opt_worker.OptimizationWorker", FakeWorker
+    )
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "2,0")
+    shared = {"target_platform": "cuda", "gpu_name": "AMD Instinct MI300X"}
+    problem = tmp_path / "problem.py"
+    problem.write_text("def ref():\n    return 0\n")
+    workdir = tmp_path / "work"
+    queued: list = []
+
+    rocm_worker_process(
+        0,
+        "def kernel():\n    return 0\n",
+        1.0,
+        "parent",
+        problem,
+        [],
+        workdir,
+        workdir / "logs",
+        SimpleNamespace(put=queued.append),
+        None,
+        None,
+        1.0,
+        0,
+        "model",
+        False,
+        None,
+        shared,
+        [],
+        [],
+        None,
+        3,
+    )
+
+    assert shared["target_platform"] == "cuda"
+    assert constructed["target_platform"] == "rocm"
+    assert "CUDA_VISIBLE_DEVICES" not in os.environ
+    assert "ROCR_VISIBLE_DEVICES" not in os.environ
+    assert os.environ["HIP_VISIBLE_DEVICES"] == "3"
+    assert queued and queued[0]["success"] is True
+
+
+def test_baseline_cache_normalizes_rocm_gpu_name(tmp_path, monkeypatch):
+    import logging
+
+    from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import ROCmRooflineAnalyzer
+    from triton_kernel_agent.opt_manager import (
+        OptimizationManager,
+        _specs_for_baseline,
+    )
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm.detect_amd_gpu_name",
+        lambda: "gfx950",
+    )
+    detected = _specs_for_baseline(None, rocm=True)
+    assert detected is not None
+    assert detected["name"] == "AMD Instinct MI350X"
+    assert detected["peak_memory_bw_gbps"] == 8000
+
+    class Profiler:
+        def profile_kernel(self, kernel_file, problem_file, round_num):
+            return SimpleNamespace(
+                metrics={
+                    "fetch_size_kb": 4194304,
+                    "duration_ms": 2.4,
+                    "valu_utilization_pct": 20.0,
+                    "memory_bound_pct": 80.0,
+                }
+            )
+
+    manager = SimpleNamespace(
+        worker_kwargs={"gpu_name": "gfx942", "target_platform": "rocm"},
+        _hide_caller_cuda_mask=True,
+        log_dir=tmp_path,
+        _baseline_profile_cache={},
+        logger=logging.getLogger("baseline-cache-test"),
+        _mgr_profiler=Profiler(),
+        _mgr_roofline=ROCmRooflineAnalyzer(),
+    )
+    parent = SimpleNamespace(program_id="parent", kernel_code="def kernel():\n    pass\n")
+    OptimizationManager._populate_baseline_cache_uncached(
+        manager,
+        [{"parent": parent}],
+        tmp_path / "problem.py",
+        1,
+    )
+    cached = manager._baseline_profile_cache["parent"]
+    assert cached["memory_sol_pct"] == pytest.approx(33.77, abs=0.01)
+    assert cached["compute_sol_measured"] is False
+    assert cached["memory_sol_measured"] is True
+
+    class MixProfiler:
+        def profile_kernel(self, kernel_file, problem_file, round_num):
+            return SimpleNamespace(
+                metrics={
+                    "valu_utilization_pct": 20.0,
+                    "memory_bound_pct": 80.0,
+                }
+            )
+
+    messages: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    handler = _Capture()
+    manager.logger.addHandler(handler)
+    manager.logger.setLevel(logging.INFO)
+    manager._mgr_profiler = MixProfiler()
+    try:
+        OptimizationManager._populate_baseline_cache_uncached(
+            manager,
+            [
+                {
+                    "parent": SimpleNamespace(
+                        program_id="unmeasured",
+                        kernel_code="def kernel():\n    pass\n",
+                    )
+                }
+            ],
+            tmp_path / "problem.py",
+            1,
+        )
+    finally:
+        manager.logger.removeHandler(handler)
+    assert manager._baseline_profile_cache["unmeasured"]["bottleneck"] == "unknown"
+    assert any("SOL not measured" in message for message in messages)
+    assert not any("0.0% SOL" in message for message in messages)
+
+
 def test_pin_rocm_worker_unsets_cuda_visible_devices(monkeypatch):
     from triton_kernel_agent.platform.rocm import _pin_rocm_visible_devices
 
@@ -995,6 +1144,18 @@ def test_manager_runs_the_vendor_the_visibility_rules_choose(monkeypatch, tmp_pa
     assert isinstance(requested_open.worker_runner, ROCmWorkerRunner)
     assert requested_open.gpu_ids == [4]
 
+    # The caller already chose the worker target. Detection must not replace it.
+    kept_target = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        platform="rocm",
+        target_platform="cuda",
+        log_dir=tmp_path / "rocm-keep-target",
+    )
+    assert isinstance(kept_target.worker_runner, ROCmWorkerRunner)
+    assert kept_target.gpu_ids == [4]
+    assert kept_target.worker_kwargs["target_platform"] == "cuda"
+
     # 9 matches nothing. The request stays on ROCm and does not use NVIDIA.
     monkeypatch.setenv("HIP_VISIBLE_DEVICES", "9")
     with pytest.raises(RuntimeError, match="no devices are visible"):
@@ -1032,6 +1193,12 @@ def test_cuda_visible_devices_without_nvidia_smi_keeps_amd(monkeypatch, tmp_path
     )
     assert isinstance(manager.worker_runner, ROCmWorkerRunner)
     assert manager.gpu_ids == [1, 3]
+    assert manager.worker_kwargs["target_platform"] == "rocm"
+    # Construction leaves the caller's mask alone.
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
+    with manager._without_caller_cuda_mask():
+        assert "CUDA_VISIBLE_DEVICES" not in os.environ
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
 
 
 def test_explicit_nvidia_without_listed_gpus_does_not_invent_one(
@@ -1054,3 +1221,257 @@ def test_explicit_nvidia_without_listed_gpus_does_not_invent_one(
             platform="nvidia",
             log_dir=tmp_path / "no-gpu",
         )
+
+
+def test_noop_platform_does_not_need_a_gpu(monkeypatch, tmp_path):
+    from triton_kernel_agent.opt_manager import OptimizationManager
+    from triton_kernel_agent.platform.noop import (
+        NoOpProfiler,
+        NoOpVerifier,
+        NoOpWorkerRunner,
+    )
+    from triton_kernel_agent.platform.nvidia import NvidiaVerifier
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    _hide_rocm_masks(monkeypatch)
+    monkeypatch.setattr(
+        "triton_kernel_agent.platform.rocm._find_amd_smi", lambda: None
+    )
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", lambda argv: None)
+
+    dry = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        platform="noop",
+        log_dir=tmp_path / "noop",
+    )
+    assert isinstance(dry.verifier, NoOpVerifier)
+    assert isinstance(dry.worker_runner, NoOpWorkerRunner)
+    assert isinstance(dry._mgr_profiler, NoOpProfiler)
+    assert dry.gpu_ids == [0]
+
+    def query(argv):
+        if argv[0] == "nvidia-smi":
+            return "0\n1\n"
+        return None
+
+    monkeypatch.setattr("triton_kernel_agent.opt_manager._query_smi", query)
+    listed = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        platform="noop",
+        log_dir=tmp_path / "noop-listed",
+    )
+    assert isinstance(listed.verifier, NoOpVerifier)
+    assert isinstance(listed._mgr_profiler, NoOpProfiler)
+    assert listed.gpu_ids == [0]
+
+    mixed = {
+        "verifier": "nvidia",
+        "benchmarker": "nvidia",
+        "worker_runner": "nvidia",
+        "specs_provider": "nvidia",
+        "profiler": "noop",
+        "roofline_analyzer": "noop",
+        "bottleneck_analyzer": "noop",
+        "rag_prescriber": "noop",
+    }
+    kept = OptimizationManager(
+        strategy="greedy",
+        num_workers=1,
+        platform=mixed,
+        log_dir=tmp_path / "mixed",
+    )
+    assert isinstance(kept.verifier, NvidiaVerifier)
+    assert isinstance(kept._mgr_profiler, NoOpProfiler)
+    assert kept.worker_kwargs["platform_config"]["profiler"] == "noop"
+    assert kept.worker_kwargs["target_platform"] == "cuda"
+    assert kept.gpu_ids == [0, 1]
+
+
+def test_memory_sol_is_traffic_divided_by_peak():
+    analyzer = ROCmRooflineAnalyzer()
+    slow = analyzer.analyze(
+        ncu_metrics={
+            "fetch_size_kb": 4194304,
+            "duration_ms": 2.4,
+            "peak_memory_bw_gbps": 5300,
+            "valu_utilization_pct": 20.0,
+            "memory_bound_pct": 80.0,
+            "tcc_cache_hit_rate_pct": 10.0,
+        }
+    )
+    assert slow.memory_sol_pct == pytest.approx(33.77, abs=0.01)
+    assert slow.efficiency_pct == slow.memory_sol_pct
+    assert slow.compute_sol_pct == 0.0
+    assert slow.compute_sol_measured is False
+    assert slow.at_roofline is False
+    from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import (
+        format_rocm_roofline_summary,
+    )
+
+    summary = format_rocm_roofline_summary(slow)
+    assert slow.memory_sol_measured is True
+    assert slow.memory_sol_from_traffic is True
+    assert "Compute SOL:" not in summary
+    assert "Memory SOL:" in summary
+    assert "traffic / peak bandwidth" in summary
+
+    saturated = analyzer.analyze(
+        ncu_metrics={
+            "fetch_size_kb": 4194304,
+            "duration_ms": 0.4,
+            "peak_memory_bw_gbps": 5300,
+        }
+    )
+    assert saturated.at_roofline is True
+    saturated_summary = format_rocm_roofline_summary(saturated)
+    assert "Status: AT ROOFLINE" in saturated_summary
+    assert "heuristic" not in saturated_summary
+
+    mix_only = analyzer.analyze(
+        ncu_metrics={
+            "valu_utilization_pct": 20.0,
+            "memory_bound_pct": 80.0,
+        }
+    )
+    assert mix_only.efficiency_pct == 0.0
+    assert mix_only.memory_sol_measured is False
+    assert mix_only.compute_sol_measured is False
+    assert mix_only.bottleneck == "unknown"
+    assert mix_only.at_roofline is False
+    assert mix_only.valu_utilization_pct == 20.0
+    assert mix_only.memory_bound_pct == 80.0
+    mix_summary = format_rocm_roofline_summary(mix_only)
+    assert "Memory SOL:" not in mix_summary
+    assert "Compute SOL:" not in mix_summary
+    assert "SOL Efficiency:" not in mix_summary
+    assert "underutilized" not in mix_summary
+
+    from types import SimpleNamespace
+
+    from jinja2 import Environment, FileSystemLoader
+
+    env = Environment(
+        loader=FileSystemLoader("triton_kernel_agent/templates"),
+    )
+    bottleneck = SimpleNamespace(
+        category="memory",
+        summary="s",
+        reasoning="r",
+        root_cause=SimpleNamespace(cause="c", evidence=[]),
+        recommended_fix=SimpleNamespace(fix="f", rationale=""),
+    )
+    prompt = env.get_template("kernel_optimization.j2").render(
+        pytorch_baseline_ms=1.0,
+        roofline=mix_only.to_dict(),
+        kernel_code="pass",
+        bottleneck=bottleneck,
+        problem_description="p",
+    )
+    roofline_section = prompt.split("## ROOFLINE ANALYSIS")[1].split("## BOTTLENECK")[0]
+    assert "Primary Bottleneck: UNKNOWN" in roofline_section
+    assert "Efficiency:" not in roofline_section
+    assert "Memory SOL:" not in roofline_section
+    assert "Compute SOL:" not in roofline_section
+
+    attempt = SimpleNamespace(
+        round_num=1,
+        bottleneck_category="underutilized",
+        root_cause="c",
+        recommended_fix="f",
+        config_changes={},
+        time_before_ms=1.0,
+        time_after_ms=1.0,
+        improvement_pct=0.0,
+        compute_sol_pct=0.0,
+        compute_sol_measured=False,
+        memory_sol_pct=0.0,
+        memory_sol_measured=False,
+        passed_verification=True,
+        error_message=None,
+    )
+    reflexion = env.get_template("reflexion_prompt.j2").render(attempt=attempt)
+    assert "NCU SOL: not measured" in reflexion
+
+    nvidia = {
+        "bottleneck": "compute",
+        "compute_sol_pct": 70.0,
+        "memory_sol_pct": 20.0,
+        "efficiency_pct": 70.0,
+        "headroom_pct": 30.0,
+        "at_roofline": False,
+        "uses_tensor_cores": True,
+        "warnings": [],
+    }
+    nvidia_prompt = env.get_template("kernel_optimization.j2").render(
+        pytorch_baseline_ms=1.0,
+        roofline=nvidia,
+        kernel_code="pass",
+        bottleneck=bottleneck,
+        problem_description="p",
+    )
+    nvidia_section = nvidia_prompt.split("## ROOFLINE ANALYSIS")[1].split(
+        "## BOTTLENECK"
+    )[0]
+    assert "Compute SOL: 70.0%" in nvidia_section
+    assert "Memory SOL: 20.0%" in nvidia_section
+    assert "Efficiency: 70.0%" in nvidia_section
+
+    supplied = analyzer.analyze(
+        ncu_metrics={"compute_sol_pct": 70.0, "memory_sol_pct": 20.0}
+    )
+    assert supplied.memory_sol_measured is True
+    assert supplied.memory_sol_from_traffic is False
+    supplied_summary = format_rocm_roofline_summary(supplied)
+    assert "Memory SOL:" in supplied_summary
+    assert "traffic / peak bandwidth" not in supplied_summary
+
+
+def test_vendor_runners_share_the_process_pool(tmp_path):
+    import logging
+
+    from triton_kernel_agent.platform.nvidia import NvidiaWorkerRunner
+    from triton_kernel_agent.platform.rocm import ROCmWorkerRunner
+    from triton_kernel_agent.platform.worker_runner import (
+        nvidia_worker_process,
+        rocm_worker_process,
+    )
+
+    def runner(cls):
+        return cls(
+            log_dir=tmp_path,
+            logger=logging.getLogger("worker-target"),
+            benchmark_lock=None,
+            profiling_semaphore=None,
+            openai_model="model",
+            high_reasoning_effort=False,
+            bottleneck_override=None,
+            worker_kwargs={},
+        )
+
+    assert runner(ROCmWorkerRunner).worker_target is rocm_worker_process
+    assert runner(NvidiaWorkerRunner).worker_target is nvidia_worker_process
+
+
+def test_final_profile_runs_on_nvidia_when_sol_profile_failed():
+    nvidia = SimpleNamespace(platform="nvidia")
+    rocm = SimpleNamespace(platform="rocm")
+    assert should_profile_final_kernel(nvidia, 1, True)
+    assert should_profile_final_kernel(rocm, 1, True)
+    assert should_profile_final_kernel(rocm, 1, False) is False
+    assert should_profile_final_kernel(nvidia, 0, True) is False
+
+
+def test_create_kwargs_keep_temperature_in_extra_body():
+    from utils.providers.anthropic_provider import AnthropicProvider
+
+    params = AnthropicProvider._create_kwargs(
+        SimpleNamespace(get_max_tokens_limit=lambda _name: 8192),
+        "claude-opus-4-6",
+        [{"role": "user", "content": "hi"}],
+        0.0,
+        high_reasoning_effort=True,
+    )
+    assert params["extra_body"] == {"temperature": 0.0}
+    assert "output_config" not in params

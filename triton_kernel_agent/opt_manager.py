@@ -37,6 +37,8 @@ import logging
 import multiprocessing as mp
 import re
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +62,26 @@ from utils.config_injectable import config_injectable
 
 # Manager-level component keys resolved by the registry
 _MANAGER_LEVEL_KEYS = {"verifier", "benchmarker", "worker_runner"}
+
+
+def _specs_for_baseline(
+    gpu_name: str | None, *, rocm: bool
+) -> dict[str, Any] | None:
+    """Peak-bandwidth specs for the manager's baseline roofline.
+
+    ROCm uses the specs provider so a missing name is detected and a raw
+    name such as ``gfx950`` is normalized. An exact ``get_gpu_specs`` lookup
+    misses both, and the cached baseline SOL would stay at 0.
+    """
+    if rocm:
+        from triton_kernel_agent.platform.rocm import ROCmAcceleratorSpecsProvider
+
+        return ROCmAcceleratorSpecsProvider().get_specs(gpu_name)
+    if not gpu_name:
+        return None
+    from kernel_perf_agent.kernel_opt.diagnose_prompt.gpu_specs import get_gpu_specs
+
+    return get_gpu_specs(gpu_name)
 
 
 def _query_smi(argv: list[str]) -> str | None:
@@ -356,10 +378,14 @@ class OptimizationManager:
         # acts as both ``benchmark_lock`` and ``profiling_semaphore``.
         if gpu_ids:
             self.gpu_ids = list(gpu_ids)
+        elif platform == "noop":
+            # A dry run does not need a listed GPU. gpu 0 only names the lock.
+            self.gpu_ids = [0]
         else:
-            # The visibility rules choose the vendor, and the workers must
-            # be that vendor. A requested ROCm platform reads the HIP ids.
-            # The mask restricts that list.
+            # The visibility rules choose the vendor. A requested ROCm
+            # platform reads the HIP ids, and the mask restricts that list.
+            # An explicit platform or component dict is kept. The detected
+            # vendor replaces the platform only when the caller omitted it.
             requested = "rocm" if _uses_rocm_gpu_list(platform) else None
             vendor, detected = _select_gpus(requested)
             if _uses_rocm_gpu_list(platform) and (vendor != "rocm" or not detected):
@@ -373,19 +399,23 @@ class OptimizationManager:
                     _requested_platform_error("NVIDIA", vendor, detected)
                 )
             self.gpu_ids = detected
-            if detected:
+            if platform is None and detected:
                 platform = vendor
-                self.worker_kwargs["target_platform"] = (
-                    "rocm" if vendor == "rocm" else "cuda"
-                )
         if not self.gpu_ids:
             raise RuntimeError("no GPU visible")
-        if platform == "rocm" or _uses_rocm_gpu_list(platform):
-            # A CUDA device list left in the environment conflicts with the
-            # HIP and ROCR lists. Remove the variable; do not set it empty.
-            import os
-
-            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        # An explicit string or component dict stays as the caller passed it.
+        # The worker still needs target_platform for the timeout and the
+        # kernel guidance. Do not overwrite a value the caller set.
+        if "target_platform" not in self.worker_kwargs:
+            if platform == "rocm" or _uses_rocm_gpu_list(platform):
+                self.worker_kwargs["target_platform"] = "rocm"
+            elif platform == "nvidia" or _uses_nvidia_gpu_list(platform):
+                self.worker_kwargs["target_platform"] = "cuda"
+        # The manager verifies and profiles in this process. Drop a caller
+        # CUDA mask only for that work, then put the variable back.
+        self._hide_caller_cuda_mask = platform == "rocm" or _uses_rocm_gpu_list(
+            platform
+        )
         self.gpu_locks: dict[int, Any] = {g: mp.Lock() for g in self.gpu_ids}
 
         # Manager-level GPU work (initial-kernel verify, PyTorch baselines,
@@ -724,9 +754,29 @@ class OptimizationManager:
     # Thin delegates to platform components
     # ------------------------------------------------------------------
 
+    @contextmanager
+    def _without_caller_cuda_mask(self) -> Iterator[None]:
+        """Hide ``CUDA_VISIBLE_DEVICES`` while this process uses a ROCm GPU.
+
+        Workers pin their own environment. Restoring the variable here leaves
+        the process that constructed the manager unchanged after the call.
+        """
+        import os
+
+        if not self._hide_caller_cuda_mask:
+            yield
+            return
+        saved = os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        try:
+            yield
+        finally:
+            if saved is not None:
+                os.environ["CUDA_VISIBLE_DEVICES"] = saved
+
     def _benchmark_pytorch_baseline(self, problem_file: Path) -> float:
         """Benchmark the eager reference implementation."""
-        return self.benchmarker.benchmark_reference(problem_file)
+        with self._without_caller_cuda_mask():
+            return self.benchmarker.benchmark_reference(problem_file)
 
     def _verify_initial_kernel(
         self,
@@ -735,17 +785,20 @@ class OptimizationManager:
         test_code: list[str],
     ) -> bool:
         """Verify the initial kernel passes correctness before optimization."""
-        return self.verifier.verify(initial_kernel, problem_file, test_code)
+        with self._without_caller_cuda_mask():
+            return self.verifier.verify(initial_kernel, problem_file, test_code)
 
     def _benchmark_initial_kernel(
         self, initial_kernel: str, problem_file: Path
     ) -> float:
         """Benchmark the initial kernel before optimization begins."""
-        return self.benchmarker.benchmark_kernel(initial_kernel, problem_file)
+        with self._without_caller_cuda_mask():
+            return self.benchmarker.benchmark_kernel(initial_kernel, problem_file)
 
     def _benchmark_pytorch_compile(self, problem_file: Path) -> float:
         """Benchmark the compiler-optimized reference."""
-        return self.benchmarker.benchmark_reference_compiled(problem_file)
+        with self._without_caller_cuda_mask():
+            return self.benchmarker.benchmark_reference_compiled(problem_file)
 
     def _run_workers(
         self,
@@ -814,9 +867,20 @@ class OptimizationManager:
         """
         if self._mgr_profiler is None or self._mgr_roofline is None:
             return
+        # The profiled process inherits this environment. Hide the caller's
+        # CUDA mask for the profile, then restore it.
+        with self._without_caller_cuda_mask():
+            self._populate_baseline_cache_uncached(candidates, problem_file, round_num)
 
+    def _populate_baseline_cache_uncached(
+        self,
+        candidates: list[dict[str, Any]],
+        problem_file: Path,
+        round_num: int,
+    ) -> None:
         from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
             _get_triton_kernel_metrics,
+            _sol_log_clause,
         )
 
         baseline_dir = self.log_dir / "baseline_profiles"
@@ -851,20 +915,36 @@ class OptimizationManager:
 
                 ncu_metrics = profiler_results.metrics
                 flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
+                from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import (
+                    with_peak_bandwidth,
+                )
+
+                rocm_baseline = self._hide_caller_cuda_mask or (
+                    self.worker_kwargs.get("target_platform") == "rocm"
+                )
+                specs = _specs_for_baseline(
+                    self.worker_kwargs.get("gpu_name"), rocm=rocm_baseline
+                )
+                flat_metrics = with_peak_bandwidth(flat_metrics, specs)
                 roofline_result = self._mgr_roofline.analyze(ncu_metrics=flat_metrics)
 
                 self._baseline_profile_cache[pid] = {
                     "efficiency_pct": roofline_result.efficiency_pct,
                     "compute_sol_pct": roofline_result.compute_sol_pct,
+                    "compute_sol_measured": getattr(
+                        roofline_result, "compute_sol_measured", True
+                    ),
                     "memory_sol_pct": roofline_result.memory_sol_pct,
+                    "memory_sol_measured": getattr(
+                        roofline_result, "memory_sol_measured", True
+                    ),
                     "bottleneck": roofline_result.bottleneck,
                     "roofline_result": roofline_result,
                     "ncu_metrics": ncu_metrics,
                 }
                 self.logger.info(
                     f"Baseline profiled for parent {pid}: "
-                    f"{roofline_result.bottleneck}-bound, "
-                    f"{roofline_result.efficiency_pct:.1f}% SOL"
+                    f"{_sol_log_clause(roofline_result)}"
                 )
             except Exception as e:
                 self._baseline_profile_cache[pid] = None

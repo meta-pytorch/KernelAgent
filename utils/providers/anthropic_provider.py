@@ -14,6 +14,8 @@
 
 """Anthropic provider implementation."""
 
+import os
+
 from .base import BaseProvider, LLMResponse
 from .env_config import configure_proxy_environment
 
@@ -24,6 +26,24 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
     Anthropic = None
+
+
+def _anthropic_client_kwargs(api_key: str) -> dict:
+    kwargs: dict = {"api_key": api_key}
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url
+    headers: dict[str, str] = {}
+    for line in os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines():
+        if ":" not in line:
+            continue
+        name, value = line.split(":", 1)
+        name, value = name.strip(), value.strip()
+        if name and value:
+            headers[name] = value
+    if headers:
+        kwargs["default_headers"] = headers
+    return kwargs
 
 
 class AnthropicProvider(BaseProvider):
@@ -39,8 +59,10 @@ class AnthropicProvider(BaseProvider):
             # Configure proxy using centralized utility function
             self._original_proxy_env = configure_proxy_environment()
 
-            # Initialize client (proxy configured via environment variables)
-            self.client = Anthropic(api_key=api_key)
+            # Initialize client (proxy configured via environment variables).
+            # ANTHROPIC_BASE_URL and ANTHROPIC_CUSTOM_HEADERS carry the AMD
+            # gateway route. Header values stay out of logs.
+            self.client = Anthropic(**_anthropic_client_kwargs(api_key))
 
     def _create_kwargs(
         self,
@@ -59,8 +81,6 @@ class AnthropicProvider(BaseProvider):
             "messages": messages,
             "extra_body": {"temperature": temperature},
         }
-        if kwargs.get("high_reasoning_effort"):
-            params["output_config"] = {"effort": "high"}
         return params
 
     def get_response(

@@ -85,11 +85,7 @@ Analyze the NCU metrics and identify {num_bottlenecks} performance bottleneck(s)
 
 ## Roofline Analysis
 - Bottleneck: {roofline_bottleneck}
-- Compute SOL: {compute_sol:.1f}%
-- Memory SOL: {memory_sol:.1f}%
-- Efficiency: {efficiency:.1f}%
-- Headroom: {headroom:.1f}%
-- At Roofline: {at_roofline}
+{compute_sol_line}{memory_sol_line}{efficiency_line}{headroom_line}- At Roofline: {at_roofline}
 - Tensor Cores: {uses_tc}
 - Warnings: {roofline_warnings}
 
@@ -177,8 +173,6 @@ def _format_gpu_specs(gpu_specs: dict[str, Any]) -> str:
 
 
 _ROCM_COUNTER_FIELDS = [
-    ("Heuristic compute SOL (instruction mix)", "compute_sol_pct", "%"),
-    ("Heuristic memory SOL (instruction mix)", "memory_sol_pct", "%"),
     ("VALU instruction share", "valu_utilization_pct", "%"),
     ("VMEM instruction share", "memory_bound_pct", "%"),
     ("L2 hit rate", "tcc_cache_hit_rate_pct", "%"),
@@ -246,16 +240,30 @@ def build_bottleneck_prompt(
     Returns:
         Formatted prompt string for the LLM.
     """
+    compute_sol_line = ""
+    if getattr(roofline, "compute_sol_measured", True):
+        compute_sol_line = f"- Compute SOL: {roofline.compute_sol_pct:.1f}%\n"
+    memory_sol_line = ""
+    if getattr(roofline, "memory_sol_measured", True):
+        memory_sol_line = f"- Memory SOL: {roofline.memory_sol_pct:.1f}%\n"
+    either_measured = getattr(roofline, "compute_sol_measured", True) or getattr(
+        roofline, "memory_sol_measured", True
+    )
+    efficiency_line = ""
+    headroom_line = ""
+    if either_measured:
+        efficiency_line = f"- Efficiency: {roofline.efficiency_pct:.1f}%\n"
+        headroom_line = f"- Headroom: {roofline.headroom_pct:.1f}%\n"
     return BOTTLENECK_PROMPT.format(
         num_bottlenecks=num_bottlenecks,
         num_causes=num_causes,
         num_fixes=num_fixes,
         gpu_specs=_format_gpu_specs(gpu_specs),
         roofline_bottleneck=roofline.bottleneck,
-        compute_sol=roofline.compute_sol_pct,
-        memory_sol=roofline.memory_sol_pct,
-        efficiency=roofline.efficiency_pct,
-        headroom=roofline.headroom_pct,
+        compute_sol_line=compute_sol_line,
+        memory_sol_line=memory_sol_line,
+        efficiency_line=efficiency_line,
+        headroom_line=headroom_line,
         at_roofline="Yes" if roofline.at_roofline else "No",
         uses_tc="Yes" if roofline.uses_tensor_cores else "No",
         roofline_warnings="; ".join(roofline.warnings) or "None",

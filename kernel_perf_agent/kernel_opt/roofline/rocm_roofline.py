@@ -15,25 +15,15 @@
 """
 ROCm Roofline Analysis using rocprof hardware counters.
 
-Unlike the NVIDIA path (which uses NCU's built-in "Speed of Light" percent
-metrics), AMD rocprof does not expose normalized SOL values directly.  This
-module derives heuristic SOL equivalents from raw hardware counters collected
-by :mod:`kernel_perf_agent.kernel_opt.profiler.rocprof_profiler`.
+NVIDIA NCU reports Speed of Light as percent of peak. rocprof does not.
+Memory SOL is the profiled traffic, ``(FETCH_SIZE + WRITE_SIZE) / duration``,
+divided by ``peak_memory_bw_gbps``. VALU and VMEM shares of the counted
+instructions stay on ``valu_utilization_pct`` and ``memory_bound_pct``.
+They are not percent of peak and are not the efficiency number.
 
-Counter → SOL mapping
----------------------
-*Compute SOL*  ← VALU instruction utilization (SQ_INSTS_VALU fraction of
-               total shader instructions).  A fully VALU-saturated kernel
-               approaches 100 %.
-
-*Memory SOL*   ← Memory instruction fraction (SQ_INSTS_VMEM_RD +
-               SQ_INSTS_VMEM_WR as fraction of total instructions), amplified
-               by the L2 miss rate (a high miss rate means more HBM traffic,
-               pushing the kernel closer to the memory roof).
-
-Both are heuristic and share the same interface as
+The result uses the same fields as
 :class:`kernel_perf_agent.kernel_opt.roofline.ncu_roofline.RooflineAnalyzer`
-so the rest of the optimization pipeline can use them transparently.
+so the rest of the optimization pipeline can use it transparently.
 """
 
 from __future__ import annotations
@@ -55,16 +45,23 @@ class ROCmRooflineConfig:
     convergence_rounds: int = 5
     min_improvement_pct: float = 0.1
     underutilized_threshold: float = 40.0  # Both SOL < this → underutilized
-    miss_rate_amplifier: float = 1.5  # Scales memory SOL by L2 miss rate
+    # Kept so older configs still load. Memory SOL is measured traffic
+    # divided by peak bandwidth, so this no longer scales that number.
+    miss_rate_amplifier: float = 1.5
 
 
 @dataclass
 class ROCmRooflineResult:
     """Result of ROCm roofline analysis from rocprof counters."""
 
-    # Heuristic SOL equivalents (0–100 %)
+    # Percent of peak only when that side was measured. An unmeasured
+    # side stays 0 so formatters have a number, and prompts omit it.
     compute_sol_pct: float
+    compute_sol_measured: bool
     memory_sol_pct: float
+    memory_sol_measured: bool
+    # True only when memory_sol_pct came from traffic over peak bandwidth.
+    memory_sol_from_traffic: bool
 
     # Derived efficiency
     efficiency_pct: float
@@ -124,7 +121,8 @@ class ROCmRooflineAnalyzer:
             rocm_metrics: Same dict, accepted when callers use the ROCm name.
 
         Returns:
-            :class:`ROCmRooflineResult` with heuristic SOL estimates.
+            :class:`ROCmRooflineResult`. Memory SOL is traffic over peak
+            when the counters and the peak are present.
         """
         metrics = ncu_metrics if ncu_metrics is not None else rocm_metrics
         if not isinstance(metrics, dict):
@@ -135,36 +133,54 @@ class ROCmRooflineAnalyzer:
         rocm_metrics = metrics
         warnings: list[str] = []
 
-        # Retrieve pre-computed heuristic SOL values (set by rocprof_profiler)
-        compute_sol = float(rocm_metrics.get("compute_sol_pct", 0.0))
-        memory_sol = float(rocm_metrics.get("memory_sol_pct", 0.0))
+        # compute_sol_pct is percent of peak when a caller already measured
+        # it. The instruction mix is a different field and is not copied here.
+        compute_measured = "compute_sol_pct" in rocm_metrics
+        compute_sol = float(rocm_metrics["compute_sol_pct"]) if compute_measured else 0.0
+        traffic_sol = _memory_sol_from_traffic(rocm_metrics)
+        memory_from_traffic = traffic_sol is not None
+        # A caller-supplied memory_sol_pct is a measured number, but it is
+        # not traffic over peak. Missing both leaves memory unmeasured.
+        memory_measured = memory_from_traffic or "memory_sol_pct" in rocm_metrics
+        if memory_from_traffic:
+            memory_sol = float(traffic_sol)
+        elif memory_measured:
+            memory_sol = float(rocm_metrics["memory_sol_pct"])
+        else:
+            memory_sol = 0.0
 
-        valu_pct = float(rocm_metrics.get("valu_utilization_pct", compute_sol))
-        mem_bound_pct = float(rocm_metrics.get("memory_bound_pct", memory_sol))
+        valu_pct = float(rocm_metrics.get("valu_utilization_pct", 0.0))
+        mem_bound_pct = float(rocm_metrics.get("memory_bound_pct", 0.0))
         cache_hit_rate = float(rocm_metrics.get("tcc_cache_hit_rate_pct", 100.0))
 
-        # Amplify memory SOL by L2 miss rate to better reflect HBM pressure.
-        # A 100 % cache hit rate means all traffic is served from L2 → low HBM
-        # utilisation despite many VMEM instructions.
-        l2_miss_rate = max(0.0, 100.0 - cache_hit_rate)
-        amplified_memory_sol = min(
-            100.0,
-            memory_sol
-            * (1.0 + (l2_miss_rate / 100.0) * (self.config.miss_rate_amplifier - 1.0)),
-        )
-
-        if compute_sol == 0.0 and amplified_memory_sol == 0.0:
+        if not compute_measured:
             warnings.append(
-                "No compute or memory activity detected in rocprof counters"
+                "Compute SOL was not measured. The VALU share is an "
+                "instruction mix, not percent of peak."
+            )
+        if not memory_measured:
+            warnings.append(
+                "Memory SOL was not measured. It is traffic over peak "
+                "bandwidth, not the VMEM instruction share."
             )
 
-        efficiency = max(compute_sol, amplified_memory_sol)
-        bottleneck = self._classify_bottleneck(compute_sol, amplified_memory_sol)
-        at_roofline = efficiency >= self.config.threshold_pct
+        if compute_measured or memory_measured:
+            efficiency = max(compute_sol, memory_sol)
+            bottleneck = self._classify_bottleneck(compute_sol, memory_sol)
+            at_roofline = efficiency >= self.config.threshold_pct
+        else:
+            # Zeros are placeholders, not a measurement. NCU uses "unknown"
+            # when both SOL keys are missing.
+            efficiency = 0.0
+            bottleneck = "unknown"
+            at_roofline = False
 
         return ROCmRooflineResult(
             compute_sol_pct=round(compute_sol, 2),
-            memory_sol_pct=round(amplified_memory_sol, 2),
+            compute_sol_measured=compute_measured,
+            memory_sol_pct=round(memory_sol, 2),
+            memory_sol_measured=memory_measured,
+            memory_sol_from_traffic=memory_from_traffic,
             efficiency_pct=round(efficiency, 2),
             at_roofline=at_roofline,
             headroom_pct=round(max(0.0, 100.0 - efficiency), 2),
@@ -177,7 +193,7 @@ class ROCmRooflineAnalyzer:
         )
 
     def _classify_bottleneck(self, compute_sol: float, memory_sol: float) -> str:
-        """Classify bottleneck based on heuristic SOL values."""
+        """Classify the bottleneck from the SOL percentages."""
         threshold = self.config.underutilized_threshold
         if compute_sol < threshold and memory_sol < threshold:
             return "underutilized"
@@ -224,28 +240,92 @@ class ROCmRooflineAnalyzer:
         self._efficiency_history = []
 
 
+def _memory_sol_from_traffic(metrics: dict[str, Any]) -> float | None:
+    """Percent of peak bandwidth from FETCH_SIZE, WRITE_SIZE, and duration.
+
+    The rocprof sizes are kilobytes. Missing traffic or a missing peak
+    returns None so an instruction mix is not reported as SOL.
+    """
+    peak = metrics.get("peak_memory_bw_gbps")
+    duration_ms = metrics.get("duration_ms")
+    if peak is None or duration_ms is None:
+        return None
+    if metrics.get("fetch_size_kb") is None and metrics.get("write_size_kb") is None:
+        return None
+    try:
+        peak_gbps = float(peak)
+        duration = float(duration_ms)
+        traffic_kb = float(metrics.get("fetch_size_kb") or 0.0) + float(
+            metrics.get("write_size_kb") or 0.0
+        )
+    except (TypeError, ValueError):
+        return None
+    if peak_gbps <= 0.0 or duration <= 0.0:
+        return None
+    achieved_gbps = traffic_kb * 1024.0 / (duration / 1000.0) / 1e9
+    return min(100.0, 100.0 * achieved_gbps / peak_gbps)
+
+
+def with_peak_bandwidth(
+    metrics: dict[str, Any], gpu_specs: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Copy ``peak_memory_bw_gbps`` onto profiler metrics when the spec has it."""
+    if not gpu_specs or metrics.get("peak_memory_bw_gbps") is not None:
+        return metrics
+    peak = gpu_specs.get("peak_memory_bw_gbps")
+    if peak is None:
+        return metrics
+    stamped = dict(metrics)
+    stamped["peak_memory_bw_gbps"] = peak
+    return stamped
+
+
 def format_rocm_roofline_summary(result: ROCmRooflineResult) -> str:
     """Format a human-readable summary of ROCm roofline analysis."""
+    either_measured = result.compute_sol_measured or result.memory_sol_measured
     lines = [
         "=== ROCm Roofline Analysis (rocprof counters) ===",
-        f"SOL Efficiency (heuristic): {result.efficiency_pct:.1f}%",
-        f"  Compute SOL:  {result.compute_sol_pct:.1f}%  (VALU utilization)",
-        f"  Memory SOL:   {result.memory_sol_pct:.1f}%  (VMEM + L2 miss amplification)",
+        *(
+            [f"SOL Efficiency: {result.efficiency_pct:.1f}%"]
+            if either_measured
+            else []
+        ),
+        *(
+            [f"  Compute SOL:  {result.compute_sol_pct:.1f}%"]
+            if result.compute_sol_measured
+            else []
+        ),
+        *(
+            [
+                "  Memory SOL:   "
+                f"{result.memory_sol_pct:.1f}%"
+                + (
+                    "  (traffic / peak bandwidth)"
+                    if result.memory_sol_from_traffic
+                    else ""
+                )
+            ]
+            if result.memory_sol_measured
+            else []
+        ),
+        f"  VALU share:   {result.valu_utilization_pct:.1f}%  (instruction mix)",
+        f"  VMEM share:   {result.memory_bound_pct:.1f}%  (instruction mix)",
         f"  Bottleneck:   {result.bottleneck}",
         f"  L2 Hit Rate:  {result.tcc_cache_hit_rate_pct:.1f}%",
         "",
     ]
 
     if result.at_roofline:
-        lines.append("Status: AT ROOFLINE (heuristic)")
-    else:
+        lines.append("Status: AT ROOFLINE")
+    elif either_measured:
         lines.append(f"Headroom: {result.headroom_pct:.1f}%")
 
     if result.warnings:
         lines.append(f"Warnings: {'; '.join(result.warnings)}")
 
     lines.append("")
-    lines.append("Note: ROCm SOL values are heuristic estimates from rocprof counters,")
-    lines.append("not exact hardware-reported percentages like NCU SOL metrics.")
+    if result.memory_sol_from_traffic:
+        lines.append("Memory SOL is profiled traffic divided by peak bandwidth.")
+    lines.append("The VALU and VMEM shares are an instruction mix, not SOL.")
 
     return "\n".join(lines)

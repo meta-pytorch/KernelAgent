@@ -102,10 +102,8 @@ ROCM_METRIC_KEYS = [
     "fetch_size_kb",
     "write_size_kb",
     # Derived
-    "valu_utilization_pct",  # SQ_INSTS_VALU / (SQ_WAVES * max_valu_per_wave)
-    "memory_bound_pct",  # heuristic: vmem instructions / total instructions
-    "compute_sol_pct",  # heuristic compute SOL for roofline compat
-    "memory_sol_pct",  # heuristic memory SOL for roofline compat
+    "valu_utilization_pct",  # VALU share of counted shader instructions
+    "memory_bound_pct",  # VMEM share of counted shader instructions
 ]
 
 
@@ -728,7 +726,6 @@ def _merge_rocprof_outputs(
     total_insts = sum(present_insts)
     if total_insts > 0 and "sq_insts_valu" in metrics:
         metrics["valu_utilization_pct"] = 100.0 * metrics["sq_insts_valu"] / total_insts
-        metrics["compute_sol_pct"] = min(metrics["valu_utilization_pct"], 100.0)
     if total_insts > 0 and (
         "sq_insts_vmem_rd" in metrics or "sq_insts_vmem_wr" in metrics
     ):
@@ -736,7 +733,6 @@ def _merge_rocprof_outputs(
             "sq_insts_vmem_wr", 0.0
         )
         metrics["memory_bound_pct"] = 100.0 * vmem_insts / total_insts
-        metrics["memory_sol_pct"] = min(metrics["memory_bound_pct"], 100.0)
 
     # Include raw counter dump for debugging / LLM consumption
     metrics["_raw_counters"] = {k: v for k, v in raw.items()}

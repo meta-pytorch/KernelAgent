@@ -51,9 +51,15 @@ PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms
 {% if roofline %}
 ## ROOFLINE ANALYSIS
 - Primary Bottleneck: {{ roofline.bottleneck | upper }}
+{% if roofline.compute_sol_measured is not defined or roofline.compute_sol_measured -%}
 - Compute SOL: {{ "%.1f"|format(roofline.compute_sol_pct) }}%
+{% endif -%}
+{% if roofline.memory_sol_measured is not defined or roofline.memory_sol_measured -%}
 - Memory SOL: {{ "%.1f"|format(roofline.memory_sol_pct) }}%
+{% endif -%}
+{% if roofline.compute_sol_measured is not defined or roofline.memory_sol_measured is not defined or roofline.compute_sol_measured or roofline.memory_sol_measured -%}
 - Efficiency: {{ "%.1f"|format(roofline.efficiency_pct) }}% (headroom: {{ "%.1f"|format(roofline.headroom_pct) }}%)
+{% endif -%}
 - At Roofline: {{ "Yes" if roofline.at_roofline else "No" }}
 - Tensor Cores: {{ "Active" if roofline.uses_tensor_cores else "Inactive" }}
 {%- if roofline.warnings %}

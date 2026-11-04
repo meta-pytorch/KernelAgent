@@ -31,14 +31,11 @@ ROCm-specific notes
 from __future__ import annotations
 
 import logging
-import multiprocessing as mp
 import os
 import re
 import shutil
 import subprocess
 import sys
-import time
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -50,9 +47,8 @@ from triton_kernel_agent.platform.interfaces import (
     KernelVerifier,
     RAGPrescriberBase,
     RooflineAnalyzerBase,
-    WorkerRunner,
 )
-
+from triton_kernel_agent.platform.worker_runner import ROCmWorkerRunner  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # GPU name detection helper
@@ -567,248 +563,6 @@ class ROCmBenchmarker(KernelBenchmarker):
             self.logger.info(f"PyTorch compile baseline: {compile_time:.4f}ms")
 
         return compile_time
-
-
-# ---------------------------------------------------------------------------
-# Worker runner
-# ---------------------------------------------------------------------------
-
-
-class ROCmWorkerRunner(WorkerRunner):
-    """Spawns ``OptimizationWorker`` processes on AMD GPUs."""
-
-    def __init__(
-        self,
-        log_dir: Path,
-        logger: logging.Logger,
-        benchmark_lock: Any,
-        profiling_semaphore: Any,
-        openai_model: str,
-        high_reasoning_effort: bool,
-        bottleneck_override: str | None,
-        worker_kwargs: dict[str, Any],
-        gpu_ids: list[int] | None = None,
-        gpu_locks: dict[int, Any] | None = None,
-    ) -> None:
-        self.log_dir = log_dir
-        self.logger = logger
-        self.benchmark_lock = benchmark_lock
-        self.profiling_semaphore = profiling_semaphore
-        self.openai_model = openai_model
-        self.high_reasoning_effort = high_reasoning_effort
-        self.bottleneck_override = bottleneck_override
-        self.worker_kwargs = worker_kwargs
-        # gpu_ids are HIP ids. The worker unsets CUDA_VISIBLE_DEVICES and
-        # pins with HIP_VISIBLE_DEVICES so the two lists cannot conflict.
-        self.gpu_ids: list[int] = list(gpu_ids) if gpu_ids else [0]
-        self.gpu_locks: dict[int, Any] = (
-            dict(gpu_locks) if gpu_locks else {0: benchmark_lock}
-        )
-
-    def run_workers(
-        self,
-        candidates: list[dict[str, Any]],
-        round_num: int,
-        problem_file: Path,
-        test_code: list[str],
-        pytorch_baseline: float,
-        shared_history: list[dict],
-        shared_reflexions: list[dict],
-    ) -> list[dict[str, Any]]:
-        import queue as _queue_mod
-
-        result_queue = mp.Queue()
-        workers = []
-
-        for i, candidate in enumerate(candidates):
-            workdir = self.log_dir / "workers" / f"w{i}" / f"r{round_num}"
-            workdir.mkdir(parents=True, exist_ok=True)
-
-            worker_model = candidate.get("openai_model") or self.openai_model
-            baseline_metrics = candidate.get("baseline_metrics")
-            gpu_id = self.gpu_ids[i % len(self.gpu_ids)]
-            gpu_lock = self.gpu_locks[gpu_id]
-
-            args = (
-                i,
-                candidate["parent"].kernel_code,
-                candidate["parent"].metrics.time_ms,
-                candidate["parent"].program_id,
-                problem_file,
-                test_code,
-                workdir,
-                workdir / "logs",
-                result_queue,
-                gpu_lock,
-                gpu_lock,
-                pytorch_baseline,
-                candidate["bottleneck_id"],
-                worker_model,
-                self.high_reasoning_effort,
-                self.bottleneck_override,
-                self.worker_kwargs,
-                shared_history,
-                shared_reflexions,
-                baseline_metrics,
-                gpu_id,
-            )
-
-            p = mp.Process(target=_rocm_worker_process, args=args)
-            p.start()
-            workers.append(p)
-
-        # Drain the queue while joining. A full mp.Queue pipe blocks the
-        # worker's feeder thread, so join-then-drain deadlocks.
-        worker_timeout = 1800  # 30 minutes (rocprof is multi-pass)
-        deadline = time.time() + worker_timeout
-        results: list[dict[str, Any]] = []
-        remaining_workers = list(workers)
-
-        while remaining_workers and time.time() < deadline:
-            while True:
-                try:
-                    results.append(result_queue.get_nowait())
-                except _queue_mod.Empty:
-                    break
-                except Exception:
-                    break
-            still_alive = []
-            for w in remaining_workers:
-                w.join(timeout=0.5)
-                if w.is_alive():
-                    still_alive.append(w)
-                else:
-                    w.close()
-            remaining_workers = still_alive
-
-        for w in remaining_workers:
-            self.logger.warning(f"Worker {w.pid} timed out, terminating")
-            w.terminate()
-            w.join(timeout=5)
-            if w.is_alive():
-                self.logger.warning(f"Worker {w.pid} still alive, killing")
-                w.kill()
-                w.join(timeout=2)
-            w.close()
-
-        while True:
-            try:
-                results.append(result_queue.get_nowait())
-            except _queue_mod.Empty:
-                break
-            except Exception:
-                break
-
-        result_queue.close()
-        result_queue.join_thread()
-
-        successful = sum(1 for r in results if r.get("success"))
-        self.logger.info(
-            f"Round {round_num}: {successful}/{len(candidates)} workers succeeded "
-            f"({len(results)} results received)"
-        )
-        return results
-
-
-def _rocm_worker_process(
-    worker_id: int,
-    kernel_code: str,
-    known_time: float,
-    parent_id: str,
-    problem_file: Path,
-    test_code: list[str],
-    workdir: Path,
-    log_dir: Path,
-    result_queue: mp.Queue,
-    benchmark_lock: Any,
-    profiling_semaphore: Any,
-    pytorch_baseline: float,
-    bottleneck_id: int,
-    openai_model: str,
-    high_reasoning_effort: bool,
-    bottleneck_override: str | None,
-    worker_kwargs: dict,
-    prior_history: list[dict],
-    prior_reflexions: list[dict],
-    baseline_metrics: dict[str, Any] | None,
-    gpu_id: int,
-) -> None:
-    """Worker process function for AMD ROCm GPUs."""
-    import os
-    import sys
-
-    _pin_rocm_visible_devices(gpu_id)
-    print(
-        f"[worker {worker_id}] pinned to GPU {gpu_id} "
-        f"(HIP_VISIBLE_DEVICES={os.environ['HIP_VISIBLE_DEVICES']})",
-        flush=True,
-    )
-
-    kernel_agent_path = Path(__file__).parent.parent.parent
-    if str(kernel_agent_path) not in sys.path:
-        sys.path.insert(0, str(kernel_agent_path))
-
-    try:
-        from triton_kernel_agent.opt_worker import OptimizationWorker
-
-        workdir.mkdir(parents=True, exist_ok=True)
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        shutil.copy(problem_file, workdir / "problem.py")
-
-        # Copy before popping so later workers still see the shared dict.
-        kwargs = dict(worker_kwargs)
-        kwargs.pop("target_platform", None)
-        worker = OptimizationWorker(
-            worker_id=worker_id,
-            workdir=workdir,
-            log_dir=log_dir,
-            openai_model=openai_model,
-            high_reasoning_effort=high_reasoning_effort,
-            bottleneck_id=bottleneck_id,
-            benchmark_lock=benchmark_lock,
-            profiling_semaphore=profiling_semaphore,
-            pytorch_baseline_time=pytorch_baseline,
-            bottleneck_override=bottleneck_override,
-            prior_history=prior_history,
-            prior_reflexions=prior_reflexions,
-            target_platform="rocm",
-            **kwargs,
-        )
-
-        success, best_kernel, metrics = worker.optimize_kernel(
-            kernel_code=kernel_code,
-            problem_file=problem_file,
-            test_code=test_code,
-            known_kernel_time=known_time,
-            max_opt_rounds=1,
-            baseline_metrics=baseline_metrics,
-        )
-
-        result_queue.put(
-            {
-                "success": success,
-                "worker_id": worker_id,
-                "kernel_code": best_kernel,
-                "time_ms": metrics.get("best_time_ms", float("inf")),
-                "parent_id": parent_id,
-                "openai_model": openai_model,
-                "ptx_hash": metrics.get("best_ptx_hash"),
-                "attempt": metrics.get("last_attempt"),
-                "reflexion": metrics.get("last_reflexion"),
-            }
-        )
-
-    except Exception as e:
-        result_queue.put(
-            {
-                "success": False,
-                "worker_id": worker_id,
-                "openai_model": openai_model,
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-            }
-        )
 
 
 # ---------------------------------------------------------------------------
