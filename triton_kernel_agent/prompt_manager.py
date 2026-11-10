@@ -303,6 +303,7 @@ class PromptManager:
             recent_attempts=recent_attempts,
             reflexions=reflexions,
             rag_context=rag_context,
+            kernel_guidance=self.target_platform.kernel_guidance,
         )
 
     def render_reflexion_prompt(self, attempt) -> str:

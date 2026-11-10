@@ -226,6 +226,21 @@ def _app_command(python_executable: str, benchmark_script: Path) -> list[str]:
     return [python_executable, str(benchmark_script)]
 
 
+def _drop_rocprof_outputs(*paths: Path) -> None:
+    """Remove CSVs a previous kernel left under this prefix."""
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
+def _created_by_this_run(path: Path) -> bool:
+    """True when path exists after this invocation deleted it.
+
+    rocprof can exit 0 without writing. The previous kernel's CSV must be
+    removed first, so a file that is still there was created by this run.
+    """
+    return path.is_file()
+
+
 def _run_rocprof_stats(
     rocprof_bin: str,
     benchmark_script: Path,
@@ -250,6 +265,9 @@ def _run_rocprof_stats(
         "--",
         *_app_command(python_executable, benchmark_script),
     ]
+    stats_written = out_csv.with_name(out_csv.name + "_kernel_stats.csv")
+    trace_written = _kernel_trace_csv(out_csv)
+    _drop_rocprof_outputs(out_csv, stats_written, trace_written)
     print(f"[rocprof] Running stats: {' '.join(cmd[:6])}...")
     result = subprocess.run(
         cmd,
@@ -264,6 +282,12 @@ def _run_rocprof_stats(
         raise RuntimeError(
             f"rocprof --stats failed (rc={result.returncode}):\n"
             f"{(result.stderr or result.stdout)[:500]}"
+        )
+    stats_path = _resolve_collected_csv(out_csv, "_kernel_stats.csv")
+    if not _created_by_this_run(stats_path) or not _created_by_this_run(trace_written):
+        raise RuntimeError(
+            "rocprof --stats exited 0 but did not write "
+            f"{stats_path.name} and {trace_written.name}"
         )
     print("[rocprof] Stats pass completed")
 
@@ -305,6 +329,8 @@ def _run_rocprofv3_pmc_passes(
     """
     import csv
 
+    dest = Path(str(out_csv) + "_counter_collection.csv")
+    _drop_rocprof_outputs(dest)
     combined_header: list[str] | None = None
     combined_rows: list[list[str]] = []
     for index, entry in enumerate(_PMC_V3_PASSES):
@@ -326,6 +352,8 @@ def _run_rocprofv3_pmc_passes(
                 python_executable,
                 str(benchmark_script),
             ]
+            csv_path = Path(str(pass_out) + "_counter_collection.csv")
+            _drop_rocprof_outputs(pass_out, csv_path)
             print(f"[rocprof] Running PMC pass {index + 1}: {' '.join(counters)}")
             result = subprocess.run(
                 cmd,
@@ -344,8 +372,7 @@ def _run_rocprofv3_pmc_passes(
                     f"rocprof PMC pass {index + 1} failed (rc={result.returncode}):\n"
                     f"{(result.stderr or result.stdout)[:500]}"
                 )
-            csv_path = Path(str(pass_out) + "_counter_collection.csv")
-            if not csv_path.exists():
+            if not _created_by_this_run(csv_path):
                 if another_choice:
                     continue
                 raise RuntimeError(
@@ -370,7 +397,6 @@ def _run_rocprofv3_pmc_passes(
     if combined_header is None:
         raise RuntimeError("rocprofv3 PMC produced no counter rows")
 
-    dest = Path(str(out_csv) + "_counter_collection.csv")
     with dest.open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(combined_header)

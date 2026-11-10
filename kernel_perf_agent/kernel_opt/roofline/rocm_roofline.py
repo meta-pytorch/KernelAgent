@@ -44,7 +44,9 @@ class ROCmRooflineConfig:
     early_stop: bool = False
     convergence_rounds: int = 5
     min_improvement_pct: float = 0.1
-    underutilized_threshold: float = 40.0  # Both SOL < this → underutilized
+    # Both measured SOL sides below this → underutilized. An unmeasured
+    # side is not a zero and does not count.
+    underutilized_threshold: float = 40.0
     # Kept so older configs still load. Memory SOL is measured traffic
     # divided by peak bandwidth, so this no longer scales that number.
     miss_rate_amplifier: float = 1.5
@@ -69,7 +71,7 @@ class ROCmRooflineResult:
     headroom_pct: float
 
     # Classification
-    bottleneck: str  # "compute" | "memory" | "underutilized"
+    bottleneck: str  # "compute" | "memory" | "underutilized" | "unknown"
     uses_tensor_cores: bool  # Always False on ROCm (matrix cores tracked differently)
 
     # Supporting data
@@ -166,7 +168,12 @@ class ROCmRooflineAnalyzer:
 
         if compute_measured or memory_measured:
             efficiency = max(compute_sol, memory_sol)
-            bottleneck = self._classify_bottleneck(compute_sol, memory_sol)
+            bottleneck = self._classify_bottleneck(
+                compute_sol,
+                memory_sol,
+                compute_measured=compute_measured,
+                memory_measured=memory_measured,
+            )
             at_roofline = efficiency >= self.config.threshold_pct
         else:
             # Zeros are placeholders, not a measurement. NCU uses "unknown"
@@ -192,12 +199,30 @@ class ROCmRooflineAnalyzer:
             warnings=warnings,
         )
 
-    def _classify_bottleneck(self, compute_sol: float, memory_sol: float) -> str:
-        """Classify the bottleneck from the SOL percentages."""
+    def _classify_bottleneck(
+        self,
+        compute_sol: float,
+        memory_sol: float,
+        *,
+        compute_measured: bool,
+        memory_measured: bool,
+    ) -> str:
+        """Classify from the SOL sides that were measured.
+
+        An unmeasured side is stored as 0 for the formatters. That 0 is not
+        a percent of peak, so it does not count toward underutilized.
+        """
         threshold = self.config.underutilized_threshold
-        if compute_sol < threshold and memory_sol < threshold:
+        if (
+            compute_measured
+            and memory_measured
+            and compute_sol < threshold
+            and memory_sol < threshold
+        ):
             return "underutilized"
-        if memory_sol >= compute_sol:
+        if memory_measured and (
+            not compute_measured or memory_sol >= compute_sol
+        ):
             return "memory"
         return "compute"
 

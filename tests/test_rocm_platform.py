@@ -289,6 +289,25 @@ def test_optimization_prompt_uses_cu_labels_for_cdna():
     assert "Max Threads per CU" in text
     assert "L1 Cache per CU" in text
     assert "SM Count" not in text
+    assert "Do not use tensor descriptors or TMA" in text
+    assert "Do not pass warp_specialize" in text
+
+    cuda = PromptManager(target_platform=get_platform("cuda"))
+    cuda_text = cuda.render_kernel_optimization_prompt(
+        problem_description="problem",
+        kernel_code="kernel",
+        gpu_specs=mi300,
+        roofline={},
+        category="memory",
+        summary="summary",
+        reasoning="reasoning",
+        root_cause={"cause": "cause"},
+        recommended_fix={"fix": "fix"},
+        pytorch_baseline_ms=1.0,
+        current_best_ms=1.0,
+    )
+    assert "tensor descriptors" not in cuda_text
+    assert "warp_specialize" not in cuda_text
 
     h100 = get_gpu_specs("NVIDIA H100 SXM5 80GB")
     assert h100 is not None
@@ -528,6 +547,81 @@ def test_rocprofv3_pass_without_csv_is_not_collected(tmp_path):
             timeout=30,
         )
     assert not Path(str(out_csv) + "_counter_collection.csv").exists()
+
+
+def test_rocprof_exit_0_does_not_keep_the_previous_kernel(tmp_path):
+    bin_path = _fake_rocprof(tmp_path / "rocprofv3", "import sys\nraise SystemExit(0)\n")
+    stats = tmp_path / "rocprof_round_1_stats.csv"
+    pmc = tmp_path / "rocprof_round_1_pmc.csv"
+    stats.with_name(stats.name + "_kernel_stats.csv").write_text(
+        "Name,Calls,TotalDurationNs,AverageNs,Percentage\n"
+        "old_kernel,1,5000000,5000000,100\n"
+    )
+    Path(str(stats) + "_kernel_trace.csv").write_text(
+        "Kind,Kernel_Name,Start_Timestamp,End_Timestamp\n"
+        "KERNEL_DISPATCH,old_kernel,0,5000000\n"
+    )
+    # Pass 2 choice 0 is TCC_EA0_RDREQ. Pass 4 is FETCH_SIZE.
+    Path(str(pmc) + "_pass2_0_counter_collection.csv").write_text(
+        "Counter_Name,Counter_Value\nTCC_EA0_RDREQ_sum,99\n"
+    )
+    Path(str(pmc) + "_pass4_0_counter_collection.csv").write_text(
+        "Counter_Name,Counter_Value\nFETCH_SIZE,4194304\n"
+    )
+    shared = {
+        "rocprof_bin": bin_path,
+        "benchmark_script": tmp_path / "bench.py",
+        "workdir": tmp_path,
+        "python_executable": sys.executable,
+        "env": {},
+        "timeout": 30,
+    }
+    with pytest.raises(RuntimeError, match="did not write"):
+        _run_rocprof_stats(out_csv=stats, **shared)
+    with pytest.raises(RuntimeError, match="wrote no"):
+        _run_rocprofv3_pmc_passes(out_csv=pmc, **shared)
+    with pytest.raises(RuntimeError, match="without a usable CSV"):
+        _merge_rocprof_outputs(stats, pmc)
+
+
+def test_rocprof_stale_ea_file_does_not_skip_the_backup_name(tmp_path):
+    bin_path = _fake_rocprof(
+        tmp_path / "rocprofv3",
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out = Path(args[args.index('-o') + 1])\n"
+        "text = Path(args[args.index('-i') + 1]).read_text()\n"
+        "if 'TCC_EA0_' in text:\n"
+        "    raise SystemExit(0)\n"
+        "name, value = 'SQ_WAVES', '1'\n"
+        "if 'TCC_EA_RDREQ_sum' in text:\n"
+        "    name, value = 'TCC_EA_RDREQ_sum', '11'\n"
+        "elif 'TCC_EA_WRREQ_sum' in text:\n"
+        "    name, value = 'TCC_EA_WRREQ_sum', '7'\n"
+        "elif 'FETCH_SIZE' in text:\n"
+        "    name, value = 'FETCH_SIZE', '8'\n"
+        "out.with_name(out.name + '_counter_collection.csv').write_text(\n"
+        "    f'Counter_Name,Counter_Value\\n{name},{value}\\n'\n"
+        ")\n",
+    )
+    pmc = tmp_path / "pmc.csv"
+    Path(str(pmc) + "_pass2_0_counter_collection.csv").write_text(
+        "Counter_Name,Counter_Value\nTCC_EA0_RDREQ_sum,99\n"
+    )
+    _run_rocprofv3_pmc_passes(
+        rocprof_bin=bin_path,
+        benchmark_script=tmp_path / "bench.py",
+        workdir=tmp_path,
+        out_csv=pmc,
+        python_executable=sys.executable,
+        env={},
+        timeout=30,
+    )
+    text = Path(str(pmc) + "_counter_collection.csv").read_text()
+    assert "TCC_EA_RDREQ_sum,11" in text
+    assert "TCC_EA0_RDREQ_sum,99" not in text
+    assert "FETCH_SIZE,8" in text
 
 
 def test_rocprofv3_uses_long_output_format(tmp_path):
@@ -1306,6 +1400,7 @@ def test_memory_sol_is_traffic_divided_by_peak():
     assert slow.compute_sol_pct == 0.0
     assert slow.compute_sol_measured is False
     assert slow.at_roofline is False
+    assert slow.bottleneck == "memory"
     from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import (
         format_rocm_roofline_summary,
     )
@@ -1316,6 +1411,14 @@ def test_memory_sol_is_traffic_divided_by_peak():
     assert "Compute SOL:" not in summary
     assert "Memory SOL:" in summary
     assert "traffic / peak bandwidth" in summary
+    assert "underutilized" not in summary
+
+    both_low = analyzer.analyze(
+        ncu_metrics={"compute_sol_pct": 10.0, "memory_sol_pct": 20.0}
+    )
+    assert both_low.compute_sol_measured is True
+    assert both_low.memory_sol_measured is True
+    assert both_low.bottleneck == "underutilized"
 
     saturated = analyzer.analyze(
         ncu_metrics={
@@ -1475,3 +1578,29 @@ def test_create_kwargs_keep_temperature_in_extra_body():
     )
     assert params["extra_body"] == {"temperature": 0.0}
     assert "output_config" not in params
+
+
+def test_get_response_forwards_temperature_once():
+    from utils.providers.anthropic_provider import AnthropicProvider
+
+    captured = {}
+
+    class _Messages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(text="ok")])
+
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider.client = SimpleNamespace(messages=_Messages())
+    provider.is_available = lambda: True
+    provider.get_max_tokens_limit = lambda _name: 8192
+    response = provider.get_response(
+        "claude-opus-4-6",
+        [{"role": "user", "content": "hi"}],
+        temperature=0.8,
+        high_reasoning_effort=True,
+    )
+    assert response.content == "ok"
+    assert captured["extra_body"] == {"temperature": 0.8}
+    assert "temperature" not in captured
+    assert "output_config" not in captured

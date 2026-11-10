@@ -90,12 +90,15 @@ class AnthropicProvider(BaseProvider):
             raise RuntimeError("Anthropic client not available")
 
         user_content = messages[-1]["content"] if messages else ""
+        # Callers such as seed generation already put temperature in kwargs.
+        # _create_kwargs takes that value as its own argument.
+        forwarded = {k: v for k, v in kwargs.items() if k != "temperature"}
         response = self.client.messages.create(
             **self._create_kwargs(
                 model_name,
                 [{"role": "user", "content": user_content}],
                 kwargs.get("temperature", 0.7),
-                **kwargs,
+                **forwarded,
             )
         )
 

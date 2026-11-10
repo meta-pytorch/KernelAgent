@@ -127,6 +127,10 @@ Guidance for this round:
 - Maintain numerical correctness (atol=1e-4 or rtol=1e-4)
 - Preserve public API (same inputs/outputs, shapes, dtypes)
 
+{% if kernel_guidance %}
+{{ kernel_guidance }}
+{% endif %}
+
 ## REQUIREMENTS
 1. Apply the recommended fixes above to address the {{ bottleneck.category | upper }} bottleneck
 2. The implementation must be a complete, valid Python file
