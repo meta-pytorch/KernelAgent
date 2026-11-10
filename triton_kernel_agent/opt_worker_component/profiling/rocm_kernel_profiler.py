@@ -34,7 +34,7 @@ from triton_kernel_agent.opt_worker_component.profiling.rocprof_wrapper_factory 
     ROCmWrapperFactory,
 )
 
-# Default timeout for rocprof profiling in seconds (two passes = 2x NVIDIA time)
+# Seconds for one profile, shared by the stats pass and every counter pass.
 DEFAULT_ROCPROF_TIMEOUT_SECONDS = 600
 
 # Default timeout for profiling semaphore (15 minutes)
@@ -104,7 +104,7 @@ class ROCmKernelProfiler:
             artifacts_dir: Directory for optimization artifacts.
             logs_dir: Directory for saving profiling logs.
             rocprof_bin_path: Path to rocprof binary (auto-detect if None).
-            rocprof_timeout_seconds: Timeout per rocprof invocation.
+            rocprof_timeout_seconds: Seconds for the whole profile.
             profiling_semaphore: Semaphore to limit concurrent rocprof runs.
         """
         self.logger = logger
@@ -222,17 +222,11 @@ class ROCmKernelProfiler:
                 return None
 
             except subprocess.TimeoutExpired:
-                is_final = attempt >= max_retries
-                if is_final:
-                    self.logger.error(
-                        f"❌ rocprof timed out after {self.rocprof_timeout_seconds}s "
-                        f"(final attempt {attempt}/{max_retries})"
-                    )
-                    return None
-                self.logger.debug(
-                    f"rocprof timed out (attempt {attempt}/{max_retries})"
+                # A hung rocprof command hangs the same way on a second attempt.
+                self.logger.error(
+                    f"❌ rocprof timed out after {self.rocprof_timeout_seconds}s"
                 )
-                self._wait_with_backoff(attempt)
+                return None
 
             except Exception as e:
                 is_final = attempt >= max_retries

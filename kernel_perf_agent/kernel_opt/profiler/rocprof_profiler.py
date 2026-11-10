@@ -37,6 +37,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -157,7 +158,7 @@ def profile_triton_kernel_rocm(
         out_prefix: Prefix for output filenames.
         python_executable: Python executable (default: sys.executable).
         rocprof_bin: Path to rocprofv3 (auto-detect if None).
-        timeout: Timeout in seconds per rocprof invocation.
+        timeout: Seconds for the whole profile. Each command gets the time left.
 
     Returns:
         Path to the merged JSON metrics file.
@@ -185,6 +186,9 @@ def profile_triton_kernel_rocm(
     stats_csv = workdir / f"{out_prefix}_stats.csv"
     pmc_csv = workdir / f"{out_prefix}_pmc.csv"
     metrics_json = workdir / f"{out_prefix}_metrics.json"
+    # One budget for every command. A per-command budget times seven passes
+    # can outlive the worker that is waiting for this profile.
+    deadline = time.monotonic() + timeout
 
     # ------------------------------------------------------------------
     # Pass 1: timing stats (--stats)
@@ -197,6 +201,7 @@ def profile_triton_kernel_rocm(
         python_executable=python_executable,
         env=env,
         timeout=timeout,
+        deadline=deadline,
     )
 
     # ------------------------------------------------------------------
@@ -210,6 +215,7 @@ def profile_triton_kernel_rocm(
         python_executable=python_executable,
         env=env,
         timeout=timeout,
+        deadline=deadline,
     )
 
     # ------------------------------------------------------------------
@@ -232,6 +238,20 @@ def _drop_rocprof_outputs(*paths: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _remaining_timeout(timeout: float, deadline: float | None) -> float:
+    """Seconds this command may run.
+
+    ``deadline`` is the end of the whole profile. Callers that profile one
+    command omit it and use ``timeout`` as that command's own limit.
+    """
+    if deadline is None:
+        return float(timeout)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired("rocprofv3", timeout)
+    return remaining
+
+
 def _created_by_this_run(path: Path) -> bool:
     """True when path exists after this invocation deleted it.
 
@@ -249,6 +269,7 @@ def _run_rocprof_stats(
     python_executable: str,
     env: dict,
     timeout: int,
+    deadline: float | None = None,
 ) -> None:
     """Collect kernel timing with rocprofv3.
 
@@ -267,6 +288,7 @@ def _run_rocprof_stats(
     ]
     stats_written = out_csv.with_name(out_csv.name + "_kernel_stats.csv")
     trace_written = _kernel_trace_csv(out_csv)
+    command_timeout = _remaining_timeout(timeout, deadline)
     _drop_rocprof_outputs(out_csv, stats_written, trace_written)
     print(f"[rocprof] Running stats: {' '.join(cmd[:6])}...")
     result = subprocess.run(
@@ -275,7 +297,7 @@ def _run_rocprof_stats(
         env=env,
         capture_output=True,
         text=True,
-        timeout=timeout,
+        timeout=command_timeout,
         check=False,
     )
     if result.returncode != 0:
@@ -300,6 +322,7 @@ def _run_rocprof_pmc(
     python_executable: str,
     env: dict,
     timeout: int,
+    deadline: float | None = None,
 ) -> None:
     """Collect PMC counters with one rocprofv3 run per counter group."""
     _run_rocprofv3_pmc_passes(
@@ -310,6 +333,7 @@ def _run_rocprof_pmc(
         python_executable=python_executable,
         env=env,
         timeout=timeout,
+        deadline=deadline,
     )
 
 
@@ -321,6 +345,7 @@ def _run_rocprofv3_pmc_passes(
     python_executable: str,
     env: dict,
     timeout: int,
+    deadline: float | None = None,
 ) -> None:
     """Collect each rocprofv3 counter group into its own CSV, then merge.
 
@@ -337,6 +362,7 @@ def _run_rocprofv3_pmc_passes(
         choices = entry if isinstance(entry, tuple) else (entry,)
         collected: list[list[str]] | None = None
         for choice_index, counters in enumerate(choices):
+            command_timeout = _remaining_timeout(timeout, deadline)
             pass_input = workdir / f"rocprof_input_pass{index}_{choice_index}.txt"
             pass_input.write_text("pmc: " + " ".join(counters) + "\n")
             pass_out = workdir / f"{out_csv.name}_pass{index}_{choice_index}"
@@ -361,7 +387,7 @@ def _run_rocprofv3_pmc_passes(
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=timeout,
+                timeout=command_timeout,
                 check=False,
             )
             another_choice = choice_index + 1 < len(choices)

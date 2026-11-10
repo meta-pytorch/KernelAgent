@@ -16,7 +16,9 @@
 
 import inspect
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -31,6 +33,7 @@ from kernel_perf_agent.kernel_opt.profiler.rocprof_profiler import (
     _run_rocprof_pmc,
     _run_rocprof_stats,
     _run_rocprofv3_pmc_passes,
+    profile_triton_kernel_rocm,
 )
 from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import ROCmRooflineAnalyzer
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
@@ -622,6 +625,115 @@ def test_rocprof_stale_ea_file_does_not_skip_the_backup_name(tmp_path):
     assert "TCC_EA_RDREQ_sum,11" in text
     assert "TCC_EA0_RDREQ_sum,99" not in text
     assert "FETCH_SIZE,8" in text
+
+
+def test_hung_rocprof_command_stops_at_the_profile_budget(tmp_path):
+    script = tmp_path / "bench.py"
+    script.write_text("print('hi')\n")
+    bin_path = _fake_rocprof(tmp_path / "rocprofv3", "import time\ntime.sleep(30)\n")
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        profile_triton_kernel_rocm(
+            benchmark_script=script,
+            workdir=tmp_path,
+            rocprof_bin=bin_path,
+            timeout=1,
+        )
+    assert time.monotonic() - started < 10
+    assert not (tmp_path / "rocprof_input_pass0_0.txt").exists()
+
+
+def test_profile_budget_is_shared_by_every_rocprof_command(tmp_path, monkeypatch):
+    script = tmp_path / "bench.py"
+    script.write_text("print('hi')\n")
+    bin_path = _fake_rocprof(
+        tmp_path / "rocprofv3",
+        "import sys\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "out = Path(args[args.index('-o') + 1])\n"
+        "if '--stats' not in args:\n"
+        "    raise SystemExit(0)\n"
+        "out.with_name(out.name + '_kernel_stats.csv').write_text(\n"
+        "    'Name,Calls,TotalDurationNs,AverageNs,Percentage\\n'\n"
+        "    'gemm,1,100000,100000,100\\n'\n"
+        ")\n"
+        "out.with_name(out.name + '_kernel_trace.csv').write_text(\n"
+        "    'Kind,Kernel_Name,Start_Timestamp,End_Timestamp\\n'\n"
+        "    'KERNEL_DISPATCH,gemm,0,100000\\n'\n"
+        ")\n",
+    )
+    reads = {"n": 0}
+
+    def monotonic():
+        reads["n"] += 1
+        # Deadline, then the stats command. The counter passes see a spent budget.
+        if reads["n"] <= 2:
+            return 1_000.0
+        return 2_000.0
+
+    monkeypatch.setattr(
+        "kernel_perf_agent.kernel_opt.profiler.rocprof_profiler.time.monotonic",
+        monotonic,
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        profile_triton_kernel_rocm(
+            benchmark_script=script,
+            workdir=tmp_path,
+            rocprof_bin=bin_path,
+            timeout=600,
+        )
+    assert (tmp_path / "rocprof_output_stats.csv_kernel_stats.csv").is_file()
+    assert not (tmp_path / "rocprof_input_pass0_0.txt").exists()
+
+
+def test_counter_pass_does_not_start_after_the_budget(tmp_path):
+    bin_path = _fake_rocprof(tmp_path / "rocprofv3", "import sys\nraise SystemExit(0)\n")
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_rocprofv3_pmc_passes(
+            rocprof_bin=bin_path,
+            benchmark_script=tmp_path / "bench.py",
+            workdir=tmp_path,
+            out_csv=tmp_path / "pmc.csv",
+            python_executable=sys.executable,
+            env={},
+            timeout=30,
+            deadline=time.monotonic() - 1,
+        )
+    assert not (tmp_path / "rocprof_input_pass0_0.txt").exists()
+
+
+def test_rocprof_timeout_is_not_retried(tmp_path, monkeypatch):
+    import logging
+
+    from triton_kernel_agent.opt_worker_component.profiling.rocm_kernel_profiler import (
+        ROCmKernelProfiler,
+    )
+
+    calls = {"n": 0}
+
+    def boom(**_kwargs):
+        calls["n"] += 1
+        raise subprocess.TimeoutExpired("rocprofv3", 600)
+
+    monkeypatch.setattr(
+        "triton_kernel_agent.opt_worker_component.profiling.rocm_kernel_profiler.profile_triton_kernel_rocm",
+        boom,
+    )
+    profiler = ROCmKernelProfiler(
+        logger=logging.getLogger("rocprof-timeout"),
+        artifacts_dir=tmp_path,
+        logs_dir=tmp_path,
+    )
+    result = profiler._profile_kernel_impl(
+        wrapper_file=tmp_path / "wrap.py",
+        kernel_file=tmp_path / "kernel.py",
+        problem_file=tmp_path / "problem.py",
+        round_num=1,
+        max_retries=2,
+    )
+    assert result is None
+    assert calls["n"] == 1
 
 
 def test_rocprofv3_uses_long_output_format(tmp_path):
