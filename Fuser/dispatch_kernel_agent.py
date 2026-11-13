@@ -461,8 +461,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--test-timeout-s",
         type=int,
-        default=30,
-        help="Timeout for each test (default: 30s)",
+        default=None,
+        help="Per-test timeout in seconds. Omitted: 30 on CUDA and XPU, 300 on ROCm.",
     )
     p.add_argument(
         "--target-platform",

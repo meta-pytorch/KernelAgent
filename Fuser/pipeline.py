@@ -179,7 +179,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=get_platform_choices(),
         help="Target platform",
     )
-    p.add_argument("--test-timeout-s", type=int, default=30)
+    p.add_argument(
+        "--test-timeout-s",
+        type=int,
+        default=None,
+        help="Per-test timeout in seconds. Omitted: 30 on CUDA and XPU, 300 on ROCm.",
+    )
     args = p.parse_args(argv)
 
     problem_path = Path(args.problem).resolve()
@@ -202,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             verify=args.verify,
             compose_max_iters=args.compose_max_iters,
             target_platform=args.target_platform,
-            test_timeout_s=args.run_timeout_s,
+            test_timeout_s=args.test_timeout_s,
         )
         print(json.dumps(res, indent=2))
         return 0

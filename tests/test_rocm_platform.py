@@ -37,6 +37,7 @@ from kernel_perf_agent.kernel_opt.profiler.rocprof_profiler import (
 )
 from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import ROCmRooflineAnalyzer
 from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
+    OptimizationOrchestrator,
     _get_triton_kernel_metrics,
     profiler_is_rocm,
     should_disable_profiling,
@@ -142,12 +143,180 @@ def test_synthetic_mode_is_rocm_only():
     assert should_disable_profiling(cuda, profiling_available=False) is False
 
 
+def test_failed_rocm_baseline_disables_profiling(tmp_path):
+    import logging
+
+    problem = tmp_path / "problem.py"
+    problem.write_text("def problem():\n    return 1\n")
+    calls = {"n": 0}
+
+    def profile_kernel(*_args, **_kwargs):
+        calls["n"] += 1
+
+    def run(platform: str) -> int:
+        calls["n"] = 0
+        orchestrator = OptimizationOrchestrator(
+            profiler=SimpleNamespace(platform=platform, profile_kernel=profile_kernel),
+            benchmarker=SimpleNamespace(),
+            bottleneck_analyzer=SimpleNamespace(),
+            verification_worker=SimpleNamespace(),
+            prompt_manager=SimpleNamespace(
+                render_kernel_optimization_prompt=lambda **_kwargs: "prompt"
+            ),
+            provider=SimpleNamespace(),
+            model="m",
+            high_reasoning_effort=False,
+            kernel_file=tmp_path / "kernel.py",
+            gpu_specs={},
+            pytorch_baseline_time=1.0,
+            artifact_dir=tmp_path,
+            output_dir=tmp_path,
+            logger=logging.getLogger(f"baseline-{platform}"),
+            roofline_analyzer=SimpleNamespace(reset_history=lambda: None),
+        )
+        orchestrator._generate_optimized_kernel = lambda *_a, **_k: None  # type: ignore[method-assign]
+        orchestrator._finalize_results = lambda *_a, **_k: (False, "", {})  # type: ignore[method-assign]
+        orchestrator.optimize_kernel(
+            "def kernel_function():\n    return 1\n",
+            problem,
+            ["def test():\n    pass\n"],
+            known_kernel_time=1.0,
+            max_opt_rounds=1,
+        )
+        return calls["n"]
+
+    assert run("rocm") == 1
+    assert run("nvidia") == 2
+
+
 def test_timeout_default_is_platform_specific():
     assert resolve_test_timeout_s(None, "cuda") == 30
     assert resolve_test_timeout_s(None, "xpu") == 30
     assert resolve_test_timeout_s(None, "rocm") == 300
     assert resolve_test_timeout_s(30, "rocm") == 30
     assert resolve_test_timeout_s(None, get_platform("rocm")) == 300
+
+
+def test_omitted_cli_test_timeout_follows_the_platform(tmp_path, monkeypatch):
+    subgraphs = tmp_path / "subgraphs.json"
+    subgraphs.write_text("[]")
+    problem = tmp_path / "problem.py"
+    problem.write_text("def model():\n    return 1\n")
+    dispatch_seen: dict = {}
+    pipeline_seen: dict = {}
+    router_seen: dict = {}
+
+    def fake_dispatch(*_args, **kwargs):
+        dispatch_seen.update(kwargs)
+        return tmp_path / "summary.json"
+
+    def fake_pipeline(**kwargs):
+        pipeline_seen.update(kwargs)
+        return {}
+
+    class FakeRouter:
+        def __init__(self, **kwargs):
+            router_seen.update(kwargs)
+
+        def solve(self, _path):
+            return SimpleNamespace(
+                route="kernelagent", success=True, details={}, kernel_code=None
+            )
+
+    monkeypatch.setattr("Fuser.dispatch_kernel_agent.run", fake_dispatch)
+    monkeypatch.setattr("Fuser.pipeline.run_pipeline", fake_pipeline)
+    monkeypatch.setattr("Fuser.auto_agent.AutoKernelRouter", FakeRouter)
+    from Fuser.auto_agent import main as auto_main
+    from Fuser.dispatch_kernel_agent import main as dispatch_main
+    from Fuser.pipeline import main as pipeline_main
+
+    assert (
+        dispatch_main(
+            [
+                "--subgraphs",
+                str(subgraphs),
+                "--out-dir",
+                str(tmp_path / "out"),
+                "--target-platform",
+                "rocm",
+            ]
+        )
+        == 0
+    )
+    assert (
+        pipeline_main(
+            ["--problem", str(problem), "--target-platform", "rocm"]
+        )
+        == 0
+    )
+    assert auto_main(["--problem", str(problem), "--target-platform", "rocm"]) == 0
+    for seen in (dispatch_seen, pipeline_seen, router_seen):
+        assert seen["test_timeout_s"] is None
+        assert resolve_test_timeout_s(seen["test_timeout_s"], "rocm") == 300
+        assert resolve_test_timeout_s(seen["test_timeout_s"], "cuda") == 30
+    assert pipeline_seen["run_timeout_s"] == 1200
+    assert router_seen["run_timeout_s"] == 1200
+
+    assert (
+        dispatch_main(
+            [
+                "--subgraphs",
+                str(subgraphs),
+                "--out-dir",
+                str(tmp_path / "out"),
+                "--target-platform",
+                "rocm",
+                "--test-timeout-s",
+                "30",
+            ]
+        )
+        == 0
+    )
+    assert dispatch_seen["test_timeout_s"] == 30
+    assert resolve_test_timeout_s(30, "rocm") == 30
+
+
+def test_kernelagent_route_uses_the_test_timeout(monkeypatch):
+    from Fuser.auto_agent import AutoKernelRouter
+
+    seen: dict = {}
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def generate_kernel(self, **_kwargs):
+            return {"success": True, "kernel_code": "def kernel_function():\n    return 1\n"}
+
+        def cleanup(self):
+            return None
+
+    monkeypatch.setattr("Fuser.auto_agent.TritonKernelAgent", FakeAgent)
+    router = AutoKernelRouter.__new__(AutoKernelRouter)
+    router.ka_num_workers = 1
+    router.ka_max_rounds = 1
+    router.ka_model = "m"
+    router.ka_high_reasoning = False
+    router.platform_config = get_platform("rocm")
+    router.no_cusolver = False
+    router.test_timeout_s = None
+    router.run_timeout_s = 1200
+    router._solve_with_kernelagent("problem")
+    assert seen["test_timeout_s"] is None
+    assert resolve_test_timeout_s(seen["test_timeout_s"], "rocm") == 300
+
+
+def test_strategy_all_skips_vendor_configs():
+    from examples.run_opt_manager import _all_strategies, _discover_strategies
+
+    discovered = _discover_strategies()
+    selected = _all_strategies()
+    assert "beam_search" in selected
+    assert "greedy" in selected
+    assert "amd" not in selected
+    assert "nvidia" not in selected
+    assert "amd" in discovered
+    assert "nvidia" in discovered
 
 
 def test_gfx_isa_names_map_onto_spec_database_keys():

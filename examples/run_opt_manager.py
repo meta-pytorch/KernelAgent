@@ -40,9 +40,19 @@ load_dotenv()
 _CONFIGS_DIR = Path(__file__).resolve().parent / "configs"
 
 
+# Vendor files stay available as --strategy amd and --strategy nvidia.
+# `all` is the search comparison, so it does not run them on every host.
+_VENDOR_STRATEGIES = {"amd", "nvidia"}
+
+
 def _discover_strategies() -> list[str]:
     """Discover available strategies from yaml files in the configs directory."""
     return sorted(p.stem for p in _CONFIGS_DIR.glob("*.yaml"))
+
+
+def _all_strategies() -> list[str]:
+    """Strategies compared by --strategy all."""
+    return [name for name in _discover_strategies() if name not in _VENDOR_STRATEGIES]
 
 
 def _run_strategy(
@@ -116,7 +126,7 @@ def main():
     parser.add_argument(
         "--strategy",
         default="beam_search",
-        help="Optimization strategy to use, or 'all' to run every config in configs/ (default: beam_search)",
+        help="Optimization strategy, or 'all' to compare the search configs (default: beam_search)",
     )
     parser.add_argument(
         "--max-rounds",
@@ -165,7 +175,7 @@ def main():
     # Run selected strategy
     if args.strategy == "all":
         results = {}
-        for strategy in _discover_strategies():
+        for strategy in _all_strategies():
             results[strategy] = _run_strategy(
                 strategy,
                 kernel_code,

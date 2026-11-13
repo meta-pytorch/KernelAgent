@@ -547,17 +547,23 @@ class OptimizationOrchestrator:
         self.logger.info(f"Problem: {problem_description[:100]}...")
 
         # Benchmark baseline and PyTorch (now includes baseline SOL profiling)
-        best_time, baseline_results, pytorch_baseline_time, baseline_sol = (
-            self._benchmark_baseline(
-                kernel_code, problem_file, known_kernel_time, baseline_metrics
-            )
+        (
+            best_time,
+            baseline_results,
+            pytorch_baseline_time,
+            baseline_sol,
+            baseline_profiled,
+        ) = self._benchmark_baseline(
+            kernel_code, problem_file, known_kernel_time, baseline_metrics
         )
 
         # Two-kernel tracking: track best-by-runtime and best-by-SOL independently
         # This prevents mixing metrics from different kernels.
-        # Profiling starts enabled. A later ROCm rocprof failure can switch
-        # this session to synthetic analysis. A CUDA failure does not.
-        profiling_globally_available = True
+        # A failed ROCm baseline turns profiling off before round 1. CUDA
+        # keeps profiling, and a cached baseline counts as measured.
+        profiling_globally_available = not should_disable_profiling(
+            self.profiler, baseline_profiled
+        )
         best_runtime_kernel = kernel_code
         best_runtime_time = best_time
         best_runtime_sol = baseline_sol
@@ -906,7 +912,7 @@ class OptimizationOrchestrator:
         problem_file: Path,
         known_kernel_time: float | None,
         cached_baseline_metrics: dict[str, Any] | None = None,
-    ) -> tuple[float, dict[str, float], float | None, float]:
+    ) -> tuple[float, dict[str, float], float | None, float, bool]:
         """Benchmark baseline kernel and PyTorch, and profile baseline SOL.
 
         When ``cached_baseline_metrics`` is supplied, the NCU/roofline step
@@ -915,7 +921,9 @@ class OptimizationOrchestrator:
         the same parent kernel.
 
         Returns:
-            Tuple of (best_time, baseline_results, pytorch_baseline_time, baseline_sol)
+            Tuple of (best_time, baseline_results, pytorch_baseline_time,
+            baseline_sol, baseline_profiled). ``baseline_profiled`` is false
+            only when this call's own profile returned nothing.
         """
         baseline_sol = 0.0
 
@@ -940,11 +948,13 @@ class OptimizationOrchestrator:
         # Profile baseline kernel for SOL metrics (skip if cached)
         if cached_baseline_metrics is not None:
             baseline_metrics = cached_baseline_metrics
+            baseline_profiled = True
             self.logger.info("📊 Baseline SOL: (using cached profile from manager)")
         else:
             baseline_metrics = self._profile_kernel_for_sol(
                 kernel_code, problem_file, 0
             )
+            baseline_profiled = baseline_metrics is not None
         if baseline_metrics:
             baseline_sol = baseline_metrics.get("efficiency_pct", 0.0)
             bottleneck = baseline_metrics.get("bottleneck", "unknown")
@@ -981,7 +991,13 @@ class OptimizationOrchestrator:
             else:
                 pytorch_baseline_time = None
 
-        return best_time, baseline_results, pytorch_baseline_time, baseline_sol
+        return (
+            best_time,
+            baseline_results,
+            pytorch_baseline_time,
+            baseline_sol,
+            baseline_profiled,
+        )
 
     def _profile_and_analyze(
         self,
