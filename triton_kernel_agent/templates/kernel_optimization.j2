@@ -24,9 +24,15 @@ TASK: Optimize the following Triton kernel based on hardware profiling analysis 
 - Peak FP32: {{ gpu_specs.peak_fp32_tflops }} TFLOPS
 - Peak FP16: {{ gpu_specs.peak_fp16_tflops }} TFLOPS
 - Peak BF16: {{ gpu_specs.peak_bf16_tflops }} TFLOPS
+{% if gpu_specs.architecture.startswith('CDNA') or ('cu_count' in gpu_specs) %}
+- CU Count: {{ gpu_specs.sm_count }}
+- Max Threads per CU: {{ gpu_specs.max_threads_per_sm }}
+- L1 Cache per CU: {{ gpu_specs.l1_cache_kb }} KB
+{% else %}
 - SM Count: {{ gpu_specs.sm_count }}
 - Max Threads per SM: {{ gpu_specs.max_threads_per_sm }}
 - L1 Cache per SM: {{ gpu_specs.l1_cache_kb }} KB
+{% endif %}
 - L2 Cache: {{ gpu_specs.l2_cache_mb }} MB
 - Memory: {{ gpu_specs.memory_gb }} GB {{ gpu_specs.memory_type }}
 {% endif %}
@@ -45,9 +51,15 @@ PyTorch Eager baseline: {{ "%.4f"|format(pytorch_baseline_ms) }} ms
 {% if roofline %}
 ## ROOFLINE ANALYSIS
 - Primary Bottleneck: {{ roofline.bottleneck | upper }}
+{% if roofline.compute_sol_measured is not defined or roofline.compute_sol_measured -%}
 - Compute SOL: {{ "%.1f"|format(roofline.compute_sol_pct) }}%
+{% endif -%}
+{% if roofline.memory_sol_measured is not defined or roofline.memory_sol_measured -%}
 - Memory SOL: {{ "%.1f"|format(roofline.memory_sol_pct) }}%
+{% endif -%}
+{% if roofline.compute_sol_measured is not defined or roofline.memory_sol_measured is not defined or roofline.compute_sol_measured or roofline.memory_sol_measured -%}
 - Efficiency: {{ "%.1f"|format(roofline.efficiency_pct) }}% (headroom: {{ "%.1f"|format(roofline.headroom_pct) }}%)
+{% endif -%}
 - At Roofline: {{ "Yes" if roofline.at_roofline else "No" }}
 - Tensor Cores: {{ "Active" if roofline.uses_tensor_cores else "Inactive" }}
 {%- if roofline.warnings %}
@@ -114,6 +126,10 @@ Guidance for this round:
 {% endif %}
 - Maintain numerical correctness (atol=1e-4 or rtol=1e-4)
 - Preserve public API (same inputs/outputs, shapes, dtypes)
+
+{% if kernel_guidance %}
+{{ kernel_guidance }}
+{% endif %}
 
 ## REQUIREMENTS
 1. Apply the recommended fixes above to address the {{ bottleneck.category | upper }} bottleneck

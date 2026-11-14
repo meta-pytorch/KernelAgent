@@ -59,8 +59,8 @@ from utils.config_injectable import config_injectable
 # Local imports (available inside repo)
 from triton_kernel_agent import TritonKernelAgent
 from triton_kernel_agent.platform_config import (
-    get_platform_choices,
     get_platform,
+    get_platform_choices,
 )
 from utils.providers.models import get_model_provider, is_model_available
 
@@ -349,7 +349,7 @@ class AutoKernelRouter:
         ignore_router_config: bool = False,
         use_router_cache: bool = True,
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int | None = None,
         test_code: str | None = None,
     ) -> None:
         self.ka_model = ka_model
@@ -389,7 +389,7 @@ class AutoKernelRouter:
             high_reasoning_effort=self.ka_high_reasoning,
             target_platform=self.platform_config,
             no_cusolver=self.no_cusolver,
-            test_timeout_s=self.run_timeout_s,
+            test_timeout_s=self.test_timeout_s,
         )
         try:
             # Ensure exceptions in KernelAgent do not abort routing; return a structured failure
@@ -738,7 +738,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ka-workers", type=int, default=4)
     p.add_argument("--ka-rounds", type=int, default=10)
     p.add_argument("--no-ka-high-reasoning", action="store_true")
-    p.add_argument("--test-timeout-s", type=int, default=30)
+    p.add_argument(
+        "--test-timeout-s",
+        type=int,
+        default=None,
+        help="Per-test timeout in seconds. Omitted: 30 on CUDA and XPU, 300 on ROCm.",
+    )
     p.add_argument("--router-model", default="gpt-5")
     p.add_argument("--no-router-high-reasoning", action="store_true")
     p.add_argument("--router-temp", type=float, default=0.2)
@@ -825,7 +830,7 @@ def main(argv: list[str] | None = None) -> int:
             ignore_router_config=args.ignore_router_config,
             use_router_cache=(not args.no_router_cache),
             no_cusolver=args.no_cusolver,
-            test_timeout_s=args.run_timeout_s,
+            test_timeout_s=args.test_timeout_s,
             test_code=test_code,
         )
 

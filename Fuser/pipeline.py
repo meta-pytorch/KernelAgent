@@ -40,7 +40,10 @@ from pathlib import Path
 from .subgraph_extractor import extract_subgraphs_to_json
 from .dispatch_kernel_agent import run as dispatch_run
 from .compose_end_to_end import compose
-from triton_kernel_agent.platform_config import get_platform_choices
+from triton_kernel_agent.platform_config import (
+    get_platform_choices,
+    resolve_test_timeout_s,
+)
 
 
 def run_pipeline(
@@ -57,8 +60,9 @@ def run_pipeline(
     verify: bool = True,
     compose_max_iters: int = 5,
     target_platform: str = "cuda",
-    test_timeout_s: int = 30,
+    test_timeout_s: int | None = None,
 ) -> dict:
+    test_timeout_s = resolve_test_timeout_s(test_timeout_s, target_platform)
     # Select default KernelAgent model if not provided: prefer GPT-5 for Level 2/3
     if dispatch_model is None:
         pp = str(problem_path)
@@ -175,7 +179,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=get_platform_choices(),
         help="Target platform",
     )
-    p.add_argument("--test-timeout-s", type=int, default=30)
+    p.add_argument(
+        "--test-timeout-s",
+        type=int,
+        default=None,
+        help="Per-test timeout in seconds. Omitted: 30 on CUDA and XPU, 300 on ROCm.",
+    )
     args = p.parse_args(argv)
 
     problem_path = Path(args.problem).resolve()
@@ -198,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             verify=args.verify,
             compose_max_iters=args.compose_max_iters,
             target_platform=args.target_platform,
-            test_timeout_s=args.run_timeout_s,
+            test_timeout_s=args.test_timeout_s,
         )
         print(json.dumps(res, indent=2))
         return 0

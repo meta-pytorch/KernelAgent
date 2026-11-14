@@ -81,7 +81,9 @@ class OptimizationAttempt:
     improvement_pct: float = 0.0
     is_improvement: bool = False
     compute_sol_pct: float = 0.0
+    compute_sol_measured: bool = True
     memory_sol_pct: float = 0.0
+    memory_sol_measured: bool = True
     combined_sol_pct: float = 0.0
     passed_verification: bool = False
     error_message: str = ""
@@ -110,10 +112,24 @@ class OptimizationAttempt:
             lines.append(
                 f"**Performance**: {self.time_before_ms:.4f}ms → {self.time_after_ms:.4f}ms ({perf_change})"
             )
-            lines.append(
-                f"**NCU SOL (% of Peak)**: Combined: {self.combined_sol_pct:.1f}%, "
-                f"Compute: {self.compute_sol_pct:.1f}%, Memory: {self.memory_sol_pct:.1f}%"
+            compute_text = (
+                f", Compute: {self.compute_sol_pct:.1f}%"
+                if self.compute_sol_measured
+                else ""
             )
+            memory_text = (
+                f", Memory: {self.memory_sol_pct:.1f}%"
+                if self.memory_sol_measured
+                else ""
+            )
+            if self.compute_sol_measured or self.memory_sol_measured:
+                sol_line = (
+                    f"**NCU SOL (% of Peak)**: Combined: {self.combined_sol_pct:.1f}%"
+                    f"{compute_text}{memory_text}"
+                )
+            else:
+                sol_line = "**NCU SOL (% of Peak)**: not measured"
+            lines.append(sol_line)
         else:
             lines.append(
                 f"**Error**: {self.error_message[:200] if self.error_message else 'Unknown'}"
@@ -170,6 +186,160 @@ class Reflexion:
         return cls(**{k: v for k, v in d.items() if k in valid_keys})
 
 
+def profiler_is_rocm(profiler: Any) -> bool:
+    """True when *profiler* is the ROCm backend or its registry wrapper."""
+    if getattr(profiler, "platform", None) == "rocm":
+        return True
+    delegate = getattr(profiler, "_delegate", None)
+    return getattr(delegate, "platform", None) == "rocm"
+
+
+def synthetic_rocm_bottleneck(category: str, reason: str) -> BottleneckResult:
+    """One synthetic diagnosis for every ROCm profiling fallback.
+
+    ``reason`` is ``session``, ``failure``, or ``empty``. It only changes
+    the summary and the cause. The recommended fixes stay in this function
+    so the three call sites cannot drift.
+    """
+    summaries = {
+        "session": f"Synthetic session fallback ({category}-bound).",
+        "failure": (
+            f"Synthetic fallback after rocprof failure ({category}-bound). "
+            "Continue optimization without profiling metrics."
+        ),
+        "empty": (
+            f"Synthetic fallback after empty rocprof metrics ({category}-bound)."
+        ),
+    }
+    causes = {
+        "session": "ROCm profiling unavailable for this optimization session",
+        "failure": "ROCm profiling unavailable for this round",
+        "empty": "ROCm profiler produced no usable metrics",
+    }
+    evidence: list[dict[str, Any]] = []
+    if reason == "failure":
+        evidence = [
+            {
+                "metric": "rocprof",
+                "value": 0.0,
+                "interpretation": (
+                    "profiling failed or timed out, so no hardware counters "
+                    "are available"
+                ),
+            }
+        ]
+    fix = (
+        "Apply conservative AMD-friendly tuning without profiler counters, "
+        "and do not profile again in this analysis step."
+    )
+    tuning = (
+        "Tune BLOCK sizes, num_warps, and num_stages for AMD. The wavefront "
+        "is 64."
+    )
+    return BottleneckResult(
+        category=category,
+        summary=summaries[reason],
+        reasoning=(
+            "ROCm profiling is unavailable, so optimization continues with a "
+            "conservative synthetic diagnosis instead of another profiling pass."
+        ),
+        root_causes=[
+            {
+                "cause": causes[reason],
+                "evidence": evidence,
+                "fixes": [
+                    {
+                        "fix": fix,
+                        "rationale": (
+                            "Keeps the search alive without repeating a failed "
+                            "profiler path."
+                        ),
+                    }
+                ],
+            }
+        ],
+        recommended_fixes=[
+            {
+                "fix": fix,
+                "rationale": "Lets the round proceed without profiler-derived counters.",
+            },
+            {
+                "fix": tuning,
+                "rationale": (
+                    "Gives the round a direction when hardware counters are "
+                    "unavailable."
+                ),
+            },
+        ],
+    )
+
+
+def should_disable_profiling(profiler: Any, profiling_available: bool) -> bool:
+    """Whether later rounds should stop calling the profiler.
+
+    ROCm rocprof failures switch the session to synthetic analysis.
+    A CUDA/NCU failure does not: the next round profiles again.
+    """
+    return profiler_is_rocm(profiler) and not profiling_available
+
+
+def _sol_details(
+    compute_pct: float,
+    memory_pct: float,
+    compute_measured: bool = True,
+    memory_measured: bool = True,
+) -> str:
+    """SOL percentages for a log line. Omit a side that was not measured."""
+    parts = []
+    if compute_measured:
+        parts.append(f"Compute: {compute_pct:.1f}%")
+    if memory_measured:
+        parts.append(f"Memory: {memory_pct:.1f}%")
+    return ", ".join(parts)
+
+
+def _sol_log_clause(result: Any) -> str:
+    """Roofline log text. An unmeasured result does not print 0% SOL."""
+    sol_text = _sol_details(
+        result.compute_sol_pct,
+        result.memory_sol_pct,
+        getattr(result, "compute_sol_measured", True),
+        getattr(result, "memory_sol_measured", True),
+    )
+    if not sol_text:
+        return "SOL not measured"
+    return (
+        f"{result.bottleneck}-bound, {result.efficiency_pct:.1f}% SOL ({sol_text})"
+    )
+
+
+def _metrics_with_peak(
+    metrics: dict[str, Any], gpu_specs: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Attach the spec's peak bandwidth so ROCm memory SOL can use it."""
+    from kernel_perf_agent.kernel_opt.roofline.rocm_roofline import (
+        with_peak_bandwidth,
+    )
+
+    return with_peak_bandwidth(metrics, gpu_specs)
+
+
+def should_profile_final_kernel(
+    profiler: Any,
+    best_round_num: int,
+    profiling_available: bool,
+) -> bool:
+    """Whether the winning kernel still needs a final roofline pass.
+
+    The pass runs when ``best_round_num > 0``, including after a CUDA SOL
+    profile failed. A ROCm session that has switched to synthetic analysis
+    skips it even if an earlier round captured metrics.
+    """
+    if best_round_num <= 0:
+        return False
+    return not should_disable_profiling(profiler, profiling_available)
+
+
 def _get_triton_kernel_metrics(ncu_metrics: dict[str, Any]) -> dict[str, Any]:
     """
     Extract metrics for the Triton kernel, filtering out PyTorch kernels.
@@ -177,14 +347,26 @@ def _get_triton_kernel_metrics(ncu_metrics: dict[str, Any]) -> dict[str, Any]:
     NCU profiles all CUDA kernels including PyTorch internals (at::*).
     This function finds the actual Triton kernel metrics.
 
+    rocprof returns one flat counter dict. Passing that through
+    ``next(iter(values()))`` yields a scalar, so flat dicts are returned
+    as-is (minus the raw counter dump).
+
     Args:
-        ncu_metrics: Dict keyed by kernel name with metric dicts as values
+        ncu_metrics: NCU map of kernel name to metric dict, or a flat
+            rocprof counter dict.
 
     Returns:
         Flat metrics dict for the Triton kernel, or first non-PyTorch kernel
     """
     if not ncu_metrics:
         return {}
+
+    # NCU maps kernel name -> metric dict, so every value is a dict.
+    # rocprof is a flat counter dict plus an optional ``_raw_counters`` blob.
+    if not all(isinstance(value, dict) for value in ncu_metrics.values()):
+        return {
+            key: value for key, value in ncu_metrics.items() if key != "_raw_counters"
+        }
 
     # Filter out PyTorch kernels (they start with "at::" or "void at::")
     triton_kernels = {
@@ -365,14 +547,23 @@ class OptimizationOrchestrator:
         self.logger.info(f"Problem: {problem_description[:100]}...")
 
         # Benchmark baseline and PyTorch (now includes baseline SOL profiling)
-        best_time, baseline_results, pytorch_baseline_time, baseline_sol = (
-            self._benchmark_baseline(
-                kernel_code, problem_file, known_kernel_time, baseline_metrics
-            )
+        (
+            best_time,
+            baseline_results,
+            pytorch_baseline_time,
+            baseline_sol,
+            baseline_profiled,
+        ) = self._benchmark_baseline(
+            kernel_code, problem_file, known_kernel_time, baseline_metrics
         )
 
         # Two-kernel tracking: track best-by-runtime and best-by-SOL independently
-        # This prevents mixing metrics from different kernels
+        # This prevents mixing metrics from different kernels.
+        # A failed ROCm baseline turns profiling off before round 1. CUDA
+        # keeps profiling, and a cached baseline counts as measured.
+        profiling_globally_available = not should_disable_profiling(
+            self.profiler, baseline_profiled
+        )
         best_runtime_kernel = kernel_code
         best_runtime_time = best_time
         best_runtime_sol = baseline_sol
@@ -389,23 +580,43 @@ class OptimizationOrchestrator:
             self.logger.info(f"ROUND {round_num}/{max_opt_rounds}")
             self.logger.info("=" * 80)
 
-            # Profile and analyze bottleneck
-            bottleneck_results, roofline_result, ncu_metrics = (
-                self._profile_and_analyze(current_kernel, problem_file, round_num)
-            )
+            # Profile and analyze bottleneck unless a prior ROCm profiling failure
+            # already forced this optimization session into synthetic mode.
+            if profiling_globally_available:
+                bottleneck_results, roofline_result, ncu_metrics = (
+                    self._profile_and_analyze(current_kernel, problem_file, round_num)
+                )
+                profiling_available = bool(ncu_metrics)
+                if should_disable_profiling(self.profiler, profiling_available):
+                    profiling_globally_available = False
+            else:
+                self.logger.warning(
+                    f"[{round_num}] Profiling unavailable from earlier ROCm failure; reusing synthetic fallback mode for this round"
+                )
+                synthetic_category = self.bottleneck_override or "underutilized"
+                bottleneck_results = [
+                    synthetic_rocm_bottleneck(synthetic_category, "session")
+                ]
+                roofline_result = None
+                ncu_metrics = None
+                profiling_available = False
 
-            # Log roofline for the kernel we just profiled
+            # Log roofline for the metrics just collected. A rocprof dict is
+            # flat and is analyzed here too.
             if ncu_metrics:
-                flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
-                roofline_check = self.roofline_analyzer.analyze(
-                    ncu_metrics=flat_metrics,
-                )
-                self.logger.info(
-                    f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
-                    f"{roofline_check.bottleneck}-bound, {roofline_check.efficiency_pct:.1f}% SOL "
-                    f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
-                    f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
-                )
+                try:
+                    flat_metrics = _metrics_with_peak(
+                        _get_triton_kernel_metrics(ncu_metrics), self.gpu_specs
+                    )
+                    roofline_check = self.roofline_analyzer.analyze(
+                        ncu_metrics=flat_metrics,
+                    )
+                    self.logger.info(
+                        f"[{round_num}] Roofline (kernel_round_{round_num - 1}): "
+                        f"{_sol_log_clause(roofline_check)}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning(f"[{round_num}] Roofline log failed: {exc}")
 
             if not bottleneck_results:
                 self.logger.warning(
@@ -521,10 +732,18 @@ class OptimizationOrchestrator:
             new_time = bench_results["time_ms"]
             new_ptx_hash = bench_results.get("ptx_hash")
 
-            # Profile the NEW kernel to get its SOL metrics
-            new_kernel_metrics = self._profile_kernel_for_sol(
-                optimized_kernel, problem_file, round_num
-            )
+            # Profile the NEW kernel to get its SOL metrics only when profiling
+            # is available for this round. Synthetic fallback rounds must not
+            # re-enter the profiler path.
+            if profiling_available:
+                new_kernel_metrics = self._profile_kernel_for_sol(
+                    optimized_kernel, problem_file, round_num
+                )
+            else:
+                self.logger.info(
+                    f"[{round_num}] Skipping post-benchmark SOL profiling because this round is running on synthetic fallback analysis"
+                )
+                new_kernel_metrics = None
             new_sol = (
                 new_kernel_metrics.get("efficiency_pct", 0.0)
                 if new_kernel_metrics
@@ -554,12 +773,18 @@ class OptimizationOrchestrator:
 
             # Add SOL metrics from new kernel profiling
             if new_kernel_metrics:
+                current_attempt.compute_sol_measured = bool(
+                    new_kernel_metrics.get("compute_sol_measured", True)
+                )
                 current_attempt.compute_sol_pct = new_kernel_metrics.get(
                     "compute_sol_pct", 0.0
+                ) or 0.0
+                current_attempt.memory_sol_measured = bool(
+                    new_kernel_metrics.get("memory_sol_measured", True)
                 )
                 current_attempt.memory_sol_pct = new_kernel_metrics.get(
                     "memory_sol_pct", 0.0
-                )
+                ) or 0.0
                 current_attempt.combined_sol_pct = new_sol
 
             # Add attempt to history
@@ -615,10 +840,7 @@ class OptimizationOrchestrator:
                 roofline_check = new_kernel_metrics.get("roofline_result")
                 if roofline_check:
                     self.logger.info(
-                        f"[{round_num}] Roofline: {roofline_check.bottleneck}-bound, "
-                        f"{roofline_check.efficiency_pct:.1f}% SOL "
-                        f"(Compute: {roofline_check.compute_sol_pct:.1f}%, "
-                        f"Memory: {roofline_check.memory_sol_pct:.1f}%)"
+                        f"[{round_num}] Roofline: {_sol_log_clause(roofline_check)}"
                     )
 
                     # Only early terminate if the best runtime kernel is at roofline
@@ -637,8 +859,13 @@ class OptimizationOrchestrator:
                             early_stop_reason = stop_reason
                             break
 
-        # Profile the final best kernel to get its roofline
-        if best_round_num > 0:
+        # Profile the final best kernel. Skip that pass only after a ROCm
+        # session has switched to synthetic analysis.
+        if should_profile_final_kernel(
+            self.profiler,
+            best_round_num,
+            profiling_globally_available,
+        ):
             final_kernel_file = self.artifact_dir / f"kernel_round_{best_round_num}.py"
             if final_kernel_file.exists():
                 self.logger.info(
@@ -649,15 +876,15 @@ class OptimizationOrchestrator:
                 )
                 if final_profiler_results and final_profiler_results.metrics:
                     best_ncu_metrics = final_profiler_results.metrics
-                    final_flat_metrics = _get_triton_kernel_metrics(best_ncu_metrics)
+                    final_flat_metrics = _metrics_with_peak(
+                        _get_triton_kernel_metrics(best_ncu_metrics), self.gpu_specs
+                    )
                     final_roofline = self.roofline_analyzer.analyze(
                         ncu_metrics=final_flat_metrics,
                     )
                     self.logger.info(
                         f"Final roofline (kernel_round_{best_round_num}): "
-                        f"{final_roofline.bottleneck}-bound, {final_roofline.efficiency_pct:.1f}% SOL "
-                        f"(Compute: {final_roofline.compute_sol_pct:.1f}%, "
-                        f"Memory: {final_roofline.memory_sol_pct:.1f}%)"
+                        f"{_sol_log_clause(final_roofline)}"
                     )
 
         # Final results - use best runtime kernel as primary result
@@ -685,7 +912,7 @@ class OptimizationOrchestrator:
         problem_file: Path,
         known_kernel_time: float | None,
         cached_baseline_metrics: dict[str, Any] | None = None,
-    ) -> tuple[float, dict[str, float], float | None, float]:
+    ) -> tuple[float, dict[str, float], float | None, float, bool]:
         """Benchmark baseline kernel and PyTorch, and profile baseline SOL.
 
         When ``cached_baseline_metrics`` is supplied, the NCU/roofline step
@@ -694,7 +921,9 @@ class OptimizationOrchestrator:
         the same parent kernel.
 
         Returns:
-            Tuple of (best_time, baseline_results, pytorch_baseline_time, baseline_sol)
+            Tuple of (best_time, baseline_results, pytorch_baseline_time,
+            baseline_sol, baseline_profiled). ``baseline_profiled`` is false
+            only when this call's own profile returned nothing.
         """
         baseline_sol = 0.0
 
@@ -719,20 +948,31 @@ class OptimizationOrchestrator:
         # Profile baseline kernel for SOL metrics (skip if cached)
         if cached_baseline_metrics is not None:
             baseline_metrics = cached_baseline_metrics
+            baseline_profiled = True
             self.logger.info("📊 Baseline SOL: (using cached profile from manager)")
         else:
             baseline_metrics = self._profile_kernel_for_sol(
                 kernel_code, problem_file, 0
             )
+            baseline_profiled = baseline_metrics is not None
         if baseline_metrics:
             baseline_sol = baseline_metrics.get("efficiency_pct", 0.0)
             bottleneck = baseline_metrics.get("bottleneck", "unknown")
-            compute_sol = baseline_metrics.get("compute_sol_pct", 0.0)
-            memory_sol = baseline_metrics.get("memory_sol_pct", 0.0)
-            self.logger.info(
-                f"📊 Baseline SOL: {baseline_sol:.1f}% ({bottleneck}-bound, "
-                f"Compute: {compute_sol:.1f}%, Memory: {memory_sol:.1f}%)"
+            compute_sol = baseline_metrics.get("compute_sol_pct", 0.0) or 0.0
+            memory_sol = baseline_metrics.get("memory_sol_pct", 0.0) or 0.0
+            sol_text = _sol_details(
+                compute_sol,
+                memory_sol,
+                bool(baseline_metrics.get("compute_sol_measured", True)),
+                bool(baseline_metrics.get("memory_sol_measured", True)),
             )
+            if sol_text:
+                self.logger.info(
+                    f"📊 Baseline SOL: {baseline_sol:.1f}% "
+                    f"({bottleneck}-bound, {sol_text})"
+                )
+            else:
+                self.logger.info("📊 Baseline SOL: not measured")
 
         # PyTorch baseline
         if self.pytorch_baseline_time is not None:
@@ -751,7 +991,13 @@ class OptimizationOrchestrator:
             else:
                 pytorch_baseline_time = None
 
-        return best_time, baseline_results, pytorch_baseline_time, baseline_sol
+        return (
+            best_time,
+            baseline_results,
+            pytorch_baseline_time,
+            baseline_sol,
+            baseline_profiled,
+        )
 
     def _profile_and_analyze(
         self,
@@ -766,7 +1012,7 @@ class OptimizationOrchestrator:
             All can be None if profiling fails.
         """
         # If the manager pre-profiled the baseline for us, consume it in round 1
-        # (when current_kernel is still the baseline) and skip the NCU run.
+        # (when current_kernel is still the baseline) and skip the profiler run.
         cached = self._pending_baseline_metrics
         if cached is not None and round_num == 1 and cached.get("ncu_metrics"):
             self.logger.info(
@@ -778,7 +1024,10 @@ class OptimizationOrchestrator:
             ncu_metrics = cached["ncu_metrics"]
             self._pending_baseline_metrics = None  # consume once
         else:
-            self.logger.info(f"[{round_num}] Profiling current kernel with NCU...")
+            profiler_name = "rocprof" if profiler_is_rocm(self.profiler) else "NCU"
+            self.logger.info(
+                f"[{round_num}] Profiling current kernel with {profiler_name}..."
+            )
             kernel_file_round = self.artifact_dir / f"kernel_round_{round_num - 1}.py"
             kernel_file_round.write_text(current_kernel)
 
@@ -787,16 +1036,36 @@ class OptimizationOrchestrator:
             )
 
             if profiler_results is None:
+                if profiler_is_rocm(self.profiler):
+                    self.logger.warning(
+                        f"[{round_num}] ROCm profiling unavailable; using synthetic fallback bottleneck analysis"
+                    )
+                    synthetic_category = self.bottleneck_override or "underutilized"
+                    return [
+                        synthetic_rocm_bottleneck(synthetic_category, "failure")
+                    ], None, None
                 self.logger.warning(f"[{round_num}] Profiling failed")
                 return None, None, None
 
             ncu_metrics = profiler_results.metrics
 
             if not ncu_metrics:
+                if profiler_is_rocm(self.profiler):
+                    self.logger.warning(
+                        f"[{round_num}] ROCm profiling returned no metrics; using synthetic fallback bottleneck analysis"
+                    )
+                    synthetic_category = self.bottleneck_override or "underutilized"
+                    return [
+                        synthetic_rocm_bottleneck(synthetic_category, "empty")
+                    ], None, None
                 return None, None, ncu_metrics
 
-        # Run roofline analysis
-        flat_metrics = next(iter(ncu_metrics.values()), {}) if ncu_metrics else {}
+        # Run roofline analysis. NCU is nested by kernel name; rocprof is flat.
+        flat_metrics = (
+            _metrics_with_peak(_get_triton_kernel_metrics(ncu_metrics), self.gpu_specs)
+            if ncu_metrics
+            else {}
+        )
         roofline_result = self.bottleneck_analyzer.roofline.analyze(flat_metrics)
 
         # Use pre-computed bottleneck if override is set
@@ -882,7 +1151,9 @@ class OptimizationOrchestrator:
                 return None
 
             ncu_metrics = profiler_results.metrics
-            flat_metrics = _get_triton_kernel_metrics(ncu_metrics)
+            flat_metrics = _metrics_with_peak(
+                _get_triton_kernel_metrics(ncu_metrics), self.gpu_specs
+            )
 
             # Run roofline analysis
             roofline_result = self.roofline_analyzer.analyze(ncu_metrics=flat_metrics)
@@ -890,7 +1161,13 @@ class OptimizationOrchestrator:
             return {
                 "efficiency_pct": roofline_result.efficiency_pct,
                 "compute_sol_pct": roofline_result.compute_sol_pct,
+                "compute_sol_measured": getattr(
+                    roofline_result, "compute_sol_measured", True
+                ),
                 "memory_sol_pct": roofline_result.memory_sol_pct,
+                "memory_sol_measured": getattr(
+                    roofline_result, "memory_sol_measured", True
+                ),
                 "bottleneck": roofline_result.bottleneck,
                 "roofline_result": roofline_result,
                 "ncu_metrics": ncu_metrics,
@@ -1254,9 +1531,10 @@ class OptimizationOrchestrator:
             perf_metrics["bottleneck_addressed"] = bottleneck_category
             perf_metrics["bottleneck_category"] = bottleneck_category
 
-        # Add NCU metrics if available
+        # Add NCU metrics if available. rocprof metrics are a flat counter
+        # dict, so the first value is a scalar rather than a per-kernel map.
         if ncu_metrics:
-            kernel_metrics = next(iter(ncu_metrics.values()), {})
+            kernel_metrics = _get_triton_kernel_metrics(ncu_metrics)
             perf_metrics["memory_throughput"] = kernel_metrics.get(
                 "dram__throughput.avg.pct_of_peak_sustained_elapsed"
             )

@@ -102,20 +102,15 @@ class BottleneckAnalyzer:
             Empty list if analysis fails.
         """
         if roofline_result is None:
-            # Filter out PyTorch kernels (at::*) and get Triton kernel metrics
-            if ncu_metrics:
-                triton_kernels = {
-                    name: metrics
-                    for name, metrics in ncu_metrics.items()
-                    if not name.startswith("at::") and not name.startswith("void at::")
-                }
-                flat_metrics = (
-                    next(iter(triton_kernels.values()))
-                    if triton_kernels
-                    else next(iter(ncu_metrics.values()), {})
-                )
-            else:
-                flat_metrics = {}
+            # NCU metrics are nested by kernel name. rocprof metrics are flat.
+            # _get_triton_kernel_metrics handles both shapes.
+            from triton_kernel_agent.opt_worker_component.orchestrator.optimization_orchestrator import (
+                _get_triton_kernel_metrics,
+            )
+
+            flat_metrics = (
+                _get_triton_kernel_metrics(ncu_metrics) if ncu_metrics else {}
+            )
             roofline_result = self.roofline.analyze(flat_metrics)
 
         prompt = build_bottleneck_prompt(

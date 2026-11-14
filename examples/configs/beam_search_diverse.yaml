@@ -37,7 +37,7 @@
 # Usage:
 #   python examples/run_opt_manager.py \
 #       --kernel-dir examples/optimize_01_matvec \
-#       --config examples/configs/beam_search_diverse.yaml
+#       --strategy beam_search_diverse
 
 strategy: beam_search
 num_workers: 90

@@ -26,7 +26,11 @@ from dotenv import load_dotenv
 from .manager import WorkerManager
 from .prompt_manager import PromptManager
 from utils.providers import BaseProvider, get_model_provider
-from triton_kernel_agent.platform_config import PlatformConfig, get_platform
+from triton_kernel_agent.platform_config import (
+    PlatformConfig,
+    get_platform,
+    resolve_test_timeout_s,
+)
 from triton_kernel_agent.worker_util import format_test_code_for_llm
 
 
@@ -43,7 +47,7 @@ class TritonKernelAgent:
         preferred_provider: BaseProvider | None = None,
         target_platform: PlatformConfig | None = None,
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int | None = None,
     ):
         """
         Initialize the Triton Kernel Agent.
@@ -92,7 +96,9 @@ class TritonKernelAgent:
             target_platform if target_platform else get_platform("cuda")
         )
         self.no_cusolver = no_cusolver
-        self.test_timeout_s = test_timeout_s
+        self.test_timeout_s = resolve_test_timeout_s(
+            test_timeout_s, self._platform_config
+        )
 
         # Setup main logger
         self._setup_logging()

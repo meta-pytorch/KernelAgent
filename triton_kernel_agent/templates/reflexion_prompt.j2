@@ -30,7 +30,7 @@ Analyze this kernel optimization attempt and generate a self-reflection.
 ## Results
 - Performance: {{ "%.4f"|format(attempt.time_before_ms) }}ms → {{ "%.4f"|format(attempt.time_after_ms) }}ms
 - Improvement: {{ "%+.1f"|format(attempt.improvement_pct) }}%
-- NCU SOL: Compute {{ "%.1f"|format(attempt.compute_sol_pct) }}%, Memory {{ "%.1f"|format(attempt.memory_sol_pct) }}%
+- NCU SOL:{% if attempt.compute_sol_measured is not defined or attempt.compute_sol_measured %} Compute {{ "%.1f"|format(attempt.compute_sol_pct) }}%{% endif %}{% if (attempt.compute_sol_measured is not defined or attempt.compute_sol_measured) and (attempt.memory_sol_measured is not defined or attempt.memory_sol_measured) %},{% endif %}{% if attempt.memory_sol_measured is not defined or attempt.memory_sol_measured %} Memory {{ "%.1f"|format(attempt.memory_sol_pct) }}%{% endif %}{% if attempt.compute_sol_measured is defined and attempt.memory_sol_measured is defined and not attempt.compute_sol_measured and not attempt.memory_sol_measured %} not measured{% endif %}
 - Passed Verification: {{ "Yes" if attempt.passed_verification else "No" }}
 {% if not attempt.passed_verification and attempt.error_message %}
 - Error: {{ attempt.error_message[:200] }}

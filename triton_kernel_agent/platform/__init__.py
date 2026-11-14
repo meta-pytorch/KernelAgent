@@ -27,6 +27,11 @@ NVIDIA / CUDA implementations (default when nothing else is supplied):
     NvidiaAcceleratorSpecsProvider, NvidiaKernelProfiler,
     NvidiaRooflineAnalyzer, NvidiaBottleneckAnalyzer, NvidiaRAGPrescriber
 
+AMD ROCm implementations:
+    ROCmVerifier, ROCmBenchmarker, ROCmWorkerRunner,
+    ROCmAcceleratorSpecsProvider, ROCmKernelProfilerWrapper,
+    ROCmRooflineAnalyzerWrapper, ROCmBottleneckAnalyzer, ROCmRAGPrescriber
+
 No-op implementations (for dry-run / CI / testing):
     NoOpVerifier, NoOpBenchmarker, NoOpWorkerRunner,
     NoOpSpecsProvider, NoOpProfiler, NoOpRooflineAnalyzer,
@@ -67,6 +72,16 @@ from triton_kernel_agent.platform.noop import (
     NoOpVerifier,
     NoOpWorkerRunner,
 )
+from triton_kernel_agent.platform.rocm import (
+    ROCmAcceleratorSpecsProvider,
+    ROCmBenchmarker,
+    ROCmBottleneckAnalyzer,
+    ROCmKernelProfilerWrapper,
+    ROCmRAGPrescriber,
+    ROCmRooflineAnalyzerWrapper,
+    ROCmVerifier,
+    ROCmWorkerRunner,
+)
 from triton_kernel_agent.platform.registry import PlatformRegistry, registry
 
 __all__ = [
@@ -91,6 +106,16 @@ __all__ = [
     "NvidiaRooflineAnalyzer",
     "NvidiaBottleneckAnalyzer",
     "NvidiaRAGPrescriber",
+    # ROCm implementations (manager)
+    "ROCmVerifier",
+    "ROCmBenchmarker",
+    "ROCmWorkerRunner",
+    # ROCm implementations (worker)
+    "ROCmAcceleratorSpecsProvider",
+    "ROCmKernelProfilerWrapper",
+    "ROCmRooflineAnalyzerWrapper",
+    "ROCmBottleneckAnalyzer",
+    "ROCmRAGPrescriber",
     # No-op implementations (manager)
     "NoOpVerifier",
     "NoOpBenchmarker",

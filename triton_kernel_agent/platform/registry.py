@@ -251,5 +251,31 @@ def _register_builtins() -> None:
     for component, factory in _noop.items():
         registry.register(component, "noop", factory)
 
+    from triton_kernel_agent.platform.rocm import (
+        ROCmAcceleratorSpecsProvider,
+        ROCmBenchmarker,
+        ROCmBottleneckAnalyzer,
+        ROCmKernelProfilerWrapper,
+        ROCmRAGPrescriber,
+        ROCmRooflineAnalyzerWrapper,
+        ROCmVerifier,
+        ROCmWorkerRunner,
+    )
+
+    _rocm = {
+        # Manager-level
+        "verifier": ROCmVerifier,
+        "benchmarker": ROCmBenchmarker,
+        "worker_runner": ROCmWorkerRunner,
+        # Worker-level
+        "specs_provider": ROCmAcceleratorSpecsProvider,
+        "profiler": ROCmKernelProfilerWrapper,
+        "roofline_analyzer": ROCmRooflineAnalyzerWrapper,
+        "bottleneck_analyzer": ROCmBottleneckAnalyzer,
+        "rag_prescriber": ROCmRAGPrescriber,
+    }
+    for component, factory in _rocm.items():
+        registry.register(component, "rocm", factory)
+
 
 _register_builtins()

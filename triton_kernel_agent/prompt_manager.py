@@ -303,6 +303,7 @@ class PromptManager:
             recent_attempts=recent_attempts,
             reflexions=reflexions,
             rag_context=rag_context,
+            kernel_guidance=self.target_platform.kernel_guidance,
         )
 
     def render_reflexion_prompt(self, attempt) -> str:
@@ -329,6 +330,12 @@ class PromptManager:
             if attempt.config_changes
             else "no changes"
         )
+        sol_parts = []
+        if getattr(attempt, "compute_sol_measured", True):
+            sol_parts.append(f"Compute {attempt.compute_sol_pct:.1f}%")
+        if getattr(attempt, "memory_sol_measured", True):
+            sol_parts.append(f"Memory {attempt.memory_sol_pct:.1f}%")
+        sol_text = ", ".join(sol_parts) if sol_parts else "not measured"
 
         return f"""Analyze this kernel optimization attempt and generate a self-reflection.
 
@@ -342,7 +349,7 @@ class PromptManager:
 ## Results
 - Performance: {attempt.time_before_ms:.4f}ms → {attempt.time_after_ms:.4f}ms
 - Improvement: {attempt.improvement_pct:+.1f}%
-- NCU SOL: Compute {attempt.compute_sol_pct:.1f}%, Memory {attempt.memory_sol_pct:.1f}%
+- NCU SOL: {sol_text}
 - Passed: {attempt.passed_verification}
 
 Respond with JSON containing:

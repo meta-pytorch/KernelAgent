@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from triton_kernel_agent.platform_config import get_platform
+from triton_kernel_agent.platform_config import get_platform, resolve_test_timeout_s
 from triton_kernel_agent.worker_util import format_test_code_for_llm
 from utils.providers import get_model_provider
 
@@ -136,7 +136,7 @@ class VerificationWorker:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int | None = None,
     ):
         """
         Initialize a verification worker.
@@ -163,7 +163,7 @@ class VerificationWorker:
         self.high_reasoning_effort = high_reasoning_effort
         self._platform_config = get_platform(target_platform)
         self.no_cusolver = no_cusolver
-        self.test_timeout_s = test_timeout_s
+        self.test_timeout_s = resolve_test_timeout_s(test_timeout_s, target_platform)
 
         # Setup files
         self.kernel_file = self.workdir / "kernel.py"

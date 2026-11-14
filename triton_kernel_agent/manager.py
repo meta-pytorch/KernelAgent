@@ -24,6 +24,8 @@ from datetime import datetime
 import logging
 from contextlib import contextmanager
 
+from triton_kernel_agent.platform_config import resolve_test_timeout_s
+
 
 class WorkerManager:
     """Manages multiple verification workers for parallel kernel testing."""
@@ -39,7 +41,7 @@ class WorkerManager:
         high_reasoning_effort: bool = True,
         target_platform: str = "cuda",
         no_cusolver: bool = False,
-        test_timeout_s: int = 30,
+        test_timeout_s: int | None = None,
     ):
         """
         Initialize the worker manager.
@@ -64,7 +66,7 @@ class WorkerManager:
         self.high_reasoning_effort = high_reasoning_effort
         self.target_platform = target_platform
         self.no_cusolver = no_cusolver
-        self.test_timeout_s = test_timeout_s
+        self.test_timeout_s = resolve_test_timeout_s(test_timeout_s, target_platform)
 
         # Setup logging
         if log_dir is None:
@@ -237,7 +239,7 @@ def worker_process(
     high_reasoning_effort: bool,
     target_platform: str,
     no_cusolver: bool = False,
-    test_timeout_s: int = 30,
+    test_timeout_s: int | None = None,
 ):
     """
     Worker process for kernel verification and refinement.

@@ -102,6 +102,9 @@ class OptimizationWorker:
         platform_components: dict[str, Any] | None = None,
         # Registry-driven platform config (string names) ───────────
         platform_config: dict[str, str] | None = None,
+        # Extra kwargs forwarded to registry factories (for example
+        # ``{"rocprof_bin_path": "/opt/rocm/bin/rocprofv3"}``).
+        platform_kwargs: dict[str, Any] | None = None,
         # Template overrides from YAML config ─────────────────────
         templates: dict[str, str] | None = None,
     ):
@@ -134,6 +137,8 @@ class OptimizationWorker:
                 ``{"profiler": "nvidia"}``).  Resolved via the platform
                 registry on first use.  Takes effect for any component not
                 already present in *platform_components*.
+            platform_kwargs: Extra constructor kwargs unpacked into every
+                registry factory (unknown names are dropped per factory).
         """
         self.worker_id = worker_id
         self.workdir = Path(workdir)
@@ -155,6 +160,7 @@ class OptimizationWorker:
         # Platform components (registry-resolved, may be empty)
         self._platform = platform_components or {}
         self._platform_config = platform_config or {}
+        self.platform_kwargs = platform_kwargs or {}
 
         # Template overrides (forwarded to PromptManager)
         self.templates_config = templates
@@ -243,17 +249,23 @@ class OptimizationWorker:
             return
         from triton_kernel_agent.platform.registry import registry
 
+        create_kwargs: dict[str, Any] = {
+            "logger": self.logger,
+            "log_dir": self.log_dir,
+            "artifacts_dir": self.artifact_dir,
+            "ncu_bin_path": self.ncu_bin_path,
+            "profiling_semaphore": self.profiling_semaphore,
+            "openai_model": self.openai_model,
+            "gpu_name": self.gpu_name,
+            "roofline_config": self.roofline_config,
+            "num_bottlenecks": self.num_bottlenecks_to_request,
+        }
+        # YAML platform_kwargs (rocprof_bin_path, and similar) override the
+        # shared defaults. Registry factories drop names they do not accept.
+        create_kwargs.update(self.platform_kwargs)
         resolved = registry.create_from_config(
             self._platform_config,
-            logger=self.logger,
-            log_dir=self.log_dir,
-            artifacts_dir=self.artifact_dir,
-            ncu_bin_path=self.ncu_bin_path,
-            profiling_semaphore=self.profiling_semaphore,
-            openai_model=self.openai_model,
-            gpu_name=self.gpu_name,
-            roofline_config=self.roofline_config,
-            num_bottlenecks=self.num_bottlenecks_to_request,
+            **create_kwargs,
         )
         for k, v in resolved.items():
             if k not in self._platform:

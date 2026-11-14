@@ -17,14 +17,16 @@ GPU Specifications Database - Updated with Specific SKUs
 
 This module contains the GPU hardware specifications database used for
 performance analysis and bottleneck identification. Updated to include
-specific SKU variants for multi-SKU GPUs like A100 and H100.
+specific SKU variants for multi-SKU GPUs like A100 and H100, and AMD
+Instinct GPUs for ROCm support.
 
 Sources:
 - NVIDIA official specifications and datasheets
+- AMD official specifications and datasheets
 - TechPowerUp GPU Database
 - Manufacturer datasheets
 
-Last Updated: January 2026
+Last Updated: March 2026
 """
 
 from types import MappingProxyType
@@ -180,6 +182,164 @@ _GPU_SPECS_DATABASE: dict[str, dict[str, object]] = {
         "memory_type": "GDDR7",
         "form_factor": "PCIe",
         "tdp_w": 360,
+    },
+    # -----------------------------------------------------------------------
+    # AMD Instinct GPU SKUs (ROCm / HIP)
+    # -----------------------------------------------------------------------
+    # AMD Instinct MI300X (CDNA3 / gfx942)
+    # Sources: AMD product page, Hot Chips 35 (2023)
+    "AMD Instinct MI300X": {
+        "name": "AMD Instinct MI300X",
+        "architecture": "CDNA3",
+        "gfx_target": "gfx942",
+        "peak_fp32_tflops": 163.4,
+        "peak_fp16_tflops": 1307.4,  # BF16/FP16 matrix (without sparsity)
+        "peak_bf16_tflops": 1307.4,
+        "peak_memory_bw_gbps": 5300,  # 5.3 TB/s HBM3
+        "cu_count": 304,  # Compute Units (AMD equiv of SM)
+        "sm_count": 304,  # Alias for compatibility
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,  # Alias for compatibility
+        "wavefront_size": 64,
+        "l1_cache_kb": 32,  # L1 per CU (vector L1D)
+        "l2_cache_mb": 32,  # 4 MB per XCD
+        "memory_gb": 192,
+        "memory_type": "HBM3",
+        "form_factor": "OAM",
+        "tdp_w": 750,
+    },
+    # AMD Instinct MI300A (CDNA3 / gfx942, APU variant)
+    "AMD Instinct MI300A": {
+        "name": "AMD Instinct MI300A",
+        "architecture": "CDNA3",
+        "gfx_target": "gfx942",
+        "peak_fp32_tflops": 122.6,
+        "peak_fp16_tflops": 980.6,
+        "peak_bf16_tflops": 980.6,
+        "peak_memory_bw_gbps": 5300,  # 5.3 TB/s HBM3, same peak as MI300X
+        "cu_count": 228,
+        "sm_count": 228,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 32,
+        "l2_cache_mb": 24,  # 4 MB per XCD
+        "memory_gb": 128,
+        "memory_type": "HBM3 unified",
+        "form_factor": "APU",
+        "tdp_w": 550,
+    },
+    # AMD Instinct MI350X (CDNA4 / gfx950)
+    # CDNA 4 whitepaper: 256 CUs, FP32 144.2, FP16/BF16 matrix 2.3 PF.
+    "AMD Instinct MI350X": {
+        "name": "AMD Instinct MI350X",
+        "architecture": "CDNA4",
+        "gfx_target": "gfx950",
+        "peak_fp32_tflops": 144.2,
+        "peak_fp16_tflops": 2300.0,  # 2.3 PF matrix
+        "peak_bf16_tflops": 2300.0,
+        "peak_memory_bw_gbps": 8000,  # 8 TB/s HBM3E
+        "cu_count": 256,
+        "sm_count": 256,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 32,
+        "l2_cache_mb": 32,  # 4 MB per XCD
+        "memory_gb": 288,
+        "memory_type": "HBM3E",
+        "form_factor": "OAM",
+        "tdp_w": 1000,
+    },
+    # AMD Instinct MI250X (CDNA2 / gfx90a)
+    "AMD Instinct MI250X": {
+        "name": "AMD Instinct MI250X",
+        "architecture": "CDNA2",
+        "gfx_target": "gfx90a",
+        "peak_fp32_tflops": 47.9,
+        "peak_fp16_tflops": 383.0,
+        "peak_bf16_tflops": 383.0,
+        "peak_memory_bw_gbps": 3277,  # HBM2e
+        "cu_count": 220,
+        "sm_count": 220,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 16,  # 8 MB per GCD
+        "memory_gb": 128,
+        "memory_type": "HBM2e",
+        "form_factor": "OAM",
+        "tdp_w": 560,
+    },
+    # AMD Instinct MI250 (CDNA2 / gfx90a, dual GCD)
+    # Same 3.2 TB/s HBM2e as MI250X. Peaks follow the 208/220 CU ratio.
+    "AMD Instinct MI250": {
+        "name": "AMD Instinct MI250",
+        "architecture": "CDNA2",
+        "gfx_target": "gfx90a",
+        "peak_fp32_tflops": 45.3,
+        "peak_fp16_tflops": 362.1,
+        "peak_bf16_tflops": 362.1,
+        "peak_memory_bw_gbps": 3277,  # 3.2768 TB/s HBM2e
+        "cu_count": 208,
+        "sm_count": 208,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 16,  # 8 MB per GCD
+        "memory_gb": 128,
+        "memory_type": "HBM2e",
+        "form_factor": "OAM",
+        "tdp_w": 500,
+    },
+    # AMD Instinct MI210 (CDNA2 / gfx90a, single GCD PCIe)
+    # gfx90a is shared with MI250 and MI250X. A bare ISA name stays MI250X
+    # unless the PCI chip id selects this row.
+    # Sources: AMD MI210 product page and brochure (2022), ROCm gpu-arch-specs
+    "AMD Instinct MI210": {
+        "name": "AMD Instinct MI210",
+        "architecture": "CDNA2",
+        "gfx_target": "gfx90a",
+        "peak_fp32_tflops": 22.6,
+        "peak_fp16_tflops": 181.0,
+        "peak_bf16_tflops": 181.0,
+        "peak_memory_bw_gbps": 1638,  # 1.6384 TB/s HBM2e
+        "cu_count": 104,
+        "sm_count": 104,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 8,
+        "memory_gb": 64,
+        "memory_type": "HBM2e",
+        "form_factor": "PCIe",
+        "tdp_w": 300,
+    },
+    # AMD Instinct MI100 (CDNA / gfx908)
+    # Sources: AMD MI100 product page, CDNA whitepaper, ROCm gpu-arch-specs.
+    # Matrix BF16 is half the FP16 rate on CDNA1.
+    "AMD Instinct MI100": {
+        "name": "AMD Instinct MI100",
+        "architecture": "CDNA",
+        "gfx_target": "gfx908",
+        "peak_fp32_tflops": 46.1,  # matrix headline; vector FP32 is 23.1
+        "peak_fp16_tflops": 184.6,
+        "peak_bf16_tflops": 92.3,
+        "peak_memory_bw_gbps": 1229,  # 1.2288 TB/s HBM2
+        "cu_count": 120,
+        "sm_count": 120,
+        "max_threads_per_cu": 2048,
+        "max_threads_per_sm": 2048,
+        "wavefront_size": 64,
+        "l1_cache_kb": 16,
+        "l2_cache_mb": 8,
+        "memory_gb": 32,
+        "memory_type": "HBM2",
+        "form_factor": "PCIe",
+        "tdp_w": 300,
     },
 }
 

@@ -14,6 +14,8 @@
 
 """Anthropic provider implementation."""
 
+import os
+
 from .base import BaseProvider, LLMResponse
 from .env_config import configure_proxy_environment
 
@@ -24,6 +26,24 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
     Anthropic = None
+
+
+def _anthropic_client_kwargs(api_key: str) -> dict:
+    kwargs: dict = {"api_key": api_key}
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    if base_url:
+        kwargs["base_url"] = base_url
+    headers: dict[str, str] = {}
+    for line in os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines():
+        if ":" not in line:
+            continue
+        name, value = line.split(":", 1)
+        name, value = name.strip(), value.strip()
+        if name and value:
+            headers[name] = value
+    if headers:
+        kwargs["default_headers"] = headers
+    return kwargs
 
 
 class AnthropicProvider(BaseProvider):
@@ -39,8 +59,29 @@ class AnthropicProvider(BaseProvider):
             # Configure proxy using centralized utility function
             self._original_proxy_env = configure_proxy_environment()
 
-            # Initialize client (proxy configured via environment variables)
-            self.client = Anthropic(api_key=api_key)
+            # Initialize client (proxy configured via environment variables).
+            # ANTHROPIC_BASE_URL and ANTHROPIC_CUSTOM_HEADERS carry the AMD
+            # gateway route. Header values stay out of logs.
+            self.client = Anthropic(**_anthropic_client_kwargs(api_key))
+
+    def _create_kwargs(
+        self,
+        model_name: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        **kwargs,
+    ) -> dict:
+        # The installed SDK dropped the temperature argument. The API still
+        # accepts it on the JSON body.
+        params = {
+            "model": model_name,
+            "max_tokens": min(
+                kwargs.get("max_tokens", 8192), self.get_max_tokens_limit(model_name)
+            ),
+            "messages": messages,
+            "extra_body": {"temperature": temperature},
+        }
+        return params
 
     def get_response(
         self, model_name: str, messages: list[dict[str, str]], **kwargs
@@ -49,13 +90,16 @@ class AnthropicProvider(BaseProvider):
             raise RuntimeError("Anthropic client not available")
 
         user_content = messages[-1]["content"] if messages else ""
+        # Callers such as seed generation already put temperature in kwargs.
+        # _create_kwargs takes that value as its own argument.
+        forwarded = {k: v for k, v in kwargs.items() if k != "temperature"}
         response = self.client.messages.create(
-            model=model_name,
-            max_tokens=min(
-                kwargs.get("max_tokens", 8192), self.get_max_tokens_limit(model_name)
-            ),
-            temperature=kwargs.get("temperature", 0.7),
-            messages=[{"role": "user", "content": user_content}],
+            **self._create_kwargs(
+                model_name,
+                [{"role": "user", "content": user_content}],
+                kwargs.get("temperature", 0.7),
+                **forwarded,
+            )
         )
 
         return LLMResponse(
@@ -65,11 +109,13 @@ class AnthropicProvider(BaseProvider):
     def get_multiple_responses(
         self, model_name: str, messages: list[dict[str, str]], n: int = 1, **kwargs
     ) -> list[LLMResponse]:
+        base_temperature = kwargs.get("temperature", 0.7)
         return [
             self.get_response(
                 model_name,
                 messages,
-                temperature=kwargs.get("temperature", 0.7) + i * 0.1,
+                temperature=base_temperature + i * 0.1,
+                **{k: v for k, v in kwargs.items() if k != "temperature"},
             )
             for i in range(n)
         ]

@@ -76,6 +76,40 @@ _XPU_CUDA_HACKS = (
     "XPUDriver.is_available = classmethod(lambda cls: False)",
 )
 
+# ROCm/AMD GPU platform constants
+_ROCM_GUIDANCE = """\
+**CRITICAL PLATFORM REQUIREMENTS FOR AMD ROCm:**
+- Default tensor allocations to device='cuda' (ROCm exposes HIP as CUDA-compatible via torch.cuda)
+- Check availability with: torch.cuda.is_available() (returns True on ROCm/HIP)
+- AMD wavefront size is 64 (not 32 like NVIDIA warps) — account for this in tiling
+- Do NOT assume NVIDIA-specific ISA features (e.g., warp shuffle semantics differ)
+- Use torch.cuda.synchronize() for synchronization (works on ROCm via HIP)
+- Preferred block sizes: 64, 128, 256, or 512 (multiples of wavefront size 64)
+- triton.language.constexpr BLOCK_SIZE should be a power of 2 >= 64"""
+
+_ROCM_KERNEL_GUIDANCE = """\
+## AMD ROCm-Specific Optimizations
+
+Where this section conflicts with the Triton programming guidelines, follow this section. Do not use tensor descriptors or TMA, and do not pass warp_specialize.
+
+You are generating a Triton kernel for AMD GPUs (ROCm/HIP). Follow these guidelines:
+
+1. **Device Context**: Use 'cuda' as the device string (ROCm provides HIP-CUDA compatibility)
+2. **Wavefront Size**: AMD GPUs use wavefront size 64
+   - Prefer BLOCK_SIZE multiples of 64 (64, 128, 256, 512)
+   - num_warps maps to num_wavefronts on AMD
+3. **Memory Hierarchy**: AMD CDNA GPUs have HBM memory with very high bandwidth
+   - Optimize for memory coalescing and avoid strided access patterns
+4. **Compute Units**: AMD uses Compute Units (CUs), each with 64-lane SIMD
+5. **Data Types**: AMD CDNA supports fp32, fp16, and bf16. fp8 is available on gfx942 and later
+   - BF16 matrix units are available on CDNA
+6. **Thread Configuration**:
+   - BLOCK_SIZE: prefer 64, 128, 256, or 512
+   - num_warps: typically 4, 8 for AMD (maps to wavefronts)
+7. **Avoid NVIDIA-specific patterns**: Do not use warp-level primitives that assume warp_size=32
+   - Do not use tensor descriptors or TMA
+   - Do not pass warp_specialize"""
+
 # Platform registry
 PLATFORMS: dict[str, PlatformConfig] = {
     "cuda": PlatformConfig(
@@ -83,6 +117,13 @@ PLATFORMS: dict[str, PlatformConfig] = {
         device_string="cuda",
         guidance_block="",
         kernel_guidance="",
+        cuda_hacks_to_strip=(),
+    ),
+    "rocm": PlatformConfig(
+        name="rocm",
+        device_string="cuda",  # ROCm uses torch.cuda (HIP compatibility layer)
+        guidance_block=_ROCM_GUIDANCE,
+        kernel_guidance=_ROCM_KERNEL_GUIDANCE,
         cuda_hacks_to_strip=(),
     ),
     "xpu": PlatformConfig(
@@ -106,3 +147,22 @@ def get_platform(name: str) -> PlatformConfig:
 def get_platform_choices() -> list[str]:
     """Get list of available platform names for CLI choices."""
     return sorted(PLATFORMS.keys())
+
+
+def resolve_test_timeout_s(
+    test_timeout_s: int | None,
+    target_platform: str | PlatformConfig | None,
+) -> int:
+    """Pick a test timeout when the caller did not set one.
+
+    CUDA and XPU keep the historical 30s default. ROCm Triton JIT on a cold
+    cache often exceeds that, so an omitted timeout is 300s on ROCm only.
+    An explicit value is returned unchanged on every platform.
+    """
+    if test_timeout_s is not None:
+        return test_timeout_s
+    if isinstance(target_platform, PlatformConfig):
+        name = target_platform.name
+    else:
+        name = target_platform or "cuda"
+    return 300 if name == "rocm" else 30

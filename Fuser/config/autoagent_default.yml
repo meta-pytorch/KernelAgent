@@ -33,5 +33,6 @@ target_platform: cuda
 ignore_router_config: false
 use_router_cache: true
 no_cusolver: false
-test_timeout_s: 30
+# null lets the platform pick: 30 on CUDA and XPU, 300 on ROCm.
+test_timeout_s: null
 test_code: null
